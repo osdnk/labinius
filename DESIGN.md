@@ -143,6 +143,19 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   order, with the per-level 1/2, 1/3 and Phi_6-determinant divisions (the 1/648) and the
   Montgomery `R^-k` folded into one final scaling. Reference only; there is no SIMD inverse.
 
+## 6b. The commitment (`simd/commit.rs`, `simd/commit_h.rs`)
+
+`commit::<Q>(elems: &[F162], a: &[Batch32]) -> [u32; 648]` computes
+y[j] = sum_i A_i[j] * NTT_Q(w_i)[j] mod q for one row of A stored in the vertical layout
+(centered i16), `commit_2q` both primes off one slicing. Products are raw `vpdpwssd`
+accumulations into i32 (16 batches per fold-back for 3889, 8 for 9721, from |W| <= 7.5 q /
+2.29 q and |A| <= (q-1)/2); the fold-back x = l + (h + c) R mod q (l = low half as i16, h =
+high half, c = sign bit of the low half, R = 2^16 mod q) is exact; the accumulator is packed to
+8 lanes per slot; each 27-slot block is consumed through the kernel's `BlockSink` hook while in
+L1; the next batch's A rows are prefetched into L2 at the block boundaries. `commit_h` is the
+same commitment in the horizontal layout with L1-resident groups of 4 (front end, `ntt_gen_hbatch4`,
+`vpdpwssd` on lanes permuted to `4j + p`, f32-rounded exact reduction every 18 / 10 groups).
+
 ## 7. Tests and benchmarks
 
 * `tests/<variant>.rs`: for both primes, >= 64 batches of random binary polynomials plus
@@ -151,7 +164,9 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   bound holds; an i32 shadow model replays the kernel's operation sequence and asserts every
   intermediate is < 2^15; and the multiplication tests through `pointwise` against
   `scalar::ntt(scalar::mul_mod_phi(a, b))`. Generic kernels also test random i16 inputs in [-q, q].
-* `src/bin/bench_f162.rs`: the headline (2^18 F162 -> 2^16 ring elements, both primes, single and
+* `src/bin/bench_commit.rs`: the headline (the commitment on 2^18 F162 = 2^16 ring elements,
+  both primes, all variants, floors); `src/bin/bench_commit_h.rs` the horizontal one;
+  `src/bin/bench_f162.rs`: the NTT alone (2^18 F162 -> 2^16 ring elements, both primes, single and
   two-prime drivers, streamed, accumulate product), pinned to one core, `perf::PerfGroup`
   counters (cycles,
   instructions, uops, ports 0/1/5). `src/bin/bench_<variant>.rs`: per-kernel breakdowns,

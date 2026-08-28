@@ -30,7 +30,7 @@
 //!    n^B_0..n^B_31]`. Per row one `vpermb` duplicates each byte and one `vpternlogd` masks the
 //!    nibble and sets the +16 of the odd byte — three port-5 uops per two rows where the
 //!    one-row-at-a-time form of `transpose` needs four, and no masked load (a merge-masked
-//!    `vmovdqu64` was measured to cost a p0/p5 uop on top of the load).
+//!    `vmovdqu64` costs a p0/p5 uop on top of the load on this core).
 use crate::simd::transpose::BinaryIndex32;
 use bin_fields::scalar::F162;
 use core::arch::x86_64::*;

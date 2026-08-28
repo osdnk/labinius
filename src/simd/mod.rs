@@ -4,6 +4,8 @@
 //! VBMI2/VNNI/GFNI (the target machine is an i7-11850H, Tiger Lake); they are compiled with
 //! `-C target-cpu=native` (see `.cargo/config.toml`).
 
+pub mod commit;
+pub mod commit_h;
 pub mod horizontal_gen;
 pub mod ntt_f162;
 pub mod pointwise;

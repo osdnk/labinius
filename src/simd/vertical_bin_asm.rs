@@ -3448,11 +3448,53 @@ unsafe fn tail27_bn(
 struct Blk([i16; 162 * 32]);
 
 // ---------------------------------------------------------------------------------------------
+// where the finished blocks go
+// ---------------------------------------------------------------------------------------------
+
+/// Consumer of the transform's output, one 27-slot block at a time.
+///
+/// The kernel finishes the 648 slots as 24 independent blocks of 27: block `blk` holds slots
+/// `27 blk .. 27 blk + 27` and is produced by a single `asm!` block out of 27 resident zmm
+/// registers. The sink says where those 27 vectors are stored ([`dst`](BlockSink::dst)) and is
+/// handed them the instant they are ([`block`](BlockSink::block)), which lets a consumer read a
+/// block while it is still in L1 rather than after the whole 41 KB batch has been written.
+///
+/// Both methods are monomorphised into the kernel, so a sink that does nothing costs nothing.
+/// A sink whose `block` uses AVX-512 must carry a `#[target_feature]` attribute covering the
+/// intrinsics it uses, or it will not be inlined into the kernel.
+///
+/// # Safety
+/// `dst` must return a 64-byte aligned pointer to 1728 writable bytes (27 vectors); the kernel
+/// writes them and then calls `block` with the same pointer.
+pub trait BlockSink {
+    /// Where block `blk` is to be stored.
+    unsafe fn dst(&mut self, blk: usize) -> *mut i16;
+    /// Called once the 27 vectors of block `blk` are stored at `dst`.
+    unsafe fn block(&mut self, blk: usize, dst: *const i16);
+}
+
+/// The sink of the plain entry points: block `blk` goes to its own place in the output batch and
+/// nothing further happens, so the kernel is exactly the loop it would be without the hook.
+pub struct OutSink(pub *mut i16);
+
+impl BlockSink for OutSink {
+    #[inline(always)]
+    unsafe fn dst(&mut self, blk: usize) -> *mut i16 {
+        self.0.add(32 * 27 * blk)
+    }
+    #[inline(always)]
+    unsafe fn block(&mut self, _blk: usize, _dst: *const i16) {}
+}
+
+// ---------------------------------------------------------------------------------------------
 // the kernel
 // ---------------------------------------------------------------------------------------------
 
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(input: &BinaryIndex32, outp: *mut i16) {
+unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool, S: BlockSink>(
+    input: &BinaryIndex32,
+    sink: &mut S,
+) {
     let t = tables::<Q, MONT>();
     let c = C {
         q: bc(&t.qd),
@@ -3515,12 +3557,11 @@ unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(input: &Binar
             st(bp, i + 135, v2);
         }
 
-        // levels 4, 5 and 6: one register-resident asm block per 27-block.
-        let op = outp.add(32 * 162 * k);
+        // levels 4, 5 and 6: one register-resident asm block per 27-block, handed to the sink.
         let cv = t.cv.as_ptr() as *const i16;
         for j in 0..6 {
             let kk = 6 * k + j;
-            let (bpj, opj) = (bp.add(32 * 27 * j), op.add(32 * 27 * j));
+            let (bpj, opj) = (bp.add(32 * 27 * j), sink.dst(kk));
             let (t4, t5, t6) =
                 (t.tw4[kk].as_ptr(), t.tw5[3 * kk].as_ptr(), t.tw6[9 * kk].as_ptr());
             if bar {
@@ -3534,6 +3575,7 @@ unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(input: &Binar
             } else {
                 tail27_p(bpj, opj, t4, t5, t6, cv);
             }
+            sink.block(kk, opj);
         }
     }
 }
@@ -3542,7 +3584,7 @@ unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(input: &Binar
 /// reduced (see the bound table above).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, false, false>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, false, false, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
     out.representation = Representation::Ntt;
 }
 
@@ -3550,22 +3592,36 @@ pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Bat
 /// lookup tables differ), so slot-wise products need a single Montgomery multiplication.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, false, true>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, false, true, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
     out.representation = Representation::Ntt;
 }
 
 /// Montgomery-form output with non-temporal stores on the last level.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32_nt_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, true, true>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, true, true, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
     out.representation = Representation::Ntt;
 }
 
 /// Same, but the final level uses non-temporal stores (for output that will not be re-read soon).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32_nt<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, true, false>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, true, false, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
     out.representation = Representation::Ntt;
+}
+
+/// The same transform with the output handed to `sink` block by block instead of being written to
+/// a `Batch32`, for consumers that want each 27-slot block while it is still in L1
+/// ([`crate::simd::commit`]).
+///
+/// # Safety
+/// See [`BlockSink`]: `sink.dst` must give 27 writable 64-byte aligned vectors per block.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+pub unsafe fn ntt_bin_batch32_sink<const Q: u16, const MONT: bool, S: BlockSink>(
+    input: &BinaryIndex32,
+    sink: &mut S,
+) {
+    ntt_core::<Q, false, MONT, S>(input, sink);
 }
 
 // ---------------------------------------------------------------------------------------------
