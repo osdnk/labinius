@@ -23,6 +23,7 @@
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
 use crate::api::{PowerOfThreeRingElementWithTwoLimbs, N162};
+use bin_fields::scalar::F162;
 use blake3::Hasher;
 use std::f64::consts::PI;
 use std::sync::LazyLock;
@@ -181,6 +182,18 @@ impl ShortChallenge {
             c[self.positions[i] as usize] = self.signs[i];
         }
         c
+    }
+
+    /// The challenge modulo 2, as an element of `F162 = GF(2)[x]/(x^162 + x^81 + 1)`: a bit at
+    /// each of its positions. `R_162 mod 2` *is* that field under the crate's plain lift, and the
+    /// signs vanish there.
+    pub fn to_f162(&self) -> F162 {
+        let mut x = F162::ZERO;
+        for i in 0..self.weight {
+            let p = self.positions[i] as usize;
+            x.0[p >> 6] |= 1u64 << (p & 63);
+        }
+        x
     }
 
     /// The sparse form of a ternary coefficient vector. Panics unless every entry is in

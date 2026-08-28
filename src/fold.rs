@@ -161,7 +161,7 @@ unsafe fn max_abs_batch(b: &Batch32) -> i32 {
 /// Every slot of a batch fully reduced and centered (`|v| <= (q-1)/2`); the input must satisfy
 /// `|v| <= 4q`, which both vertical kernels' output bounds do.
 #[target_feature(enable = "avx512f,avx512bw")]
-unsafe fn center_batch<const Q: u16>(b: &mut Batch32) {
+pub(crate) unsafe fn center_batch<const Q: u16>(b: &mut Batch32) {
     for j in 0..N {
         let p = b.v[j].as_mut_ptr() as *mut __m512i;
         _mm512_store_si512(p, center_epi16::<Q>(_mm512_load_si512(p as *const __m512i)));
@@ -175,11 +175,11 @@ unsafe fn center_batch<const Q: u16>(b: &mut Batch32) {
 /// The `r` challenges transformed, packed so that the scalar pair `(c_{2i}[u], c_{2i+1}[u])` is
 /// one dword — a `vpbroadcastd` memory operand, and exactly the operand `vpmaddwd` wants against
 /// two interleaved witness rows.
-struct ChallengeNtt {
+pub(crate) struct ChallengeNtt {
     /// `pair[i][u]` = `c_{2i}[u] as u16 | (c_{2i+1}[u] as u16) << 16`.
     pair: Vec<[u32; N]>,
     /// The same transforms per challenge, for the consistency check: `slot[j][u]`.
-    slot: Vec<[i16; N]>,
+    pub(crate) slot: Vec<[i16; N]>,
 }
 
 /// The `r` challenges embedded as `c(-X^4)` into as many `Batch32` of coefficients as they need.
@@ -200,7 +200,7 @@ fn embed(challenges: &[ShortChallenge]) -> Vec<Batch32> {
 
 /// Transform the embedded challenges modulo `Q` and fully reduce them to centered slots, which is
 /// what the accumulation bound of [`FOLD_PERIOD`] assumes.
-fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
+pub(crate) fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
     let r = challenges.len();
     assert!(r >= 2 && r % 2 == 0, "the fold pairs the chunks: r must be even");
     let mut bs = embed(challenges);
@@ -365,7 +365,7 @@ fn accumulate(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
 /// `y[u] = sum_i A_i[u] v_i[u] mod q`, the commitment of the folded witness, on the commitment's
 /// own packed accumulator: `|v| <= (q-1)/2` and `|A| <= (q-1)/2`, so no fold-back is needed
 /// (`av_fits`).
-fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+pub(crate) fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
     assert_eq!(a.len(), v.len());
     let mut acc = cm::Acc::zero();
     let ap = acc.v.as_mut_ptr() as *mut i32;

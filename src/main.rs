@@ -13,6 +13,10 @@ use bin_ntt::simd::transpose::BinaryIndex32;
 use bin_ntt::simd::transpose_f162 as tf;
 use bin_ntt::simd::vertical_bin_asm as va;
 use bin_ntt::types::{Batch32, Representation};
+use bin_ntt::eval::{
+    check_claim, evaluate_mle, fold_binary, left_expand, sample_point, verify_binary, verify_fold,
+    EvalPoint, RawCommitments,
+};
 use bin_ntt::{
     fold, sample_short_challenge, CommitmentKey, Timings, Transcript, DEFAULT_BOUND,
     DEFAULT_WEIGHT, PRIMES,
@@ -246,6 +250,8 @@ fn folding(witness: &[F162], nf162: usize) {
     }
     let f = out.timings;
 
+    let ev = evaluation(witness, &ck, &aux, &c, &ch, &out);
+
     println!("commit                     {plain:>8.2} ms");
     println!(
         "commit_into_aux            {keep:>8.2} ms   (+{:.1} %, {:.0} MB of witness transform kept)",
@@ -271,9 +277,10 @@ fn folding(witness: &[F162], nf162: usize) {
     ] {
         println!("  {name:<24} {ms:>8.2} ms");
     }
+    println!("left_expand                {:>8.2} ms   (u = B W, 2^18 F162 products)", ev.left_expand);
     println!(
-        "prover total               {:>8.2} ms   (commit_into_aux + fold)",
-        keep + f.total_ms
+        "PROVER total               {:>8.2} ms   (commit_into_aux + left_expand + challenges + fold)",
+        keep + ev.left_expand + chal_ms + f.total_ms
     );
     println!(
         "v: {} ring elements of R_648 in coefficient form, max |coefficient| = {} (q1/2 = {:.1})",
@@ -281,4 +288,113 @@ fn folding(witness: &[F162], nf162: usize) {
         out.max_abs_v,
         PRIMES[0] as f64 / 2.0
     );
+
+    println!("\nSTATEMENT (not prover time)");
+    println!("  sample_point             {:>8.1} us", 1e3 * ev.point);
+    println!(
+        "  evaluate_mle             {:>8.1} us   (2^18 products, word-sliced; scalar F162: \
+         {:.0} us, {:.1}x)",
+        1e3 * ev.mle,
+        1e3 * ev.scalar,
+        ev.scalar / ev.mle
+    );
+    println!("STATEMENT total            {:>8.1} us", 1e3 * (ev.point + ev.mle));
+
+    println!("\nVERIFIER");
+    for (name, ms) in [
+        ("check_claim", ev.check_claim),
+        ("fold_binary", ev.fold_binary),
+        ("verify_fold", ev.verify_fold),
+        ("verify_binary", ev.verify_binary),
+    ] {
+        println!("  {name:<24} {:>8.1} us", 1e3 * ms);
+    }
+    println!(
+        "VERIFIER total             {:>8.1} us",
+        1e3 * (ev.check_claim + ev.fold_binary + ev.verify_fold + ev.verify_binary)
+    );
+}
+
+/// Wall time of the left-expansion, the statement and the verifier, in milliseconds.
+struct EvalTimings {
+    point: f64,
+    mle: f64,
+    scalar: f64,
+    left_expand: f64,
+    check_claim: f64,
+    fold_binary: f64,
+    verify_fold: f64,
+    verify_binary: f64,
+}
+
+/// Best of `reps` wall milliseconds, and the last value produced.
+fn best_of<T>(reps: usize, mut f: impl FnMut() -> T) -> (f64, T) {
+    let mut best = f64::MAX;
+    let mut out = None;
+    for _ in 0..reps {
+        let t0 = Instant::now();
+        let v = std::hint::black_box(f());
+        best = best.min(t0.elapsed().as_secs_f64() * 1e3);
+        out = Some(v);
+    }
+    (best, out.unwrap())
+}
+
+/// The left-expansion `u = B W`, the claim it implies, and the three verifier checks — every
+/// check recomputed from `v`, `u` and the commitments alone.
+fn evaluation(
+    witness: &[F162],
+    ck: &CommitmentKey,
+    aux: &bin_ntt::AuxData,
+    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithTwoLimbs>,
+    ch: &[bin_ntt::ShortChallenge],
+    out: &bin_ntt::FoldOutput,
+) -> EvalTimings {
+    const LW: usize = 10;
+    const LR: usize = 8;
+    assert_eq!(ck.len_f162(), 1 << LW, "the eval stage wants 2^18 F162 in 256 chunks");
+    let mut t = Transcript::new(b"bin-ntt/eval");
+    for j in 0..1 << LR {
+        t.absorb_elements(c.column(j));
+    }
+    let (point_ms, point) = best_of(3, || sample_point::<LW, LR>(&mut t.clone()));
+    let (mle_ms, claim) = best_of(3, || evaluate_mle(witness, &point));
+    let (le_ms, lx) = best_of(3, || left_expand(witness, &point.r0));
+    let u = lx.u;
+
+    let (scalar_ms, _) = best_of(3, || scalar_mle(witness, &point));
+
+    let raw = RawCommitments::from_aux(aux);
+    let (cc_ms, ok1) = best_of(3, || check_claim(&u, &point.r1, claim));
+    let (fb_ms, folded) = best_of(3, || fold_binary(&u, ch));
+    let (vf_ms, ok2) = best_of(3, || verify_fold(ck, &raw, ch, &out.v));
+    let (vb_ms, ok3) = best_of(3, || verify_binary(&point.r0, &out.v, folded));
+    assert!(ok1 && ok2 && ok3, "the verifier rejected an honest transcript");
+
+    EvalTimings {
+        point: point_ms,
+        mle: mle_ms,
+        scalar: scalar_ms,
+        left_expand: le_ms,
+        check_claim: cc_ms,
+        fold_binary: fb_ms,
+        verify_fold: vf_ms,
+        verify_binary: vb_ms,
+    }
+}
+
+/// The same evaluation through `F162`'s scalar `Mul` (one `pclmul` chain per product), the
+/// baseline the word-sliced path is measured against.
+fn scalar_mle<const LW: usize, const LR: usize>(w: &[F162], p: &EvalPoint<LW, LR>) -> F162 {
+    let eq0 = bin_ntt::eq_table(&p.r0);
+    let eq1 = bin_ntt::eq_table(&p.r1);
+    let mut t = F162::ZERO;
+    for j in 0..1 << LR {
+        let mut s = F162::ZERO;
+        for i in 0..1 << LW {
+            s = s + eq0[i] * w[i + (j << LW)];
+        }
+        t = t + s * eq1[j];
+    }
+    t
 }

@@ -258,7 +258,7 @@ batches, not of the witness.
 | — inverse NTT, `q1`                          | 0.07     | 8 batches, `vertical_gen::intt_gen_batch32`, plus reading `v` out of the vertical layout |
 | — forward NTT, `q2`                          | 0.03     | 8 batches, `vertical_gen`                       |
 | — `y = A v`                                  | 0.04     | 8 batches per prime on the commitment's `vpdpwssd` accumulator |
-| prover total                                 | **19.3** | `commit_into_aux` + `fold`                      |
+| `commit_into_aux` + `fold`                   | **19.3** | the whole prover is in "Left-expansion and the binary side" below |
 
 The 85 MB an `AuxData` holds is one `mmap`: `commit_with_aux` measures 37 ms because 22 of them
 are the kernel's first touch of 20 736 fresh pages. `commit_into_aux` writes into a buffer the
@@ -271,7 +271,91 @@ this loop has no compute to hide the extra fill-buffer pressure behind. Everythi
 is 0.24 ms. The inverse used to be the untuned `u64` reference — 256 x `scalar::intt`, 6.45 ms,
 more than the 85 MB stream — and is now `vertical_gen::intt_gen_batch32` on the 8 batches at 541
 cycles per polynomial: 0.07 ms including reading the 256 elements back out of the vertical
-layout, which takes the fold from 11.0 to 4.51 ms and the prover from 25.9 to 19.3.
+layout, which takes the fold from 11.0 to 4.51 ms and `commit_into_aux` + `fold` from 25.9 to 19.3.
+
+### Left-expansion and the binary side
+
+`src/eval.rs`, re-exported at the crate root, is the paper's `Pi_translate` and the field half of
+one fold round. The witness the commitment takes *is* a `wdim x r` matrix `W` over
+`F = GF(2)[x]/(x^162 + x^81 + 1)` — entry (i, j) is `witness[i + wdim j]`, so a column is one
+chunk — and `F` is exactly `R_162 mod 2` under the crate's lift: the coefficients of an `R_162`
+element reduced mod 2 are the bits of an `F162`, and the signs vanish. Every `R_162`-linear step
+of the fold therefore has a shadow over `F`, and that shadow is what an evaluation claim about the
+witness travels along. With nu = 18 variables split as r0 over the row index (10) and r1 over the
+column index (8), and `eq(r, b) = prod_k (r_k if b_k = 1 else 1 + r_k)`:
+
+    t   = sum_{i,j} eq(r1, j) eq(r0, i) W[i + wdim j]      the claim about the committed witness
+    u   = B W,   B = eq(r0, .)                             the left expansion: r elements of F
+    t   = u^T eq(r1)                                       the verifier's claim check
+    v   = W c                                              the fold, over R_648
+    B v = u^T c                                            the binary check, over F
+
+The last line is the one that ties the two halves together: `B (W c) = (B W) c` mod 2. Its left
+side is read straight off the folded witness the fold already produced — component k of packed
+element m is the `F162` at stream index `4m + k`, and a coefficient's parity is that element's bit
+(`components_mod_2`) — and its right side is an r-term inner product of the prover's message
+against the challenges reduced mod 2 (`ShortChallenge::to_f162`: a bit at each of the challenge's
+positions, the signs gone). The verifier never sees `W`: it holds the r commitments, the
+challenges, `u`, `v` and the claim.
+
+* `EvalPoint<LW, LR> { r0: [F162; LW], r1: [F162; LR] }` (defaults 10 and 8, the headline
+  instance), `sample_point(&mut Transcript)`, and `eq_table(rs) -> Vec<F162>`, all `2^len` values
+  by doubling, variable k being bit k of the index.
+* `evaluate_mle(&witness, &point)` — the claim `t`, in the two-stage form `u` then `u^T eq(r1)`.
+* `left_expand(&witness, &r0) -> LeftExpansion { u }` — the prover's message.
+* `check_claim(&u, &r1, t)`, `fold_binary(&u, &challenges) -> F162`.
+* `RawCommitments::from_aux(&aux)`, `verify_fold(&key, &raw, &challenges, &v)`,
+  `verify_binary(&r0, &v, folded)`, and `Verifier { key, commitments, point, claim }` running all
+  three checks.
+
+```rust
+let (c, aux) = ck.commit_with_aux(&witness, 256);
+let point: EvalPoint = sample_point(&mut t);       // t bound to the commitment
+let claim = evaluate_mle(&witness, &point);        // the statement
+let u = left_expand(&witness, &point.r0).u;        // the prover's message, 256 field elements
+let out = fold(&ck, &aux, &challenges);            // v = W c
+let v = Verifier { key: &ck, commitments: &RawCommitments::from_aux(&aux), point: &point, claim };
+assert!(v.verify(&u, &challenges, &out.v));        // u^T eq(r1) = t,  A v = Y c,  B v = u^T c
+```
+
+`verify_fold` recomputes `A v` from `v` alone — the centered range of `q1` first, then
+`vertical_gen::ntt_gen_batch32` on the 8 batches per prime and the commitment's own accumulator —
+and compares it slot by slot against `sum_j c_j C_j`, so nothing of the prover's is trusted.
+
+**The kernels.** Every step is one dot product over `F`, and all of them run on `bin_fields`'
+word-sliced AVX-512 kernels: limb k of 8 consecutive elements in one zmm, `mac_soa8` XOR-ing the
+12 unreduced `clmul` products of a block into the accumulator and a *single* `reduce_soa8` at the
+end of the whole product — deferred reduction, exactly what that crate's sumcheck round does. One
+operand (an `eq` table, or the challenges) is word-sliced once up front; the other is a raw
+`&[F162]` run, transposed 8 elements at a time inside the loop by three `vpermi2q`/`vpermq` pairs,
+so the witness never leaves the layout the commitment reads it in and nothing is materialised.
+
+**Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 `F162` = a 1024 x 256 matrix
+over `F`, weight-21 challenges, best of 3; one run, so the three commitment and fold rows repeat
+the table above at the clock this one settled at):
+
+| group     | step                                | ms        | note                                                     |
+|-----------|-------------------------------------|----------:|----------------------------------------------------------|
+| prover    | `commit_into_aux`                   | 14.94     |                                                          |
+| prover    | 256 challenges                      | 2.44      |                                                          |
+| prover    | `fold`                              | 4.53      |                                                          |
+| prover    | `left_expand`                       | **0.28**  | 2^18 products, one per witness element                   |
+| prover    | **total**                           | **22.19** |                                                          |
+| statement | `sample_point`                      | 0.0004    | one XOF derivation, 18 elements                          |
+| statement | `evaluate_mle`                      | **0.297** | the same 2^18 products, plus 256                         |
+| verifier  | `check_claim`                       | 0.007     | 256 products                                             |
+| verifier  | `fold_binary`                       | 0.005     | 256 products                                             |
+| verifier  | `verify_fold`                       | 0.611     | 2 x (`NTT(v)` 0.04, `A v` 0.011, 256 challenge NTTs 0.10, 648-slot `sum_j c_j C_j` 0.08) |
+| verifier  | `verify_binary`                     | 0.099     | `v mod 2` bit by bit 0.073, `eq(r0, .)` 0.025, the 1024-term product 0.002 |
+| verifier  | **total**                           | **0.723** |                                                          |
+
+The left expansion costs 0.28 ms against the fold's 4.5 and the commitment's 15, so it is 1.3 % of
+the prover; the whole verifier is 0.72 ms, another 30x below that. The same 2^18 products through `F162`'s scalar
+`Mul` — one `pclmul` chain and one reduction each — take 2.74 ms, so the word-sliced path with its
+deferred reduction is **9.2x** faster; at 0.28 ms it is reading the 6.3 MB witness at 21 GB/s,
+which is this machine's DRAM read bandwidth, so the transpose inside the loop is free and the step
+is at its floor. `verify_fold` has no such floor to hit: its four pieces are all small, and the
+largest of them is transforming the 256 challenges, which the verifier cannot avoid.
 
 ## Building and testing
 
@@ -630,7 +714,8 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/api.rs                  the public API: CommitmentKey, PowerOfThreeRingElement(WithTwoLimbs), VerticallyAlignedMatrix
     src/challenge.rs            short fixed-weight ternary challenges over R_162, blake3 transcript
     src/fold.rs                 the folding step: v = sum_j c_j W_j in the NTT domain, and A v
-    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256 and folds the r = 256 run
+    src/eval.rs                 the left-expansion over F162 (Pi_translate), the binary fold, the verifier
+    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256, folds the r = 256 run and verifies it
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
     src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)

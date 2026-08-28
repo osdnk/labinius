@@ -12,10 +12,12 @@
 //! - `api`     : the public API (`CommitmentKey`, `PowerOfThreeRingElement`, the height-4 view).
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
 //! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
+//! - `eval`    : the left-expansion over `F162`, the binary side of the fold, and the verifier.
 #![allow(clippy::needless_range_loop)]
 
 pub mod api;
 pub mod challenge;
+pub mod eval;
 pub mod f162;
 pub mod fold;
 pub mod params;
@@ -27,6 +29,10 @@ pub mod types;
 
 pub use api::*;
 pub use fold::{fold, fold_checked, fold_with, FoldOutput, FoldTimings};
+pub use eval::{
+    check_claim, components_mod_2, eq_table, evaluate_mle, fold_binary, left_expand, sample_point,
+    verify_binary, verify_fold, EvalPoint, LeftExpansion, RawCommitments, Verifier,
+};
 pub use challenge::{
     canonical_inf_norm_sq, sample_attempt, sample_short_challenge, ShortChallenge, Transcript,
     DEFAULT_BOUND, DEFAULT_WEIGHT, MAX_WEIGHT,
