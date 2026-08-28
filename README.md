@@ -129,6 +129,69 @@ decomposition and to the per-chunk fixed cost of the kernel. Front end plus tran
 cache-resident, is 316 / 340 cycles per ring element (q = 3889 / 9721) and the base multiplication
 59, so 375 / 399 of the r = 1 cost is compute and the rest is A that does not hide.
 
+### Short challenges
+
+`src/challenge.rs`, re-exported at the crate root, is the challenge side of a Fiat-Shamir protocol
+over this commitment: short elements of the same `R_162` the commitment's four components live in.
+
+* `Transcript` — a blake3 transcript. `Transcript::new(domain)`, `absorb_bytes`, `absorb_u64`,
+  `absorb_elements(&[PowerOfThreeRingElementWithTwoLimbs])` (the raw little-endian `i16` slots,
+  limb 0 then limb 1, 648 bytes per element). `fill(label, out)` clones the absorbing state,
+  appends a per-transcript sample counter and the label, and reads the extendable output — so a
+  derivation is bound to everything absorbed before it, successive derivations are independent,
+  and everything is a deterministic function of the absorbed bytes.
+* `ShortChallenge { positions: [u8; MAX_WEIGHT], signs: [i8; MAX_WEIGHT], weight }` — a weight-`w`
+  ternary element of `R_162`, stored as sorted distinct positions plus signs (`MAX_WEIGHT = 32`).
+  `coeffs() -> [i8; 162]`, `from_coeffs`, `log2_cardinality(w) = log2 C(162, w) + w`, and
+  `to_ntt() -> PowerOfThreeRingElementWithTwoLimbs`.
+* `sample_attempt(&mut Transcript, w)` is uniform over that set: a partial Fisher-Yates over the
+  162 positions with each index drawn uniformly from `[i, 162)` by rejection on 16-bit XOF draws,
+  and uniform signs. `sample_short_challenge(t, w, bound)` rejects until the challenge is short and
+  returns it with the number of attempts; all of its attempts read one XOF derivation and reuse one
+  set of buffers, so an attempt costs no blake3 finalisation and no allocation. Defaults:
+  `DEFAULT_WEIGHT = 21`, `DEFAULT_BOUND = 7.5`.
+
+**The bound.** `canonical_inf_norm_sq(&c)` is `max_u |c(zeta^u)|^2` over the 162 primitive 243-rd
+roots of unity `zeta^u` (`zeta = exp(2 pi i / 243)`, `gcd(u, 3) = 1`) — the squared sup norm of the
+canonical embedding, i.e. the squared operator norm of multiplication by `c` on `R_162 (x) C`, which
+is what a security argument needs from a challenge set. A challenge is accepted when that is at most
+`bound^2`; the default `bound = 7.5` is an energy bound of `56.25` against a mean of `w = 21`. It is
+evaluated from the `w` nonzero terms only, at 81 roots (`c` is real, so the conjugate half repeats):
+`PHASE_RE[p][k] = cos(2 pi p u_k / 243)` and `PHASE_IM` are a 162 x 88 `f64` table (~228 KB, built
+once), and a term adds `+-` one row of it to the accumulator — contiguous `f64` loops, no gathers.
+The rejection loop runs that in two blocks of 44 lanes and stops at the first root over the bound,
+which is where most rejected attempts die. `canonical_inf_norm_sq_naive` (Horner in complex `f64`
+over all 162 roots) is the reference the whole thing is tested against.
+
+```rust
+let mut t = Transcript::new(b"bin-ntt/example");
+t.absorb_elements(c.column(0));                                  // bind the commitment
+let (chal, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
+let slots = chal.to_ntt();                    // slot-wise multiplier for each of the four rows
+```
+
+`to_ntt` uses exactly the API's convention: slot `s` is `c(Z)` at `Z = -theta^{v_s}`, `theta = psi^4`,
+`v_s = POW3_SLOT_EXP[s]`, centered. Lifted into `R_648` as `c(-X^4)` (coefficient of `X^{4m}` is
+`(-1)^m c_m`), a challenge therefore has `decompose_648_to_4x162(ntt(c(-X^4)))` equal to
+`(to_ntt(), 0, 0, 0)` — so multiplying all four rows of a commitment by `to_ntt()` slot by slot is
+multiplication by `c(-X^4)` in `R_648`, and `tests/challenge.rs` checks that for both primes.
+
+**Measured** (`cargo test --release --offline --test challenge -- --nocapture`, weight 21, 2000
+accepted challenges per row). The challenge set has `log2 C(162, 21) + 21 = 107.7` bits; an attempt
+costs 0.7 us when the first block rejects it and 1.0 us when every root is evaluated.
+
+| bound | attempts per accepted challenge | acceptance | us per accepted challenge | us per attempt |
+|------:|--------------------------------:|-----------:|--------------------------:|---------------:|
+| 7.5   | 1531                            | 0.065 %    | 1065                      | 0.70           |
+| 8     | 103                             | 0.97 %     | 74                        | 0.71           |
+| 9     | 5.70                            | 17.5 %     | 4.6                       | 0.80           |
+| 10    | 1.81                            | 55.2 %     | 1.6                       | 0.91           |
+| 13    | 1.01                            | 98.8 %     | 1.0                       | 1.02           |
+
+Tightening the bound costs wall time and cardinality, both mildly: at 7.5 a challenge takes a
+millisecond, and rejection removes only `log2` of the acceptance rate, so the accepted set still
+holds 97.1 of the 107.7 bits.
+
 ## Building and testing
 
 `.cargo/config.toml` sets `-C target-cpu=native`; the kernels need AVX-512
@@ -467,6 +530,7 @@ Measured or modelled on this core, roughly in order of value for the commitment:
 ## Layout of the crate
 
     src/api.rs                  the public API: CommitmentKey, PowerOfThreeRingElement(WithTwoLimbs), VerticallyAlignedMatrix
+    src/challenge.rs            short fixed-weight ternary challenges over R_162, blake3 transcript
     src/main.rs                 the demo: builds a key, commits 2^18 F162 for r = 1, 4, 16, 256, prints timings
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)

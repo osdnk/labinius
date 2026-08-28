@@ -8,6 +8,8 @@ description = "AVX-512 NTT over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3
 [dependencies]
 # The F162 type exactly as used by binius64-f162 (pinned to the revision that repo resolves to).
 bin-fields = { git = "https://github.com/osdnk/field-benches", rev = "84ee9ce" }
+# Fiat-Shamir transcript (challenge.rs): blake3 as the hash and the XOF.
+blake3 = "1.8"
 
 [profile.release]
 opt-level = 3

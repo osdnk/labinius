@@ -10,9 +10,11 @@
 //! - `perf`    : perf_event_open wrapper (cycles, instructions, uops per port) for the bench.
 //! - `simd`    : the AVX-512 kernels (one module per variant).
 //! - `api`     : the public API (`CommitmentKey`, `PowerOfThreeRingElement`, the height-4 view).
+//! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
 #![allow(clippy::needless_range_loop)]
 
 pub mod api;
+pub mod challenge;
 pub mod f162;
 pub mod params;
 pub mod perf;
@@ -22,5 +24,9 @@ pub mod simd;
 pub mod types;
 
 pub use api::*;
+pub use challenge::{
+    canonical_inf_norm_sq, sample_attempt, sample_short_challenge, ShortChallenge, Transcript,
+    DEFAULT_BOUND, DEFAULT_WEIGHT, MAX_WEIGHT,
+};
 pub use params::{N, QS};
 pub use types::*;
