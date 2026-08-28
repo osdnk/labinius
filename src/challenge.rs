@@ -12,7 +12,7 @@
 //!
 //! the 162 primitive 243-rd roots of unity. That quantity — [`canonical_inf_norm_sq`] — bounds the
 //! operator norm of multiplication by `c` on `R_162 (x) C`, so a bound on it is what a security
-//! argument needs from a challenge set. The default is `weight = 21`, `bound = 7.5`.
+//! argument needs from a challenge set. The default is `weight = 21`, `bound = 9`.
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
@@ -46,8 +46,8 @@ pub const MAX_WEIGHT: usize = 32;
 /// The weight the crate samples at unless told otherwise.
 pub const DEFAULT_WEIGHT: usize = 21;
 
-/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 7.5^2 = 56.25`.
-pub const DEFAULT_BOUND: f64 = 7.5;
+/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 9^2 = 81`.
+pub const DEFAULT_BOUND: f64 = 9.0;
 
 // =============================================================================================
 // transcript

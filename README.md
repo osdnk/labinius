@@ -149,13 +149,13 @@ over this commitment: short elements of the same `R_162` the commitment's four c
   and uniform signs. `sample_short_challenge(t, w, bound)` rejects until the challenge is short and
   returns it with the number of attempts; all of its attempts read one XOF derivation and reuse one
   set of buffers, so an attempt costs no blake3 finalisation and no allocation. Defaults:
-  `DEFAULT_WEIGHT = 21`, `DEFAULT_BOUND = 7.5`.
+  `DEFAULT_WEIGHT = 21`, `DEFAULT_BOUND = 9.0`.
 
 **The bound.** `canonical_inf_norm_sq(&c)` is `max_u |c(zeta^u)|^2` over the 162 primitive 243-rd
 roots of unity `zeta^u` (`zeta = exp(2 pi i / 243)`, `gcd(u, 3) = 1`) — the squared sup norm of the
 canonical embedding, i.e. the squared operator norm of multiplication by `c` on `R_162 (x) C`, which
 is what a security argument needs from a challenge set. A challenge is accepted when that is at most
-`bound^2`; the default `bound = 7.5` is an energy bound of `56.25` against a mean of `w = 21`. It is
+`bound^2`; the default `bound = 9` is an energy bound of `81` against a mean of `w = 21`. It is
 evaluated from the `w` nonzero terms only, at 81 roots (`c` is real, so the conjugate half repeats):
 `PHASE_RE[p][k] = cos(2 pi p u_k / 243)` and `PHASE_IM` are a 162 x 88 `f64` table (~228 KB, built
 once), and a term adds `+-` one row of it to the accumulator — contiguous `f64` loops, no gathers.
@@ -188,9 +188,9 @@ costs 0.7 us when the first block rejects it and 1.0 us when every root is evalu
 | 10    | 1.81                            | 55.2 %     | 1.6                       | 0.91           |
 | 13    | 1.01                            | 98.8 %     | 1.0                       | 1.02           |
 
-Tightening the bound costs wall time and cardinality, both mildly: at 7.5 a challenge takes a
-millisecond, and rejection removes only `log2` of the acceptance rate, so the accepted set still
-holds 97.1 of the 107.7 bits.
+Tightening the bound costs wall time and cardinality, both mildly: at the default 9 a challenge
+takes 4.6 us and the accepted set holds 105.2 of the 107.7 bits; at 7.5 a challenge takes a
+millisecond and the set still holds 97.1 bits.
 
 ## Building and testing
 
