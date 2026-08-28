@@ -94,3 +94,56 @@ fn binary_batch_roundtrip() {
     let batch = Batch32::from_binary(&polys);
     assert_eq!(batch.get(5), RingElement::from_binary(&polys[5]));
 }
+
+/// `scalar::intt` is the exact inverse of `scalar::ntt`, and `intt_mont` additionally undoes the
+/// Montgomery factor the `*_mont` kernels leave on their output.
+fn check_intt<const Q: u16>() {
+    let mut rng = Rng::new(0x1177 ^ Q as u64);
+    let mut cases: Vec<[u32; N]> = Vec::new();
+    cases.push([0u32; N]);
+    cases.push([1u32; N]);
+    let mut mono = [0u32; N];
+    mono[324] = Q as u32 - 1;
+    cases.push(mono);
+    for _ in 0..8 {
+        cases.push(std::array::from_fn(|_| rng.below(Q as u32)));
+    }
+    for _ in 0..4 {
+        let p = BinaryPoly::random(&mut rng);
+        cases.push(scalar::lift(&p));
+    }
+    let r = Params::<Q>::R as u64;
+    for a in &cases {
+        let n = scalar::ntt::<Q>(a);
+        assert_eq!(&scalar::intt::<Q>(&n), a, "q={Q}: intt(ntt(a)) != a");
+        // Montgomery-form transform: R * ntt(a).
+        let nm: [u32; N] =
+            std::array::from_fn(|j| (n[j] as u64 * r % Q as u64) as u32);
+        assert_eq!(&scalar::intt_mont::<Q>(&nm), a, "q={Q}: intt_mont(R ntt(a)) != a");
+        assert_eq!(&scalar::intt_mont_pow::<Q>(&nm, 1), a, "q={Q}: intt_mont_pow k=1");
+        let nm2: [u32; N] =
+            std::array::from_fn(|j| (nm[j] as u64 * r % Q as u64) as u32);
+        assert_eq!(&scalar::intt_mont_pow::<Q>(&nm2, 2), a, "q={Q}: intt_mont_pow k=2");
+    }
+    // the round trip through a product: intt_mont of the Montgomery-form slot product is a*b.
+    let pa = BinaryPoly::random(&mut rng);
+    let pb = BinaryPoly::random(&mut rng);
+    let (a, b) = (scalar::lift(&pa), scalar::lift(&pb));
+    let na: [u32; N] = std::array::from_fn(|j| (scalar::ntt::<Q>(&a)[j] as u64 * r % Q as u64) as u32);
+    let nb: [u32; N] = std::array::from_fn(|j| (scalar::ntt::<Q>(&b)[j] as u64 * r % Q as u64) as u32);
+    // mont(R a, R b) = R a b
+    let rinv = Params::<Q>::RINV as u64;
+    let prod: [u32; N] =
+        std::array::from_fn(|j| (na[j] as u64 * nb[j] as u64 % Q as u64 * rinv % Q as u64) as u32);
+    assert_eq!(scalar::intt_mont::<Q>(&prod), scalar::mul_mod_phi(&a, &b, Q), "q={Q}: product");
+}
+
+#[test]
+fn intt_3889() {
+    check_intt::<3889>();
+}
+
+#[test]
+fn intt_9721() {
+    check_intt::<9721>();
+}

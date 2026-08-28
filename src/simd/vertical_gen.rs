@@ -50,6 +50,20 @@
 //!
 //! Output bound: `|v| <= 3.4022 q = 13231` for q = 3889 and `|v| <= 2.1244 q = 20652` for q = 9721
 //! (`OUTPUT_BOUND`), verified against an exact i32 shadow model in `tests/vertical_gen.rs`.
+//!
+//! # Montgomery-form outputs (`ntt_gen_batch32_mont`)
+//!
+//! `R * a(psi^SLOT_EXP[j])` with R = 2^16 mod q, so that a slot product of two transforms costs
+//! one signed Montgomery multiplication instead of two. Unlike the binary kernel — whose lookup
+//! tables absorb the factor for free — a generic-input kernel has to pay for it somewhere: the
+//! all-`a0` path through the tree carries no twiddle, so no retwiddling alone can produce R.
+//! The cheapest place is the untwiddled `a0` input of a radix-3 level, of which there are only
+//! 216 per batch (against 324 for a radix-2 level and 648 for scaling the input), and among
+//! those level 5, because `BAR_L[5]` is true for both primes: `mont(a0, R)` *replaces* the
+//! `barrett` there, so the whole Montgomery form costs 216 extra multiply-port uops per batch
+//! (one per level-5 butterfly, +2 % statically, +1 % measured: 427.5 vs 423.3 cycles per
+//! polynomial at q = 3889, 470.4 vs 466.3 at 9721). `|mont(a0, R)| < 0.75 q` is tighter than the
+//! Barrett's `0.899 q / 0.809 q`, so all per-level bounds and `OUTPUT_BOUND` hold unchanged.
 use crate::params::{barrett_v, Params};
 use crate::types::{Batch32, Representation};
 use core::arch::x86_64::*;
@@ -82,14 +96,16 @@ impl<const Q: u16> Tw<Q> {
         }
         t
     }
-    const fn r3<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+    /// Radix-3 twiddle table with both twiddles pre-multiplied by `scale` (1 = plain).
+    const fn r3_scaled<const M: usize>(level: usize, nk: usize, scale: u16) -> [u32; M] {
         let mut t = [0u32; M];
         let mut k = 0;
         while k < nk {
             let z = Params::<Q>::zeta(level, k);
             let z2 = (z as u64 * z as u64 % Q as u64) as u16;
-            let a = Self::pair(z);
-            let b = Self::pair(z2);
+            let sc = scale as u64;
+            let a = Self::pair((z as u64 * sc % Q as u64) as u16);
+            let b = Self::pair((z2 as u64 * sc % Q as u64) as u16);
             t[4 * k] = a[0];
             t[4 * k + 1] = a[1];
             t[4 * k + 2] = b[0];
@@ -97,6 +113,9 @@ impl<const Q: u16> Tw<Q> {
             k += 1;
         }
         t
+    }
+    const fn r3<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+        Self::r3_scaled::<M>(level, nk, 1)
     }
     pub const Z6: [u32; 2] = Self::pair(Params::<Q>::ZETA6);
     pub const OM: [u32; 2] = Self::pair(Params::<Q>::OMEGA);
@@ -108,6 +127,16 @@ impl<const Q: u16> Tw<Q> {
     pub const L4: [u32; 96] = Self::r3::<96>(4, 24);
     pub const L5: [u32; 288] = Self::r3::<288>(5, 72);
     pub const L6: [u32; 864] = Self::r3::<864>(6, 216);
+
+    /// `[R', R]`: `mont(a, R', R) = a * 2^16 mod q`. Applied to the untwiddled `a0` input of
+    /// level 5 by `ntt_gen_batch32_mont`, where it *replaces* the Barrett (`BAR_L[5]` is true for
+    /// both primes), so the whole Montgomery-form transform costs one extra multiply-port uop per
+    /// level-5 butterfly (216 per batch, +2 %) instead of the 3 a full extra multiplication costs.
+    pub const RM: [u32; 2] = Self::pair(Params::<Q>::R);
+    /// Level-5 twiddles scaled by R (`zeta -> R zeta`, `zeta^2 -> R zeta^2`), the other half of
+    /// the Montgomery-form output: with `a0 -> R a0` every level-5 output, and hence every output
+    /// of the transform, is scaled by R exactly.
+    pub const L5M: [u32; 288] = Self::r3_scaled::<288>(5, 72, Params::<Q>::R);
 
     /// Barrett the level-0 output `a0 + a1 - zeta6*a1` inside pass A (only 9721 needs it).
     pub const BAR_A: bool = Q == 9721;
@@ -369,6 +398,31 @@ unsafe fn pass_c5<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: 
     }
 }
 
+/// Level 5 for one 27-block with the Montgomery scaling folded in: the `a0` input is multiplied
+/// by `R = 2^16 mod q` (which also reduces it to `|.| < 0.75 q`, so it replaces the `barrett` the
+/// plain path does here for both primes) and the twiddles come from the R-scaled `L5M`, so all
+/// three outputs — and, level 6 being linear, the whole transform — are scaled by R.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn pass_c5_mont<const Q: u16>(p: *mut __m512i, k4: usize) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let omp = bc(Tw::<Q>::OM.as_ptr());
+    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
+    let rmp = bc(Tw::<Q>::RM.as_ptr());
+    let rm = bc(Tw::<Q>::RM.as_ptr().add(1));
+    let t5 = Tw::<Q>::L5M.as_ptr().add(12 * k4);
+    let base = k4 * 27;
+    for bb in 0..3 {
+        for j in 0..3 {
+            let b = base + 9 * bb + j;
+            let c0 = mont(ld(p, b), rmp, rm, q);
+            let (y0, y1, y2) = r3(c0, ld(p, b + 3), ld(p, b + 6), t5.add(4 * bb), omp, om, q);
+            st(p, b, y0);
+            st(p, b + 3, y1);
+            st(p, b + 6, y2);
+        }
+    }
+}
+
 /// Level 2 alone for one 162-block (unfused variant): 3 independent butterflies per group.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
 unsafe fn pass_l2<const Q: u16>(p: *mut __m512i, blk: usize) {
@@ -568,6 +622,42 @@ pub unsafe fn ntt_gen_batch32<const Q: u16>(b: &mut Batch32) {
         }
     }
     b.representation = Representation::Ntt;
+}
+
+/// Montgomery-form forward NTT: `b.v[j][p] = R * a_p(psi^SLOT_EXP[j]) mod q`, R = 2^16 mod q.
+///
+/// Same passes as [`ntt_gen_batch32`] except that level 5 runs `pass_c5_mont`, which multiplies
+/// the untwiddled `a0` input by R and uses R-scaled twiddles. Level 5 is the cheapest place for
+/// it: a radix-3 level has only 216 untwiddled inputs per batch (the twiddled ones absorb R into
+/// a constant for free), and both primes already Barrett `a0` there, so the Montgomery
+/// multiplication *replaces* that Barrett — 216 extra multiply-port uops per batch (+2 %) rather
+/// than the 648 an independent scaling pass would cost, and 1944 for scaling the input.
+/// Bounds: `|mont(a0, R)| < 0.75 q` where the Barrett gave `<= 0.899 q / 0.809 q`, so every
+/// per-level bound of the module comment, and `OUTPUT_BOUND`, hold unchanged.
+///
+/// # Safety
+/// See [`ntt_gen_batch32`].
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+pub unsafe fn ntt_gen_batch32_mont<const Q: u16>(b: &mut Batch32) {
+    debug_assert_eq!(b.representation, Representation::Coefficients);
+    let p = b.v.as_mut_ptr() as *mut __m512i;
+    pass_a::<Q>(p);
+    for blk in 0..4 {
+        pass_b::<Q>(p, blk);
+        for k4 in 6 * blk..6 * blk + 6 {
+            pass_c4::<Q, false>(p, k4, core::ptr::null());
+            pass_c5_mont::<Q>(p, k4);
+            pass_d::<Q, false>(p, k4, core::ptr::null());
+        }
+    }
+    b.representation = Representation::Ntt;
+}
+
+/// Driver over many batches, Montgomery-form output.
+pub fn ntt_gen_batches_mont<const Q: u16>(bs: &mut [Batch32]) {
+    for b in bs.iter_mut() {
+        unsafe { ntt_gen_batch32_mont::<Q>(b) };
+    }
 }
 
 /// Same kernel with the next batch prefetched into L2, one cache line per butterfly of levels

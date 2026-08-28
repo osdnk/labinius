@@ -39,6 +39,17 @@
 //! 2^15 / q = 8.42 (3889) and 3.37 (9721), so **q = 3889 needs no Barrett at all**; for q = 9721
 //! one `barrett` (vpmulhrsw + vpmullw + vpsubw) is applied to the untwiddled `a0` input of levels
 //! 4, 5 and 6, which caps it at 0.809 q and hence every output at 0.809 q + 1.5 q = 2.309 q.
+//!
+//! ## Montgomery-form outputs (`ntt_bin_batch32_mont`)
+//!
+//! Everything after the lookups is linear in the table values (the twiddle multiplications are
+//! exact `a * zeta`), so scaling the 16 entries by `R = 2^16 mod q` before centering scales the
+//! whole transform: `out[j] = R a(psi^SLOT_EXP[j]) mod q`. The entries stay in (-q/2, q/2], so
+//! the schedule, the uop counts and every bound above are unchanged — the Montgomery form is
+//! free (measured 296 / 329 cycles per polynomial either way, identical p0/p5 counts). It buys a
+//! slot product of two transforms in **one** signed Montgomery multiplication instead of two
+//! (`pointwise::mul_batch_batch_mont`); the `R^-1` is undone with the 648^-1 by whoever leaves
+//! the NTT domain (`scalar::intt_mont`).
 use crate::params::*;
 use crate::simd::transpose;
 pub use crate::simd::transpose::BinaryIndex32;
@@ -77,7 +88,7 @@ const fn mont_pair<const Q: u16>(x: u16) -> (u32, u32) {
     (dup(w), dup(Params::<Q>::mont_pre(w)))
 }
 
-const fn build_tables<const Q: u16>() -> Tables {
+const fn build_tables<const Q: u16, const MONT: bool>() -> Tables {
     let q = Q as u64;
     let z6 = Params::<Q>::ZETA6 as u64;
     let kappa = [z6, (1 + q - z6) % q];
@@ -109,6 +120,11 @@ const fn build_tables<const Q: u16>() -> Tables {
                         let t = if s1 == 0 { inner } else { (q - inner) % q };
                         let base = ((n0 + ka * n2) % q + t) % q;
                         let v = base * f % q * extra % q;
+                        // Montgomery-form outputs: everything after the tables is linear in the
+                        // table values, so scaling the 16 entries by R = 2^16 mod q scales the
+                        // whole transform. The entries stay centered, |T| <= q/2, so every bound
+                        // in the module comment is unchanged.
+                        let v = if MONT { v * Params::<Q>::R as u64 % q } else { v };
                         let e = center(v, q) as u16;
                         let ti = ((k * 2 + s2) * 3 + r) * 2 + ab;
                         lut[ti][n] = e as u8;
@@ -166,15 +182,32 @@ const fn build_tables<const Q: u16>() -> Tables {
     }
 }
 
-static T3889: Tables = build_tables::<3889>();
-static T9721: Tables = build_tables::<9721>();
+impl Tables {
+    /// The plain tables: `ntt_bin_batch32` output is `a(psi^SLOT_EXP[j]) mod q`.
+    pub const fn new<const Q: u16>() -> Tables {
+        build_tables::<Q, false>()
+    }
+    /// The same tables with every one of the 16 entries scaled by `R = 2^16 mod q` (and
+    /// re-centered), which is all it takes to make the kernel's output
+    /// `R * a(psi^SLOT_EXP[j]) mod q`: the twiddle constants, the Barretts and the schedule are
+    /// untouched. Used by `ntt_bin_batch32_mont`.
+    pub const fn new_mont<const Q: u16>() -> Tables {
+        build_tables::<Q, true>()
+    }
+}
+
+static T3889: Tables = Tables::new::<3889>();
+static T9721: Tables = Tables::new::<9721>();
+static M3889: Tables = Tables::new_mont::<3889>();
+static M9721: Tables = Tables::new_mont::<9721>();
 
 #[inline(always)]
-fn tables<const Q: u16>() -> &'static Tables {
-    if Q == 3889 {
-        &T3889
-    } else {
-        &T9721
+fn tables<const Q: u16, const MONT: bool>() -> &'static Tables {
+    match (Q == 3889, MONT) {
+        (true, false) => &T3889,
+        (true, true) => &M3889,
+        (false, false) => &T9721,
+        (false, true) => &M9721,
     }
 }
 
@@ -323,8 +356,11 @@ struct Blk([i16; 162 * 32]);
 // ---------------------------------------------------------------------------------------------
 
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn ntt_core<const Q: u16, const NT: bool>(input: &BinaryIndex32, outp: *mut i16) {
-    let t = tables::<Q>();
+unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(
+    input: &BinaryIndex32,
+    outp: *mut i16,
+) {
+    let t = tables::<Q, MONT>();
     let c = C {
         q: bc(&t.qd),
         bv: bc(&t.bv),
@@ -449,14 +485,34 @@ unsafe fn ntt_core<const Q: u16, const NT: bool>(input: &BinaryIndex32, outp: *m
 /// reduced (see the bound table above).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, false>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, false, false>(input, out.v.as_mut_ptr() as *mut i16);
     out.representation = Representation::Ntt;
 }
 
 /// Same, but the final level uses non-temporal stores (for output that will not be re-read soon).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32_nt<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, true>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, true, false>(input, out.v.as_mut_ptr() as *mut i16);
+    out.representation = Representation::Ntt;
+}
+
+/// Montgomery-form forward NTT: `out.v[j][p] = R * a_p(psi^SLOT_EXP[j]) mod q`, R = 2^16 mod q.
+///
+/// Identical schedule, identical cost and identical bounds as [`ntt_bin_batch32`] — the only
+/// difference is that the 16-entry tables are the R-scaled ones (`Tables::new_mont`). Two such
+/// outputs multiply with a *single* signed Montgomery multiplication
+/// (`pointwise::mul_batch_batch_mont`), which is again in Montgomery form; the accumulated
+/// `R^-1` is undone by whoever leaves the NTT domain (`scalar::intt_mont`).
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+pub unsafe fn ntt_bin_batch32_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
+    ntt_core::<Q, false, true>(input, out.v.as_mut_ptr() as *mut i16);
+    out.representation = Representation::Ntt;
+}
+
+/// [`ntt_bin_batch32_mont`] with non-temporal stores on the last level.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+pub unsafe fn ntt_bin_batch32_nt_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
+    ntt_core::<Q, true, true>(input, out.v.as_mut_ptr() as *mut i16);
     out.representation = Representation::Ntt;
 }
 
@@ -475,6 +531,21 @@ pub fn ntt_bin_polys<const Q: u16>(polys: &[BinaryPoly], out: &mut [Batch32]) {
                 &*(polys.as_ptr().add(32 * b) as *const [BinaryPoly; 32]);
             transpose::slice_polys_idx_into(chunk, &mut idx);
             ntt_bin_batch32_nt::<Q>(&idx, o);
+        }
+        _mm_sfence();
+    }
+}
+
+/// [`ntt_bin_polys`] with Montgomery-form output (`R * a(psi^u)`).
+pub fn ntt_bin_polys_mont<const Q: u16>(polys: &[BinaryPoly], out: &mut [Batch32]) {
+    assert_eq!(polys.len(), 32 * out.len());
+    let mut idx = BinaryIndex32::zero();
+    unsafe {
+        for (b, o) in out.iter_mut().enumerate() {
+            let chunk: &[BinaryPoly; 32] =
+                &*(polys.as_ptr().add(32 * b) as *const [BinaryPoly; 32]);
+            transpose::slice_polys_idx_into(chunk, &mut idx);
+            ntt_bin_batch32_nt_mont::<Q>(&idx, o);
         }
         _mm_sfence();
     }

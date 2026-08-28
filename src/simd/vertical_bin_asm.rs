@@ -1,7 +1,9 @@
 //! Forward NTT for **binary** inputs in the vertical batch-of-32 layout, with levels 4, 5 and 6
 //! hand-scheduled in one `asm!` block per 27-block (27 zmm data registers resident).
 //! Generated; see the report for the schedule variants tried.
-//! Bit-identical to `vertical_bin` (same operation order per butterfly).
+//! For q = 3889 bit-identical to `vertical_bin` (same operation order per butterfly); for
+//! q = 9721 it reduces at different levels and with a different Barrett (see Bounds below), so
+//! the two agree modulo q and this one's lanes are the smaller representatives.
 //!
 //! Levels 0, 1, 2 and the level-3 twiddles are all folded into 16-entry lookup tables indexed by
 //! the 4-bit nibble (b_i, b_{i+162}, b_{i+324}, b_{i+486}) of each polynomial; levels 3..6 are radix-3
@@ -10,9 +12,9 @@
 //! sub-ring is exactly three degree-3 sub-rings, so its nine values never leave registers) and go
 //! straight to the output.
 //!
-//! Measured on the i7-11850H, one core, cache-resident input (`src/bin/bench_vertical_bin.rs`):
-//! 297 cycles / polynomial for q = 3889 and 330 for q = 9721 (730 / 791 instructions,
-//! 278 / 317 port-0 uops, 236 / 258 port-5 uops); the static port floor is 257 / 287.
+//! Measured on the i7-11850H, one core, cache-resident input
+//! (`src/bin/bench_vertical_bin_asm.rs`): 280.2 cycles per ring element for q = 3889 and 303.8
+//! for q = 9721 (697 / 752 instructions, 699 / 760 uops, 268 / 291 port-0, 246 / 277 port-5).
 //!
 //! ## Instruction selection (port facts measured on this core with `tools/ubench` and perf)
 //!
@@ -25,7 +27,9 @@
 //! `vpbroadcastd zmm, m32` really is a free load (0 p0/p5 uops), so every twiddle is stored as a
 //! duplicated u32.
 //!
-//! ## Bounds (|lane| as a multiple of q; verified by the i32 shadow model in `tests/vertical_bin.rs`)
+//! ## Bounds (|lane| as a multiple of q; `tests/vertical_bin_asm.rs`: `proved_bounds_9721`
+//! propagates the worst case over all i16 lane values, the i32 shadow model replays the exact
+//! schedule on the test inputs)
 //!
 //! Table entries are centered, |T| <= q/2. A twiddle multiplication `mont(a, w, w')` with
 //! |w| <= q/2 satisfies |mont| <= |a| q / 2^17 + q/2 + 1 < 0.75 q for any i16 `a`; the radix-3
@@ -35,13 +39,43 @@
 //! |------------------|---------:|---------:|
 //! | levels 0+1+2     |   1.00 q |   1.00 q |
 //! | level 3          |   3.00 q |   3.00 q |
-//! | level 4          |   4.50 q |   2.31 q |
-//! | level 5          |   6.00 q |   2.31 q |
-//! | level 6 (output) |   7.50 q |   2.31 q |
+//! | level 4          |   4.50 q |   2.03 q |
+//! | level 5          |   6.00 q |   3.33 q |
+//! | level 6 (output) |   7.50 q |   2.30 q |
 //!
-//! 2^15 / q = 8.42 (3889) and 3.37 (9721), so **q = 3889 needs no Barrett at all**; for q = 9721
-//! one `barrett` (vpmulhrsw + vpmullw + vpsubw) is applied to the untwiddled `a0` input of levels
-//! 4, 5 and 6, which caps it at 0.809 q and hence every output at 0.809 q + 1.5 q = 2.309 q.
+//! 2^15 / q = 8.42 (3889) and 3.37 (9721), so **q = 3889 needs no Barrett at all**. For q = 9721
+//! the un-twiddled `a0` input of level 4 gets the **lookup Barrett** ([`barrett_lut_i16`]) and
+//! the one of level 6 the two-multiply `vpmulhrsw` Barrett ([`params::barrett_i16`]); level 5
+//! is left unreduced. The lookup Barrett spends no multiply-port slot at all:
+//!
+//! ```text
+//! vpmultishiftqb s, ctrl, a    p5   both bytes of every lane <- bits 11..18 of that lane
+//! vpandd         s, s, 1f1f    p05  drop the 3 junk bits (the neighbour lane's low bits)
+//! vpord          s, s, 2000    p05  +32 on the high byte: it indexes the other table half
+//! vpermb         s, s, tab     p5   byte-split 64-entry table: -k(s) q, lo at u, hi at 32 + u
+//! vpaddw         a, a, s       p05
+//! ```
+//!
+//! i.e. 2 port-5 + 3 flexible uops against the two-multiply Barrett's 2 port-0 + 1 flexible, on
+//! a kernel whose port 0 is the bottleneck. The quotient window `(a >> 11) & 31` determines `a`
+//! to within 2^11, so the nearest multiple of q leaves |r| <= q/2 + 2^10 = 0.579 q -- tighter
+//! than the `vpmulhrsw` estimate's 0.809 q (both exhaustive over all i16), and that is exactly
+//! what lets level 5 run unreduced: 3.323 q there is still inside the 3.371 q budget, while
+//! 0.809 q at level 4 would have grown to 3.588 q and overflowed. Level 6 only has to keep the
+//! output inside i16, so there the two-multiply Barrett is the cheaper of the two (4 uops
+//! against 5, and its two port-0 slots are affordable again now that level 5 costs nothing).
+//! Reductions per batch: 432 (216 at each of levels 4 and 6) instead of 648, of which only 216
+//! touch the multiply port.
+//!
+//! Measured alternatives for q = 9721 (cache-resident cycles per ring element, 316.6 before):
+//! lookup at 4 and 6 304.6, lookup at 4 only + `vpmulhrsw` at 6 **303.8**, lookup at all three
+//! levels 316.3 (the level-5 reduction is what costs, not the reduction itself); folding the
+//! `vpandd`/`vpord` pair into one `vpternlogd` needs a second constant register, and the only
+//! one to free is q -- as a memory operand of the 1944 `vpmulhw m, q` per batch it costs more
+//! than the uop it saves (306.0); splitting the five uops across the block (the `vpermb` and
+//! `vpaddw` deferred to the end of the multiply block) 308.7, all five at the end 303.6.
+//! `vpermw` on a 32-entry table would take the index straight from a `vpmulhrsw` quotient, but
+//! it is 2 uops (p0 + p5) and needs a p0 uop to build the index: 2 port-0 again.
 use crate::params::*;
 use crate::simd::transpose;
 pub use crate::simd::transpose::BinaryIndex32;
@@ -63,9 +97,12 @@ pub struct Tables {
     /// `vpermb` (1 uop, port 5 - unlike `vpermw`, which is 2 uops and costs a port-0 slot on this
     /// core) does the lookup: byte n is the low half of entry n, byte 16+n the high half.
     lut: [[u8; 64]; 96],
-    /// Full 512-bit broadcasts of q, omega, omega' and the Barrett constant, used as
-    /// memory operands / register constants by the asm tail: [q, om, omp, bv].
-    cv: [[i16; 32]; 4],
+    /// Full 512-bit constants used as memory operands / register constants by the asm tail:
+    /// `[q, om, omp, bv, ms, corr, and, or]` at byte offsets 0, 64, ... - `bv` is the old
+    /// `vpmulhrsw` Barrett constant (unused by the current schedule), `ms` the
+    /// `vpmultishiftqb` control, `corr` the byte-split `-k q` table and `and`/`or` the
+    /// index fix-up masks of the lookup Barrett (see `barrett_lut_i16`).
+    cv: [[i16; 32]; 8],
     /// `[w, w', w2, w2']` (Montgomery twiddle and companion for zeta and zeta^2), each i16
     /// duplicated into a u32 so `vpbroadcastd` is a pure load.
     tw4: [[u32; 4]; 24],
@@ -83,7 +120,7 @@ const fn mont_pair<const Q: u16>(x: u16) -> (u32, u32) {
     (dup(w), dup(Params::<Q>::mont_pre(w)))
 }
 
-const fn build_tables<const Q: u16>() -> Tables {
+const fn build_tables<const Q: u16, const MONT: bool>() -> Tables {
     let q = Q as u64;
     let z6 = Params::<Q>::ZETA6 as u64;
     let kappa = [z6, (1 + q - z6) % q];
@@ -115,6 +152,9 @@ const fn build_tables<const Q: u16>() -> Tables {
                         let t = if s1 == 0 { inner } else { (q - inner) % q };
                         let base = ((n0 + ka * n2) % q + t) % q;
                         let v = base * f % q * extra % q;
+                        // Montgomery-form output: scale the table entries by R = 2^16 mod q; everything
+                        // after the tables is linear, so the whole transform comes out times R.
+                        let v = if MONT { v * Params::<Q>::R as u64 % q } else { v };
                         let e = center(v, q) as u16;
                         let ti = ((k * 2 + s2) * 3 + r) * 2 + ab;
                         lut[ti][n] = e as u8;
@@ -161,13 +201,24 @@ const fn build_tables<const Q: u16>() -> Tables {
         i += 1;
     }
     let (oa, ob) = mont_pair::<Q>(Params::<Q>::OMEGA);
-    let mut cv = [[0i16; 32]; 4];
+    let mut cv = [[0i16; 32]; 8];
     let mut i = 0;
     while i < 32 {
         cv[0][i] = Q as i16;
         cv[1][i] = Params::<Q>::to_mont(Params::<Q>::OMEGA);
         cv[2][i] = Params::<Q>::mont_pre(Params::<Q>::to_mont(Params::<Q>::OMEGA));
         cv[3][i] = barrett_v(Q);
+        // vpmultishiftqb control: both bytes of word j of a qword take bits 11..18 of that
+        // word, i.e. the 5-bit quotient window (a >> 11) & 31 plus 3 ignored/masked bits.
+        cv[4][i] = ((16 * (i % 4) + 11) * 257) as i16;
+        // the byte-split correction table: byte u (u < 32) is the low half of -k(u) q,
+        // byte 32 + u its high half; the `vpermb` index is u for the low byte of every lane
+        // and 32 + u for the high byte.
+        let (u0, u1) = (2 * i, 2 * i + 1);
+        let (b0, b1) = (lut_byte(u0, Q), lut_byte(u1, Q));
+        cv[5][i] = (b0 as u16 | ((b1 as u16) << 8)) as i16;
+        cv[6][i] = 0x1f1f;
+        cv[7][i] = 0x2000;
         i += 1;
     }
     Tables {
@@ -182,17 +233,68 @@ const fn build_tables<const Q: u16>() -> Tables {
     }
 }
 
-static T3889: Tables = build_tables::<3889>();
-static T9721: Tables = build_tables::<9721>();
+static T3889: Tables = build_tables::<3889, false>();
+static T9721: Tables = build_tables::<9721, false>();
+static M3889: Tables = build_tables::<3889, true>();
+static M9721: Tables = build_tables::<9721, true>();
 
 #[inline(always)]
-fn tables<const Q: u16>() -> &'static Tables {
-    if Q == 3889 {
-        &T3889
-    } else {
-        &T9721
+fn tables<const Q: u16, const MONT: bool>() -> &'static Tables {
+    match (Q, MONT) {
+        (3889, false) => &T3889,
+        (3889, true) => &M3889,
+        (_, false) => &T9721,
+        (_, true) => &M9721,
     }
 }
+
+/// Quotient estimate of the lookup Barrett: the multiple of q subtracted from a value whose
+/// 5-bit window `(a >> 11) & 31` is `s`. `a` is then known to lie in an interval of width 2^11
+/// centred at `2048 * sgn + 1023.5`, and `k` is the nearest multiple of q to that centre, so
+/// `|a - k q| <= q/2 + 2^10` for every i16 `a`.
+const fn lut_k(s: usize, q: u16) -> i64 {
+    let sgn = if s < 16 { s as i64 } else { s as i64 - 32 };
+    let num = 4096 * sgn + 2047;
+    let den = 2 * q as i64;
+    if num >= 0 {
+        (num + den / 2) / den
+    } else {
+        -((-num + den / 2) / den)
+    }
+}
+
+/// `-k(s) * q`, the i16 the byte-split table adds back for window `s`.
+pub const fn barrett_lut_corr(s: usize, q: u16) -> i16 {
+    (-lut_k(s, q) * q as i64) as i16
+}
+
+/// Byte `u` of the 64-byte `vpermb` table: the low halves of `-k(s) q` at u = s < 32, the high
+/// halves at u = 32 + s.
+const fn lut_byte(u: usize, q: u16) -> u8 {
+    if u < 32 {
+        barrett_lut_corr(u, q) as u16 as u8
+    } else {
+        (barrett_lut_corr(u - 32, q) as u16 >> 8) as u8
+    }
+}
+
+/// The kernel's level-4 reduction, lane-wise: `vpmultishiftqb` (the 5-bit window
+/// `(a >> 11) & 31` into both bytes of the lane), `vpandd` + `vpord` (drop the junk bits, +32 on
+/// the high byte), `vpermb` on the 64-byte byte-split table of `-k q`, `vpaddw` - **2 port-5 and
+/// 3 flexible uops, not one multiply-port slot**, against the two-multiply Barrett's 2 port-0
+/// + 1 flexible. Exhaustively over all i16, `max |r| = 5625 = 0.579 q` for q = 9721, where
+/// [`params::barrett_i16`] only reaches 0.809 q - which is what makes the level-5 reduction
+/// droppable.
+#[inline]
+pub fn barrett_lut_i16(a: i16, q: u16) -> i16 {
+    a.wrapping_add(barrett_lut_corr(((a >> 11) & 31) as usize, q))
+}
+
+/// Which of levels 4, 5 and 6 reduce their un-twiddled `a0` input with the lookup Barrett
+/// ([`barrett_lut_i16`]) and which with the two-multiply one ([`params::barrett_i16`]),
+/// for q = 9721; q = 3889 reduces nothing.
+pub const LUT_BARRETT_LEVELS: [bool; 3] = [true, false, false];
+pub const MUL_BARRETT_LEVELS: [bool; 3] = [false, false, true];
 
 /// Does the 7.5 q growth of the un-Barretted schedule still fit in i16?
 pub const fn needs_barrett(q: u16) -> bool {
@@ -202,7 +304,7 @@ pub const fn needs_barrett(q: u16) -> bool {
 /// Declared output bound: max |lane| of `ntt_bin_batch32`, as a multiple of q (numerator / 1000).
 pub const fn output_bound_milli_q(q: u16) -> u32 {
     if needs_barrett(q) {
-        2310
+        2294
     } else {
         7500
     }
@@ -251,7 +353,6 @@ unsafe fn mont(a: __m512i, w: __m512i, wp: __m512i, q: __m512i) -> __m512i {
     _mm512_sub_epi16(hi, t)
 }
 
-/// `barrett_i16` lane-wise: 2 multiply uops, |r| <= 0.899 q (3889) / 0.809 q (9721).
 struct C {
     q: __m512i,
     om: __m512i,
@@ -1751,14 +1852,12 @@ unsafe fn tail27_b(
 ) {
     core::arch::asm!(
         "vmovdqa64 zmm27, [{c}]",
+        "vmovdqa64 zmm31, [{c}+256]",
         "vmovdqa64 zmm0, [{i}+0]",
         "vmovdqa64 zmm9, [{i}+576]",
         "vmovdqa64 zmm18, [{i}+1152]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm9, zmm28",
-        "vpmulhrsw zmm30, zmm0, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm9, zmm9, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -1774,14 +1873,16 @@ unsafe fn tail27_b(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm0",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm0, zmm0, zmm30",
         "vmovdqa64 zmm3, [{i}+192]",
         "vmovdqa64 zmm12, [{i}+768]",
         "vmovdqa64 zmm21, [{i}+1344]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm12, zmm29",
-        "vpmulhrsw zmm30, zmm3, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm3, zmm3, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm12, zmm12, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -1797,6 +1898,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm3",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm3, zmm3, zmm30",
         "vpaddw zmm30, zmm9, zmm18",
         "vpsubw zmm18, zmm0, zmm18",
         "vpaddw zmm18, zmm18, zmm28",
@@ -1808,9 +1914,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm24, [{i}+1536]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm15, zmm28",
-        "vpmulhrsw zmm30, zmm6, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm6, zmm6, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm15, zmm15, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -1826,6 +1929,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm6",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm6, zmm6, zmm30",
         "vpaddw zmm30, zmm12, zmm21",
         "vpsubw zmm21, zmm3, zmm21",
         "vpaddw zmm21, zmm21, zmm29",
@@ -1837,9 +1945,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm19, [{i}+1216]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm10, zmm29",
-        "vpmulhrsw zmm30, zmm1, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm10, zmm10, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -1855,6 +1960,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm1",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm1, zmm1, zmm30",
         "vpaddw zmm30, zmm15, zmm24",
         "vpsubw zmm24, zmm6, zmm24",
         "vpaddw zmm24, zmm24, zmm28",
@@ -1866,9 +1976,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm22, [{i}+1408]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm13, zmm28",
-        "vpmulhrsw zmm30, zmm4, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm4, zmm4, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm13, zmm13, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -1884,6 +1991,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm4",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm4, zmm4, zmm30",
         "vpaddw zmm30, zmm10, zmm19",
         "vpsubw zmm19, zmm1, zmm19",
         "vpaddw zmm19, zmm19, zmm29",
@@ -1895,9 +2007,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm25, [{i}+1600]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm16, zmm29",
-        "vpmulhrsw zmm30, zmm7, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm7, zmm7, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm16, zmm16, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -1913,6 +2022,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm7",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm7, zmm7, zmm30",
         "vpaddw zmm30, zmm13, zmm22",
         "vpsubw zmm22, zmm4, zmm22",
         "vpaddw zmm22, zmm22, zmm28",
@@ -1924,9 +2038,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm20, [{i}+1280]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm11, zmm28",
-        "vpmulhrsw zmm30, zmm2, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm11, zmm11, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -1942,6 +2053,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm2",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm2, zmm2, zmm30",
         "vpaddw zmm30, zmm16, zmm25",
         "vpsubw zmm25, zmm7, zmm25",
         "vpaddw zmm25, zmm25, zmm29",
@@ -1953,9 +2069,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm23, [{i}+1472]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm14, zmm29",
-        "vpmulhrsw zmm30, zmm5, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm5, zmm5, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm14, zmm14, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -1971,6 +2084,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm5",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm5, zmm5, zmm30",
         "vpaddw zmm30, zmm11, zmm20",
         "vpsubw zmm20, zmm2, zmm20",
         "vpaddw zmm20, zmm20, zmm28",
@@ -1982,9 +2100,6 @@ unsafe fn tail27_b(
         "vmovdqa64 zmm26, [{i}+1664]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm17, zmm28",
-        "vpmulhrsw zmm30, zmm8, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm8, zmm8, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm17, zmm17, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2000,6 +2115,11 @@ unsafe fn tail27_b(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm8",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm8, zmm8, zmm30",
         "vpaddw zmm30, zmm14, zmm23",
         "vpsubw zmm23, zmm5, zmm23",
         "vpaddw zmm23, zmm23, zmm29",
@@ -2014,9 +2134,6 @@ unsafe fn tail27_b(
         "vpaddw zmm8, zmm8, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+4]",
         "vpmullw zmm28, zmm3, zmm28",
-        "vpmulhrsw zmm30, zmm0, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm3, zmm3, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2034,9 +2151,6 @@ unsafe fn tail27_b(
         "vpsubw zmm28, zmm28, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+16+4]",
         "vpmullw zmm29, zmm21, zmm29",
-        "vpmulhrsw zmm30, zmm18, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm18, zmm18, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm21, zmm21, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2060,9 +2174,6 @@ unsafe fn tail27_b(
         "vpaddw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+32+4]",
         "vpmullw zmm28, zmm12, zmm28",
-        "vpmulhrsw zmm30, zmm9, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm9, zmm9, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm12, zmm12, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2086,9 +2197,6 @@ unsafe fn tail27_b(
         "vpaddw zmm18, zmm18, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+4]",
         "vpmullw zmm29, zmm4, zmm29",
-        "vpmulhrsw zmm30, zmm1, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm4, zmm4, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2112,9 +2220,6 @@ unsafe fn tail27_b(
         "vpaddw zmm9, zmm9, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+16+4]",
         "vpmullw zmm28, zmm22, zmm28",
-        "vpmulhrsw zmm30, zmm19, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm19, zmm19, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm22, zmm22, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2138,9 +2243,6 @@ unsafe fn tail27_b(
         "vpaddw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+32+4]",
         "vpmullw zmm29, zmm13, zmm29",
-        "vpmulhrsw zmm30, zmm10, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm10, zmm10, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm13, zmm13, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2164,9 +2266,6 @@ unsafe fn tail27_b(
         "vpaddw zmm19, zmm19, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+4]",
         "vpmullw zmm28, zmm5, zmm28",
-        "vpmulhrsw zmm30, zmm2, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm5, zmm5, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2190,9 +2289,6 @@ unsafe fn tail27_b(
         "vpaddw zmm10, zmm10, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+16+4]",
         "vpmullw zmm29, zmm23, zmm29",
-        "vpmulhrsw zmm30, zmm20, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm20, zmm20, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm23, zmm23, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2216,9 +2312,6 @@ unsafe fn tail27_b(
         "vpaddw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+32+4]",
         "vpmullw zmm28, zmm14, zmm28",
-        "vpmulhrsw zmm30, zmm11, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm11, zmm11, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm14, zmm14, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2561,14 +2654,12 @@ unsafe fn tail27_bn(
 ) {
     core::arch::asm!(
         "vmovdqa64 zmm27, [{c}]",
+        "vmovdqa64 zmm31, [{c}+256]",
         "vmovdqa64 zmm0, [{i}+0]",
         "vmovdqa64 zmm9, [{i}+576]",
         "vmovdqa64 zmm18, [{i}+1152]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm9, zmm28",
-        "vpmulhrsw zmm30, zmm0, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm9, zmm9, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2584,14 +2675,16 @@ unsafe fn tail27_bn(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm0",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm0, zmm0, zmm30",
         "vmovdqa64 zmm3, [{i}+192]",
         "vmovdqa64 zmm12, [{i}+768]",
         "vmovdqa64 zmm21, [{i}+1344]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm12, zmm29",
-        "vpmulhrsw zmm30, zmm3, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm3, zmm3, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm12, zmm12, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2607,6 +2700,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm3",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm3, zmm3, zmm30",
         "vpaddw zmm30, zmm9, zmm18",
         "vpsubw zmm18, zmm0, zmm18",
         "vpaddw zmm18, zmm18, zmm28",
@@ -2618,9 +2716,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm24, [{i}+1536]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm15, zmm28",
-        "vpmulhrsw zmm30, zmm6, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm6, zmm6, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm15, zmm15, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2636,6 +2731,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm6",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm6, zmm6, zmm30",
         "vpaddw zmm30, zmm12, zmm21",
         "vpsubw zmm21, zmm3, zmm21",
         "vpaddw zmm21, zmm21, zmm29",
@@ -2647,9 +2747,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm19, [{i}+1216]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm10, zmm29",
-        "vpmulhrsw zmm30, zmm1, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm10, zmm10, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2665,6 +2762,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm1",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm1, zmm1, zmm30",
         "vpaddw zmm30, zmm15, zmm24",
         "vpsubw zmm24, zmm6, zmm24",
         "vpaddw zmm24, zmm24, zmm28",
@@ -2676,9 +2778,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm22, [{i}+1408]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm13, zmm28",
-        "vpmulhrsw zmm30, zmm4, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm4, zmm4, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm13, zmm13, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2694,6 +2793,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm4",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm4, zmm4, zmm30",
         "vpaddw zmm30, zmm10, zmm19",
         "vpsubw zmm19, zmm1, zmm19",
         "vpaddw zmm19, zmm19, zmm29",
@@ -2705,9 +2809,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm25, [{i}+1600]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm16, zmm29",
-        "vpmulhrsw zmm30, zmm7, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm7, zmm7, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm16, zmm16, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2723,6 +2824,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm7",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm7, zmm7, zmm30",
         "vpaddw zmm30, zmm13, zmm22",
         "vpsubw zmm22, zmm4, zmm22",
         "vpaddw zmm22, zmm22, zmm28",
@@ -2734,9 +2840,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm20, [{i}+1280]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm11, zmm28",
-        "vpmulhrsw zmm30, zmm2, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm11, zmm11, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2752,6 +2855,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm2",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm2, zmm2, zmm30",
         "vpaddw zmm30, zmm16, zmm25",
         "vpsubw zmm25, zmm7, zmm25",
         "vpaddw zmm25, zmm25, zmm29",
@@ -2763,9 +2871,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm23, [{i}+1472]",
         "vpbroadcastd zmm29, dword ptr [{t4}+4]",
         "vpmullw zmm29, zmm14, zmm29",
-        "vpmulhrsw zmm30, zmm5, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm5, zmm5, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm14, zmm14, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2781,6 +2886,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm29, zmm29, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm29, zmm29, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm5",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm5, zmm5, zmm30",
         "vpaddw zmm30, zmm11, zmm20",
         "vpsubw zmm20, zmm2, zmm20",
         "vpaddw zmm20, zmm20, zmm28",
@@ -2792,9 +2902,6 @@ unsafe fn tail27_bn(
         "vmovdqa64 zmm26, [{i}+1664]",
         "vpbroadcastd zmm28, dword ptr [{t4}+4]",
         "vpmullw zmm28, zmm17, zmm28",
-        "vpmulhrsw zmm30, zmm8, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm8, zmm8, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t4}]",
         "vpmulhw zmm17, zmm17, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2810,6 +2917,11 @@ unsafe fn tail27_bn(
         "vpmulhw zmm28, zmm28, [{c}+64]",
         "vpmulhw zmm30, zmm30, zmm27",
         "vpsubw zmm28, zmm28, zmm30",
+        "vpmultishiftqb zmm30, zmm31, zmm8",
+        "vpandd zmm30, zmm30, dword ptr [{c}+384]{{1to16}}",
+        "vpord zmm30, zmm30, dword ptr [{c}+448]{{1to16}}",
+        "vpermb zmm30, zmm30, [{c}+320]",
+        "vpaddw zmm8, zmm8, zmm30",
         "vpaddw zmm30, zmm14, zmm23",
         "vpsubw zmm23, zmm5, zmm23",
         "vpaddw zmm23, zmm23, zmm29",
@@ -2824,9 +2936,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm8, zmm8, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+4]",
         "vpmullw zmm28, zmm3, zmm28",
-        "vpmulhrsw zmm30, zmm0, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm3, zmm3, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2844,9 +2953,6 @@ unsafe fn tail27_bn(
         "vpsubw zmm28, zmm28, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+16+4]",
         "vpmullw zmm29, zmm21, zmm29",
-        "vpmulhrsw zmm30, zmm18, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm18, zmm18, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm21, zmm21, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2870,9 +2976,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm0, zmm0, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+32+4]",
         "vpmullw zmm28, zmm12, zmm28",
-        "vpmulhrsw zmm30, zmm9, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm9, zmm9, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm12, zmm12, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2896,9 +2999,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm18, zmm18, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+4]",
         "vpmullw zmm29, zmm4, zmm29",
-        "vpmulhrsw zmm30, zmm1, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm4, zmm4, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2922,9 +3022,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm9, zmm9, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+16+4]",
         "vpmullw zmm28, zmm22, zmm28",
-        "vpmulhrsw zmm30, zmm19, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm19, zmm19, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm22, zmm22, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -2948,9 +3045,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm1, zmm1, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+32+4]",
         "vpmullw zmm29, zmm13, zmm29",
-        "vpmulhrsw zmm30, zmm10, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm10, zmm10, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm13, zmm13, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -2974,9 +3068,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm19, zmm19, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+4]",
         "vpmullw zmm28, zmm5, zmm28",
-        "vpmulhrsw zmm30, zmm2, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}]",
         "vpmulhw zmm5, zmm5, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -3000,9 +3091,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm10, zmm10, zmm30",
         "vpbroadcastd zmm29, dword ptr [{t5}+16+4]",
         "vpmullw zmm29, zmm23, zmm29",
-        "vpmulhrsw zmm30, zmm20, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm20, zmm20, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+16]",
         "vpmulhw zmm23, zmm23, zmm30",
         "vpmulhw zmm29, zmm29, zmm27",
@@ -3026,9 +3114,6 @@ unsafe fn tail27_bn(
         "vpaddw zmm2, zmm2, zmm30",
         "vpbroadcastd zmm28, dword ptr [{t5}+32+4]",
         "vpmullw zmm28, zmm14, zmm28",
-        "vpmulhrsw zmm30, zmm11, [{c}+192]",
-        "vpmullw zmm30, zmm30, zmm27",
-        "vpsubw zmm11, zmm11, zmm30",
         "vpbroadcastd zmm30, dword ptr [{t5}+32]",
         "vpmulhw zmm14, zmm14, zmm30",
         "vpmulhw zmm28, zmm28, zmm27",
@@ -3367,8 +3452,8 @@ struct Blk([i16; 162 * 32]);
 // ---------------------------------------------------------------------------------------------
 
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn ntt_core<const Q: u16, const NT: bool>(input: &BinaryIndex32, outp: *mut i16) {
-    let t = tables::<Q>();
+unsafe fn ntt_core<const Q: u16, const NT: bool, const MONT: bool>(input: &BinaryIndex32, outp: *mut i16) {
+    let t = tables::<Q, MONT>();
     let c = C {
         q: bc(&t.qd),
         om: bc(&t.om[0]),
@@ -3457,14 +3542,29 @@ unsafe fn ntt_core<const Q: u16, const NT: bool>(input: &BinaryIndex32, outp: *m
 /// reduced (see the bound table above).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, false>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, false, false>(input, out.v.as_mut_ptr() as *mut i16);
+    out.representation = Representation::Ntt;
+}
+
+/// Montgomery-form output: `out.v[j][p] = 2^16 * a_p(psi^SLOT_EXP[j]) mod q` (same cost: only the
+/// lookup tables differ), so slot-wise products need a single Montgomery multiplication.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+pub unsafe fn ntt_bin_batch32_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
+    ntt_core::<Q, false, true>(input, out.v.as_mut_ptr() as *mut i16);
+    out.representation = Representation::Ntt;
+}
+
+/// Montgomery-form output with non-temporal stores on the last level.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+pub unsafe fn ntt_bin_batch32_nt_mont<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
+    ntt_core::<Q, true, true>(input, out.v.as_mut_ptr() as *mut i16);
     out.representation = Representation::Ntt;
 }
 
 /// Same, but the final level uses non-temporal stores (for output that will not be re-read soon).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32_nt<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, true>(input, out.v.as_mut_ptr() as *mut i16);
+    ntt_core::<Q, true, false>(input, out.v.as_mut_ptr() as *mut i16);
     out.representation = Representation::Ntt;
 }
 

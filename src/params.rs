@@ -122,6 +122,12 @@ impl<const Q: u16> Params<Q> {
     /// 2^16 mod q and 2^32 mod q (Montgomery constants).
     pub const R: u16 = (65536u64 % Q as u64) as u16;
     pub const R2: u16 = (65536u64 * 65536u64 % Q as u64) as u16;
+    /// 2^-16 mod q: the factor that has to be undone once per Montgomery power carried by a
+    /// value (`R * RINV = 1 mod q`). A transform whose outputs are in Montgomery form leaves it
+    /// to whoever leaves the NTT domain (`scalar::intt_mont`).
+    pub const RINV: u16 = inv_mod(Self::R as u64, Q as u64) as u16;
+    /// 648^-1 mod q, the degree part of an inverse NTT's normalisation.
+    pub const N_INV: u16 = inv_mod(N as u64, Q as u64) as u16;
 
     /// psi^e mod q.
     pub const fn psi_pow(e: u32) -> u16 {
@@ -134,6 +140,11 @@ impl<const Q: u16> Params<Q> {
     /// x * 2^16 mod q, centered: the Montgomery form used by the SIMD kernels.
     pub const fn to_mont(x: u16) -> i16 {
         center(x as u64 * 65536u64, Q as u64)
+    }
+    /// x * R mod q (plain, not centered): the scaling applied to a kernel's tables or twiddles to
+    /// make its outputs come out in Montgomery form.
+    pub const fn scale_r(x: u16) -> u16 {
+        (x as u64 * Self::R as u64 % Q as u64) as u16
     }
     /// For a Montgomery-form constant w, the precomputed w * q^-1 mod 2^16 (signed), so that
     /// mont_mul(a, w, w') = a * x mod q needs only mullo/mulhi/mulhi.

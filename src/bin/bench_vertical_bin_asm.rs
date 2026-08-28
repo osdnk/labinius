@@ -3,6 +3,13 @@
 //! Prints, per polynomial, cycles / instructions / uops / p0 / p5 for the cache-resident kernel of
 //! both `vertical_bin` (the intrinsics baseline) and `vertical_bin_asm`, then the 2^18
 //! materialised headline for the asm kernel.
+//!
+//! For q = 9721 the two kernels no longer compute the same lanes: `vertical_bin` reduces the a0
+//! input of levels 4, 5 and 6 with the two-multiply `vpmulhrsw` Barrett, `vertical_bin_asm` uses
+//! the lookup Barrett (`vpmultishiftqb` + `vpermb`, no multiply-port slot) at level 4, nothing at
+//! level 5 and the two-multiply one at level 6 - 432 reductions per batch instead of 648, of
+//! which 216 touch port 0. Same residues, tighter lanes (2.29 q against 7.5 q / 2.31 q declared);
+//! `tests/vertical_bin_asm.rs` checks it.
 use bin_ntt::perf::{Counts, PerfGroup};
 use bin_ntt::rng::Rng;
 use bin_ntt::simd::transpose::{self, BinaryIndex32};

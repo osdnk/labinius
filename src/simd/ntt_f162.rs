@@ -23,15 +23,37 @@ fn check(elems: &[F162], batches: usize) {
 /// Materialised: the last level of the kernel writes with non-temporal stores, which hides the
 /// 340 MB output stream.
 pub fn ntt_f162<const Q: u16>(elems: &[F162], out: &mut [Batch32]) {
+    drive::<Q, false>(elems, out);
+}
+
+/// Same, with the outputs in Montgomery form (`2^16 * a(psi^u) mod q`, identical cost), the form
+/// in which a slot-wise product costs one Montgomery multiplication (`pointwise::*_mont`).
+pub fn ntt_f162_mont<const Q: u16>(elems: &[F162], out: &mut [Batch32]) {
+    drive::<Q, true>(elems, out);
+}
+
+fn drive<const Q: u16, const MONT: bool>(elems: &[F162], out: &mut [Batch32]) {
     check(elems, out.len());
-    let mut idx = BinaryIndex32::zero();
+    // Two index-row buffers used alternately, never zeroed (every byte is written by the slicer).
+    let mut idx = scratch2();
     unsafe {
         for (b, o) in out.iter_mut().enumerate() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            vb::ntt_bin_batch32_nt::<Q>(&idx, o);
+            let i = &mut idx[b & 1];
+            slice_f162_into(chunk128(elems, b), i);
+            if MONT {
+                vb::ntt_bin_batch32_nt_mont::<Q>(i, o);
+            } else {
+                vb::ntt_bin_batch32_nt::<Q>(i, o);
+            }
         }
         _mm_sfence();
     }
+}
+
+/// Uninitialised index-row scratch: 20 KB that the slicer overwrites completely before any read
+/// (zeroing it per call costs ~8 cycles per ring element on short inputs).
+fn scratch2() -> Box<[BinaryIndex32; 2]> {
+    unsafe { Box::<[BinaryIndex32; 2]>::new_uninit().assume_init() }
 }
 
 /// Both primes from one slicing pass (the index rows are q-independent).
@@ -42,12 +64,13 @@ pub fn ntt_f162_2q<const QA: u16, const QB: u16>(
 ) {
     assert_eq!(out_a.len(), out_b.len());
     check(elems, out_a.len());
-    let mut idx = BinaryIndex32::zero();
+    let mut idx = scratch2();
     unsafe {
         for b in 0..out_a.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            vb::ntt_bin_batch32_nt::<QA>(&idx, out_a.get_unchecked_mut(b));
-            vb::ntt_bin_batch32_nt::<QB>(&idx, out_b.get_unchecked_mut(b));
+            let i = &mut idx[b & 1];
+            slice_f162_into(chunk128(elems, b), i);
+            vb::ntt_bin_batch32_nt::<QA>(i, out_a.get_unchecked_mut(b));
+            vb::ntt_bin_batch32_nt::<QB>(i, out_b.get_unchecked_mut(b));
         }
         _mm_sfence();
     }

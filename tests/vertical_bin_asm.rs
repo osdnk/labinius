@@ -153,11 +153,17 @@ impl<const Q: u16> Shadow<Q> {
         let o2 = self.see(a0 as i32 - t1 as i32 - u as i32);
         (o0, o1, o2)
     }
-    fn r3_tw(&mut self, a0: i16, a1: i16, a2: i16, z: u16, bar: bool) -> (i16, i16, i16) {
+    /// `red`: 0 = no reduction of the un-twiddled a0, 1 = the lookup Barrett, 2 = the
+    /// two-multiply `vpmulhrsw` one.
+    fn r3_tw(&mut self, a0: i16, a1: i16, a2: i16, z: u16, red: u8) -> (i16, i16, i16) {
         let z2 = (z as u64 * z as u64 % Q as u64) as u16;
         let t1 = self.mont(a1, z);
         let t2 = self.mont(a2, z2);
-        let a0 = if bar { self.see(barrett_i16(a0, Q) as i32) } else { a0 };
+        let a0 = match red {
+            1 => self.see(vb::barrett_lut_i16(a0, Q) as i32),
+            2 => self.see(barrett_i16(a0, Q) as i32),
+            _ => a0,
+        };
         self.r3(a0, t1, t2)
     }
 
@@ -203,6 +209,11 @@ impl<const Q: u16> Shadow<Q> {
             self.max[1] = self.max[1].max(x.unsigned_abs() as i32);
         }
         for (li, level) in [4usize, 5, 6].into_iter().enumerate() {
+            let red = match (bar, vb::LUT_BARRETT_LEVELS[li], vb::MUL_BARRETT_LEVELS[li]) {
+                (true, true, _) => 1,
+                (true, _, true) => 2,
+                _ => 0,
+            };
             let n = DEGREE[level];
             let m = n / 3;
             for k in 0..SUBRINGS[level] {
@@ -210,7 +221,7 @@ impl<const Q: u16> Shadow<Q> {
                 let z = Params::<Q>::zeta(level, k);
                 for i in 0..m {
                     let (o0, o1, o2) =
-                        self.r3_tw(v[b + i], v[b + m + i], v[b + 2 * m + i], z, bar);
+                        self.r3_tw(v[b + i], v[b + m + i], v[b + 2 * m + i], z, red);
                     v[b + i] = o0;
                     v[b + m + i] = o1;
                     v[b + 2 * m + i] = o2;
@@ -365,33 +376,44 @@ fn drivers_9721() {
 
 // ------------------------------------------------------------------ bit-exact vs vertical_bin
 
+/// `vertical_bin` reduces the a0 input of levels 4, 5 and 6 with the two-multiply Barrett;
+/// `vertical_bin_asm` uses the lookup Barrett at level 4, nothing at level 5 and the
+/// two-multiply one at level 6. For q = 3889 neither kernel reduces anything and the outputs are
+/// bit-identical; for q = 9721 they are different representatives of the same residue, so the
+/// comparison is modulo q plus the declared bound.
 fn check_vs_reference_kernel<const Q: u16>() {
+    let bound = (vb::output_bound_milli_q(Q) as i64 * Q as i64 / 1000) as i32;
+    let cmp = |a: &Batch32, b: &Batch32, what: &str| {
+        for j in 0..N {
+            for p in 0..32 {
+                let (x, y) = (a.v[j][p] as i32, b.v[j][p] as i32);
+                if vb::needs_barrett(Q) {
+                    assert_eq!((x - y).rem_euclid(Q as i32), 0, "{what} q={Q} slot={j} lane={p}");
+                    assert!(y.abs() <= bound, "{what} q={Q} slot={j} lane={p}: {y} > {bound}");
+                } else {
+                    assert_eq!(x, y, "{what} q={Q} slot={j} lane={p}");
+                }
+            }
+        }
+    };
     let mut rng = Rng::new(0x5EED ^ Q as u64);
-    for polys in batches(64, 0x1234 ^ Q as u64) {
-        let idx = unsafe { transpose::slice_polys_idx(&polys) };
-        let mut a = Batch32::zero(Representation::Coefficients);
-        let mut b = Batch32::zero(Representation::Coefficients);
-        unsafe {
-            vbref::ntt_bin_batch32::<Q>(&idx, &mut a);
-            vb::ntt_bin_batch32::<Q>(&idx, &mut b);
-        }
-        assert!(a.v == b.v, "vertical_bin_asm != vertical_bin (q={Q})");
-        // and the non-temporal variant
-        let mut c = Batch32::zero(Representation::Coefficients);
-        unsafe { vb::ntt_bin_batch32_nt::<Q>(&idx, &mut c) };
-        assert!(a.v == c.v, "ntt_bin_batch32_nt != vertical_bin (q={Q})");
-    }
-    // extra random batches
+    let mut all: Vec<[BinaryPoly; 32]> = batches(64, 0x1234 ^ Q as u64);
     for _ in 0..32 {
-        let polys: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
+        all.push(std::array::from_fn(|_| BinaryPoly::random(&mut rng)));
+    }
+    for polys in all {
         let idx = unsafe { transpose::slice_polys_idx(&polys) };
         let mut a = Batch32::zero(Representation::Coefficients);
         let mut b = Batch32::zero(Representation::Coefficients);
+        let mut c = Batch32::zero(Representation::Coefficients);
         unsafe {
             vbref::ntt_bin_batch32::<Q>(&idx, &mut a);
             vb::ntt_bin_batch32::<Q>(&idx, &mut b);
+            vb::ntt_bin_batch32_nt::<Q>(&idx, &mut c);
         }
-        assert!(a.v == b.v, "vertical_bin_asm != vertical_bin (q={Q}, random)");
+        cmp(&a, &b, "vertical_bin_asm vs vertical_bin");
+        // the non-temporal variant is the same kernel and stays bit-identical
+        assert!(b.v == c.v, "ntt_bin_batch32_nt != ntt_bin_batch32 (q={Q})");
     }
 }
 
@@ -402,4 +424,94 @@ fn vs_vertical_bin_3889() {
 #[test]
 fn vs_vertical_bin_9721() {
     check_vs_reference_kernel::<9721>();
+}
+
+// ------------------------------------------------------------------ the lookup Barrett
+
+/// The reduction the kernel's `vpmultishiftqb` + `vpermb` + `vpaddw` sequence performs, checked
+/// exhaustively over every i16 input: it subtracts a multiple of q and leaves |r| <= 0.579 q,
+/// where the two-multiply `barrett_i16` only guarantees 0.809 q.
+#[test]
+fn barrett_lut_exhaustive() {
+    for &q in QS.iter() {
+        let (mut worst, mut worst_mul) = (0i32, 0i32);
+        for a in i16::MIN..=i16::MAX {
+            let r = vb::barrett_lut_i16(a, q);
+            // same residue class
+            assert_eq!(
+                (a as i32).rem_euclid(q as i32),
+                (r as i32).rem_euclid(q as i32),
+                "q={q} a={a}"
+            );
+            // the correction really is a multiple of q that fits in i16 (no wraparound)
+            let corr = vb::barrett_lut_corr(((a >> 11) & 31) as usize, q) as i32;
+            assert_eq!(corr % q as i32, 0);
+            assert_eq!(a as i32 + corr, r as i32, "q={q} a={a}: i16 addition wrapped");
+            worst = worst.max((r as i32).abs());
+            worst_mul = worst_mul.max((barrett_i16(a, q) as i32).abs());
+        }
+        println!(
+            "q={q}: lookup Barrett |r| <= {worst} = {:.4} q (two-multiply {worst_mul} = {:.4} q)",
+            worst as f64 / q as f64,
+            worst_mul as f64 / q as f64
+        );
+        assert!(worst < q as i32);
+        if q == 9721 {
+            assert_eq!(worst, 5625);
+        }
+    }
+}
+
+/// The *proved* bound of the schedule (the shadow model only sees the inputs the test feeds it):
+/// worst case over all i16 lane values, level by level, with
+/// `|mont(a, w)| <= (|a| (q-1)/2 + 2^15 q) / 2^16` and `|barrett| <= 5625 / 7864`.
+#[test]
+fn proved_bounds_9721() {
+    const Q: i64 = 9721;
+    let mont = |b: i64| (b * (Q - 1) / 2 + 32768 * Q) / 65536;
+    // one radix-3 butterfly: a0 bounded by `a`, a1 / a2 by `b`; returns (y0, y1 = y2, max
+    // intermediate).
+    let bf = |a: i64, b: i64| {
+        let m = mont(b);
+        let u = mont(2 * m);
+        (a + 2 * m, a + m + u, (2 * m).max(a + 2 * m).max(a + m + u))
+    };
+    let lut = 5625; // barrett_lut_exhaustive
+    let mul = 7864; // params::barrett_i16, exhaustive (see the same test)
+    // levels 0-2: two centred table entries, |T| <= (q-1)/2
+    let l2 = Q - 1;
+    // level 3: the twiddles are folded, so y0 = a0 + t1 + t2 with all three <= l2
+    let l3 = 3 * l2;
+    // the level-3 intermediates: t1 - t2 <= 2 l2, y0 = a0 + t1 + t2 <= 3 l2, y1 = y2 <= 2 l2 + u
+    assert!(l3.max(2 * l2).max(2 * l2 + mont(2 * l2)) < 32768);
+    // level 4: lookup Barrett on a0
+    let (l4y0, l4y1, mi4) = bf(lut, l3);
+    // level 5: unreduced; the three 9-blocks of a 27-block hold y0-, y1- and y2-values, so each
+    // butterfly's three inputs are all of one kind
+    let (l5y0a, l5y1a, mi5a) = bf(l4y0, l4y0);
+    let (l5y0b, l5y1b, mi5b) = bf(l4y1, l4y1);
+    let (l5y0, l5y1) = (l5y0a.max(l5y0b), l5y1a.max(l5y1b));
+    // level 6: two-multiply Barrett on a0 (which is a level-5 y0), a1 / a2 are level-5 y1 / y2
+    let (l6y0, l6y1, mi6) = bf(mul, l5y1);
+    let out = l6y0.max(l6y1);
+    let declared = vb::output_bound_milli_q(9721) as i64 * Q / 1000;
+    println!(
+        "q=9721 proved: l3 {:.3}q  l4 {:.3}q  l5 {:.3}q  out {:.4}q = {out}  (declared {:.3}q);\
+         \n  max intermediate {} of 32767, i.e. {} to spare",
+        l3 as f64 / Q as f64,
+        l4y0 as f64 / Q as f64,
+        l5y0 as f64 / Q as f64,
+        out as f64 / Q as f64,
+        declared as f64 / Q as f64,
+        mi4.max(mi5a).max(mi5b).max(mi6),
+        32767 - mi4.max(mi5a).max(mi5b).max(mi6)
+    );
+    for m in [mi4, mi5a, mi5b, mi6] {
+        assert!(m < 32768, "i16 overflow in the proved bound: {m}");
+    }
+    assert!(out <= declared, "output {out} exceeds the declared bound {declared}");
+    // and the reason level 5 can be skipped at all: with the two-multiply Barrett at level 4 it
+    // could not.
+    let (w0, _, _) = bf(mul, l3);
+    assert!(bf(w0, w0).2 >= 32768, "the level-5 reduction would not have been needed");
 }

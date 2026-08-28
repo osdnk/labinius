@@ -1,5 +1,5 @@
-//! Headline benchmark for the `F162` front end: 2^20 `bin_fields::scalar::F162` (a plain
-//! `&[F162]`, 25 MB) -> 2^18 ring elements in the vertical NTT layout, both primes, one core.
+//! Headline benchmark for the `F162` front end: 2^18 `bin_fields::scalar::F162` (a plain
+//! `&[F162]`, 6 MB) -> 2^16 ring elements in the vertical NTT layout, both primes, one core.
 //! Usage: `taskset -c 2 bench_f162 [cpu] [--quick]`.
 use bin_fields::scalar::F162;
 use bin_ntt::f162::RandomF162;
@@ -104,7 +104,7 @@ fn main() {
     pin(cpu);
     bin_ntt::f162::assert_layout();
     let pg = PerfGroup::new().expect("perf_event_open failed (perf_event_paranoid?)");
-    let log_e = if quick { 16 } else { 20 }; // log2 of the number of F162
+    let log_e = if quick { 14 } else { 18 }; // log2 of the number of F162
     let nf162 = 1usize << log_e;
     let nring = nf162 / 4;
     let nbatch = nring / 32;

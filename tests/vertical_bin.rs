@@ -361,3 +361,183 @@ fn drivers_3889() {
 fn drivers_9721() {
     check_drivers::<9721>();
 }
+
+// ------------------------------------------------------------------ Montgomery-form outputs
+
+/// `ntt_bin_batch32_mont` = R * `scalar::ntt` slot for slot, with the same declared output bound
+/// (the tables stay centered), and the round trip through `scalar::intt_mont` returns the
+/// coefficients.
+fn check_kernel_mont<const Q: u16>() {
+    let bound = (vb::output_bound_milli_q(Q) as i64 * Q as i64 / 1000) as i32;
+    let r = Params::<Q>::R as u64;
+    let mut worst = 0i32;
+    for polys in batches(64, 0xABCD ^ Q as u64) {
+        let bb = unsafe { transpose::slice_polys_idx(&polys) };
+        let mut out = Batch32::zero(Representation::Coefficients);
+        unsafe { vb::ntt_bin_batch32_mont::<Q>(&bb, &mut out) };
+        assert_eq!(out.representation, Representation::Ntt);
+        for p in 0..32 {
+            let coeffs = scalar::lift(&polys[p]);
+            let want = scalar::ntt::<Q>(&coeffs);
+            let e = out.get(p);
+            let got = e.normalized(Q);
+            for j in 0..N {
+                assert_eq!(
+                    got[j] as u64,
+                    want[j] as u64 * r % Q as u64,
+                    "mont q={Q} poly={p} slot={j}"
+                );
+                let a = (e.v[j] as i32).abs();
+                worst = worst.max(a);
+                assert!(a <= bound, "mont q={Q} output {a} exceeds declared bound {bound}");
+            }
+            assert_eq!(scalar::intt_mont::<Q>(&got), coeffs, "round trip q={Q} poly={p}");
+        }
+    }
+    println!("q={Q}: mont kernel max output {worst} ({:.3} q)", worst as f64 / Q as f64);
+}
+
+#[test]
+fn kernel_mont_3889() {
+    check_kernel_mont::<3889>();
+}
+#[test]
+fn kernel_mont_9721() {
+    check_kernel_mont::<9721>();
+}
+
+/// One Montgomery multiplication per slot on two Montgomery-form transforms is the Montgomery
+/// form of the product, and `MontElement::new_mont` does the same for batch x element.
+fn check_mul_mont<const Q: u16>() {
+    let r = Params::<Q>::R as u64;
+    let mut rng = Rng::new(77 ^ Q as u64);
+    let pa: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
+    let pb: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
+    let (mut na, mut nb, mut nc) = (
+        Batch32::zero(Representation::Ntt),
+        Batch32::zero(Representation::Ntt),
+        Batch32::zero(Representation::Ntt),
+    );
+    unsafe {
+        vb::ntt_bin_batch32_mont::<Q>(&transpose::slice_polys_idx(&pa), &mut na);
+        vb::ntt_bin_batch32_mont::<Q>(&transpose::slice_polys_idx(&pb), &mut nb);
+        pointwise::mul_batch_batch_mont::<Q>(&na, &nb, &mut nc);
+    }
+    for p in 0..32 {
+        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pb[p]), Q);
+        let want = scalar::ntt::<Q>(&prod);
+        let got = nc.get(p).normalized(Q);
+        for j in 0..N {
+            assert_eq!(
+                got[j] as u64,
+                want[j] as u64 * r % Q as u64,
+                "mont batch*batch q={Q} p={p} j={j}"
+            );
+        }
+        assert_eq!(scalar::intt_mont::<Q>(&got), prod, "mont product round trip q={Q} p={p}");
+    }
+    // batch x element, both in Montgomery form: 3 multiply uops per slot, no R^2 correction.
+    let pe = BinaryPoly::random(&mut rng);
+    let ne = {
+        let polys: [BinaryPoly; 32] = std::array::from_fn(|_| pe);
+        let mut b = Batch32::zero(Representation::Ntt);
+        unsafe { vb::ntt_bin_batch32_mont::<Q>(&transpose::slice_polys_idx(&polys), &mut b) };
+        b.get(0)
+    };
+    let me = MontElement::new_mont::<Q>(&ne);
+    unsafe { pointwise::mul_batch_element_mont::<Q>(&na, &me, &mut nc) };
+    for p in 0..32 {
+        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pe), Q);
+        let want = scalar::ntt::<Q>(&prod);
+        let got = nc.get(p).normalized(Q);
+        for j in 0..N {
+            assert_eq!(
+                got[j] as u64,
+                want[j] as u64 * r % Q as u64,
+                "mont batch*elem q={Q} p={p} j={j}"
+            );
+        }
+        assert_eq!(scalar::intt_mont::<Q>(&got), prod, "mont batch*elem round trip q={Q} p={p}");
+    }
+}
+
+#[test]
+fn mul_mont_3889() {
+    check_mul_mont::<3889>();
+}
+#[test]
+fn mul_mont_9721() {
+    check_mul_mont::<9721>();
+}
+
+/// The plain kernel is untouched: `ntt_bin_batch32_mont` differs from `ntt_bin_batch32` only by
+/// the table scaling, so the Montgomery output is exactly `R *` the plain one modulo q, and the
+/// driver `ntt_bin_polys_mont` agrees with the per-batch entry point.
+fn check_mont_driver<const Q: u16>() {
+    let mut rng = Rng::new(2025 ^ Q as u64);
+    let nb = 4;
+    let polys: Vec<BinaryPoly> = (0..32 * nb).map(|_| BinaryPoly::random(&mut rng)).collect();
+    let mut want: Vec<Batch32> = Vec::new();
+    for b in 0..nb {
+        let chunk: [BinaryPoly; 32] = std::array::from_fn(|i| polys[32 * b + i]);
+        let mut o = Batch32::zero(Representation::Ntt);
+        unsafe { vb::ntt_bin_batch32_mont::<Q>(&transpose::slice_polys_idx(&chunk), &mut o) };
+        want.push(o);
+    }
+    let mut got: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
+    vb::ntt_bin_polys_mont::<Q>(&polys, &mut got);
+    for b in 0..nb {
+        assert!(got[b].v == want[b].v, "ntt_bin_polys_mont batch {b}");
+    }
+}
+
+#[test]
+fn mont_driver_3889() {
+    check_mont_driver::<3889>();
+}
+#[test]
+fn mont_driver_9721() {
+    check_mont_driver::<9721>();
+}
+
+/// The same check on **F162-lifted** inputs (the production front end): the Montgomery-form
+/// kernel on `slice_f162` output is `R * scalar::ntt(lift4(..))` slot for slot, and the round
+/// trip returns the lifted coefficients.
+fn check_f162_mont<const Q: u16>() {
+    use bin_ntt::f162::{self, RandomF162};
+    use bin_ntt::simd::transpose_f162 as tf;
+    use bin_fields::scalar::F162;
+
+    let r = Params::<Q>::R as u64;
+    let mut rng = Rng::new(0x162 ^ Q as u64);
+    let elems: Vec<F162> = (0..128 * 4).map(|_| F162::random(&mut rng)).collect();
+    for b in 0..4 {
+        let chunk: &[F162; 128] = elems[128 * b..128 * b + 128].try_into().unwrap();
+        let idx = unsafe { tf::slice_f162(chunk) };
+        let mut out = Batch32::zero(Representation::Ntt);
+        unsafe { vb::ntt_bin_batch32_mont::<Q>(&idx, &mut out) };
+        for p in 0..32 {
+            let coeffs = f162::lift_elem(&elems, 32 * b + p);
+            let want = scalar::ntt::<Q>(&coeffs);
+            let got = out.get(p).normalized(Q);
+            for j in 0..N {
+                assert_eq!(
+                    got[j] as u64,
+                    want[j] as u64 * r % Q as u64,
+                    "f162 mont q={Q} elem={} slot={j}",
+                    32 * b + p
+                );
+            }
+            assert_eq!(scalar::intt_mont::<Q>(&got), coeffs, "f162 round trip q={Q}");
+        }
+    }
+}
+
+#[test]
+fn f162_mont_3889() {
+    check_f162_mont::<3889>();
+}
+#[test]
+fn f162_mont_9721() {
+    check_f162_mont::<9721>();
+}

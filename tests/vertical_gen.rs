@@ -4,7 +4,8 @@ use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::pointwise::{self, MontElement};
 use bin_ntt::simd::vertical_gen::{
-    ntt_gen_batch32, ntt_gen_batch32_plan, ntt_gen_batch32_r27, ntt_gen_batches, Tw,
+    ntt_gen_batch32, ntt_gen_batch32_mont, ntt_gen_batch32_plan, ntt_gen_batch32_r27,
+    ntt_gen_batches, ntt_gen_batches_mont, Tw,
 };
 use bin_ntt::types::*;
 
@@ -307,4 +308,189 @@ fn mul_3889() {
 #[test]
 fn mul_9721() {
     mul::<9721>();
+}
+
+// ------------------------------------------------------------------ Montgomery-form outputs
+
+/// Exact i32 mirror of `ntt_gen_batch32_mont`: identical to `shadow` except at level 5, where the
+/// untwiddled `a0` is multiplied by R (instead of being Barretted) and the twiddles carry R.
+fn shadow_mont<const Q: u16>(input: &[i16; N], lmax: &mut [i32; 7]) -> [i32; N] {
+    let q = Q as u64;
+    let mut v = [0i32; N];
+    for i in 0..N {
+        v[i] = input[i] as i32;
+        assert!(v[i].abs() <= Q as i32, "input bound");
+    }
+    let mont = |a: i32, x: u16| -> i32 {
+        assert!(a.abs() < 32768, "i16 overflow feeding a multiplication: {a}");
+        let w = Params::<Q>::to_mont(x);
+        mont_mul_i16(a as i16, w, Params::<Q>::mont_pre(w), Q) as i32
+    };
+    let z6 = Params::<Q>::ZETA6;
+    for i in 0..324 {
+        let (a0, a1) = (v[i], v[i + 324]);
+        let t = mont(a1, z6);
+        v[i] = a0 + t;
+        let mut x = a0 + a1 - t;
+        if Tw::<Q>::BAR_A && i < 162 {
+            x = barrett_i16(x as i16, Q) as i32;
+        }
+        v[i + 324] = x;
+    }
+    lmax[0] = v.iter().map(|x| x.abs()).max().unwrap();
+    let w1 = Params::<Q>::OMEGA;
+    for level in 1..=6 {
+        let n = DEGREE[level];
+        let p = RADIX[level];
+        let m = n / p;
+        let mont_level = level == 5;
+        for k in 0..SUBRINGS[level] {
+            let base = k * n;
+            let mut zeta = pow_mod(Params::<Q>::PSI as u64, twiddle_exp(level, k) as u64, q) as u16;
+            let mut zeta2 = (zeta as u64 * zeta as u64 % q) as u16;
+            if mont_level {
+                zeta = Params::<Q>::scale_r(zeta);
+                zeta2 = Params::<Q>::scale_r(zeta2);
+            }
+            for i in 0..m {
+                let mut a0 = v[base + i];
+                if mont_level {
+                    a0 = mont(a0, Params::<Q>::R);
+                } else if Tw::<Q>::BAR_L[level] {
+                    assert!(a0.abs() < 32768, "i16 overflow before barrett: {a0}");
+                    a0 = barrett_i16(a0 as i16, Q) as i32;
+                }
+                if p == 2 {
+                    let t = mont(v[base + m + i], zeta);
+                    v[base + i] = a0 + t;
+                    v[base + m + i] = a0 - t;
+                } else {
+                    let t1 = mont(v[base + m + i], zeta);
+                    let t2 = mont(v[base + 2 * m + i], zeta2);
+                    let u = mont(t1 - t2, w1);
+                    v[base + i] = a0 + t1 + t2;
+                    v[base + m + i] = a0 - t2 + u;
+                    v[base + 2 * m + i] = a0 - t1 - u;
+                }
+            }
+        }
+        lmax[level] = v.iter().map(|x| x.abs()).max().unwrap();
+    }
+    v
+}
+
+fn check_mont<const Q: u16>(cols: &[[i16; N]; 32], what: &str, worst: &mut [i32; 7]) {
+    let mut b = to_batch(cols);
+    unsafe { ntt_gen_batch32_mont::<Q>(&mut b) };
+    assert_eq!(b.representation, Representation::Ntt);
+    let bound = Tw::<Q>::OUTPUT_BOUND;
+    let r = Params::<Q>::R as u64;
+    for p in 0..32 {
+        let mut lmax = [0i32; 7];
+        let want_shadow = shadow_mont::<Q>(&cols[p], &mut lmax);
+        for l in 0..7 {
+            worst[l] = worst[l].max(lmax[l]);
+        }
+        let mut coeffs = [0u32; N];
+        for j in 0..N {
+            coeffs[j] = (cols[p][j] as i32).rem_euclid(Q as i32) as u32;
+        }
+        let want = scalar::ntt::<Q>(&coeffs);
+        let mut got_norm = [0u32; N];
+        for j in 0..N {
+            let got = b.v[j][p] as i32;
+            assert_eq!(got, want_shadow[j], "{what} mont q={Q} poly {p} slot {j}: shadow");
+            got_norm[j] = got.rem_euclid(Q as i32) as u32;
+            assert_eq!(
+                got_norm[j] as u64,
+                want[j] as u64 * r % Q as u64,
+                "{what} mont q={Q} poly {p} slot {j}"
+            );
+            assert!(got.abs() <= bound, "{what} mont q={Q} poly {p} slot {j}: |{got}| > {bound}");
+        }
+        assert_eq!(scalar::intt_mont::<Q>(&got_norm), coeffs, "{what} round trip q={Q} poly {p}");
+    }
+}
+
+fn run_mont<const Q: u16>() {
+    let mut rng = Rng::new(0x5eed ^ Q as u64);
+    let mut worst = [0i32; 7];
+    for (i, c) in adversarial::<Q>().iter().enumerate() {
+        check_mont::<Q>(c, &format!("adversarial#{i}"), &mut worst);
+    }
+    for i in 0..16 {
+        check_mont::<Q>(&binary_cols(&mut rng), &format!("binary#{i}"), &mut worst);
+    }
+    for i in 0..16 {
+        check_mont::<Q>(&random_cols::<Q>(&mut rng), &format!("random#{i}"), &mut worst);
+    }
+    // the Montgomery multiplication at level 5 reduces harder than the barrett it replaces, so
+    // every per-level bound of the plain kernel still holds.
+    let claim = level_bounds::<Q>();
+    for l in 0..7 {
+        assert!(worst[l] <= claim[l], "q={Q} mont level {l}: {} > {}", worst[l], claim[l]);
+        println!(
+            "q={Q} mont level {l}: observed {} ({:.3} q), plain-path bound {} ({:.4} q)",
+            worst[l],
+            worst[l] as f64 / Q as f64,
+            claim[l],
+            claim[l] as f64 / Q as f64
+        );
+    }
+}
+
+#[test]
+fn ntt_mont_3889() {
+    run_mont::<3889>();
+}
+
+#[test]
+fn ntt_mont_9721() {
+    run_mont::<9721>();
+}
+
+fn mul_mont<const Q: u16>() {
+    let r = Params::<Q>::R as u64;
+    let mut rng = Rng::new(0xf00d ^ Q as u64);
+    let pa: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
+    let pb: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
+    let mut batches = [Batch32::from_binary(&pa), Batch32::from_binary(&pb)];
+    ntt_gen_batches_mont::<Q>(&mut batches);
+    let mut c = Batch32::zero(Representation::Ntt);
+    unsafe { pointwise::mul_batch_batch_mont::<Q>(&batches[0], &batches[1], &mut c) };
+    for p in 0..32 {
+        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pb[p]), Q);
+        let want = scalar::ntt::<Q>(&prod);
+        let mut got = [0u32; N];
+        for j in 0..N {
+            got[j] = (c.v[j][p] as i32).rem_euclid(Q as i32) as u32;
+            assert_eq!(got[j] as u64, want[j] as u64 * r % Q as u64, "q={Q} p={p} j={j}");
+        }
+        assert_eq!(scalar::intt_mont::<Q>(&got), prod, "product round trip q={Q} p={p}");
+    }
+    // batch x Montgomery-form element (3 multiply uops per slot).
+    let pe = BinaryPoly::random(&mut rng);
+    let mut eb = [Batch32::from_binary(&std::array::from_fn(|_| pe))];
+    ntt_gen_batches_mont::<Q>(&mut eb);
+    let me = MontElement::new_mont::<Q>(&eb[0].get(0));
+    let mut d = Batch32::zero(Representation::Ntt);
+    unsafe { pointwise::mul_batch_element_mont::<Q>(&batches[0], &me, &mut d) };
+    for p in 0..32 {
+        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pe), Q);
+        let want = scalar::ntt::<Q>(&prod);
+        for j in 0..N {
+            let got = (d.v[j][p] as i32).rem_euclid(Q as i32) as u32;
+            assert_eq!(got as u64, want[j] as u64 * r % Q as u64, "elem q={Q} p={p} j={j}");
+        }
+    }
+}
+
+#[test]
+fn mul_mont_3889() {
+    mul_mont::<3889>();
+}
+
+#[test]
+fn mul_mont_9721() {
+    mul_mont::<9721>();
 }

@@ -38,6 +38,16 @@ definitions every kernel follows.
   needs it; never use vpminuw/vpmaxsw/shift-based tricks in hot loops (they occupy the multiply port).
 * Products t1 - t2 in the radix-3 butterfly are < 1.5q < 2^15 for both primes, so u = mont(t1-t2, omega)
   is always safe when |t1|,|t2| < 0.75q.
+* **Montgomery-form outputs.** Each vertical kernel has a `*_mont` entry point whose output is
+  `R * a(psi^SLOT_EXP[j]) mod q`, R = 2^16 mod q, so that a slot product of two transforms is a
+  single signed Montgomery multiplication (`mont(Ra, Rb) = R a b`, again Montgomery form) instead
+  of a multiplication plus an R^2 correction. Since the transform is linear, the factor is placed
+  wherever it is cheapest: in `vertical_bin` on the 16-entry lookup tables (scale the entry by R
+  before centering — free, and the bounds are unchanged because the entries stay in (-q/2, q/2]);
+  in `vertical_gen` on the untwiddled `a0` input of level 5 (`mont(a0, R)` plus R-scaled level-5
+  twiddles), the cheapest level because a radix-3 level has only 216 untwiddled inputs per batch
+  and both primes already `barrett` that input there, so the multiplication replaces it. The
+  R^-1 is undone once, together with the 1/648, by `scalar::intt_mont`.
 * Every kernel must document its per-level bounds and its OUTPUT bound (as a multiple of q, per prime)
   and verify them in a test with an i32 shadow evaluation over many random + adversarial inputs
   (all-ones, alternating, single monomials, all-zero).
@@ -126,7 +136,12 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
 * `horizontal_gen` — `HBatch4 { v: [[i16; 32]; 81] }` with v[r][8p + j] = coefficient r + 81 j of
   polynomial p (one polynomial per 128-bit lane, 8 coefficients of stride 81 per lane);
   `ntt_gen_hbatch4::<Q>(&mut HBatch4)`; output slot 81 j + r; `HBatch4::get(p)` returns tree order.
-* `pointwise` — `mul_batch_batch`, `mul_batch_element` (Montgomery, exact results).
+* `pointwise` — `mul_batch_batch`, `mul_batch_element` (plain inputs, exact results);
+  `mul_batch_batch_mont`, `mul_batch_element_mont` + `MontElement::new_mont` for Montgomery-form
+  inputs (4 and 3 multiply-port uops per slot).
+* `scalar` — `intt`, `intt_mont`, `intt_scaled`: the exact inverse of `scalar::ntt` in tree
+  order, with the per-level 1/2, 1/3 and Phi_6-determinant divisions (the 1/648) and the
+  Montgomery `R^-k` folded into one final scaling. Reference only; there is no SIMD inverse.
 
 ## 7. Tests and benchmarks
 
@@ -136,7 +151,7 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   bound holds; an i32 shadow model replays the kernel's operation sequence and asserts every
   intermediate is < 2^15; and the multiplication tests through `pointwise` against
   `scalar::ntt(scalar::mul_mod_phi(a, b))`. Generic kernels also test random i16 inputs in [-q, q].
-* `src/bin/bench_f162.rs`: the headline (2^20 F162 -> 2^18 ring elements, both primes, single and
+* `src/bin/bench_f162.rs`: the headline (2^18 F162 -> 2^16 ring elements, both primes, single and
   two-prime drivers, streamed, accumulate product), pinned to one core, `perf::PerfGroup`
   counters (cycles,
   instructions, uops, ports 0/1/5). `src/bin/bench_<variant>.rs`: per-kernel breakdowns,

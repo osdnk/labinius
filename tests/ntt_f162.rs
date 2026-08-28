@@ -176,3 +176,23 @@ fn product_3889() {
 fn product_9721() {
     product::<9721>();
 }
+
+fn mont_driver<const Q: u16>() {
+    use bin_ntt::params::Params;
+    let elems = bin_ntt::f162::random_elems(128 * 3, 0xA11CE);
+    let mut out = vec![Batch32::zero(Representation::Ntt); 3];
+    bin_ntt::simd::ntt_f162::ntt_f162_mont::<Q>(&elems, &mut out);
+    for r in 0..96 {
+        let want = scalar::ntt::<Q>(&bin_ntt::f162::lift_elem(&elems, r));
+        let got = scalar::normalize_i16(&out[r / 32].get(r % 32).v, Q);
+        for j in 0..bin_ntt::params::N {
+            assert_eq!(got[j], (want[j] as u64 * Params::<Q>::R as u64 % Q as u64) as u32, "r={r} j={j}");
+        }
+    }
+}
+
+#[test]
+fn ntt_f162_mont_is_r_times_reference() {
+    mont_driver::<3889>();
+    mont_driver::<9721>();
+}
