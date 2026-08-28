@@ -197,6 +197,16 @@ pub const fn slot_lane(s: usize) -> (usize, usize) {
     }
 }
 
+/// Two 16-lane product vectors folded to 8 lanes each and packed into one vector: lanes 0..8
+/// carry `t0`, lanes 8..16 carry `t1` (two `vshufi64x2` and one `vpaddd`).
+#[inline(always)]
+unsafe fn pack2(t0: __m512i, t1: __m512i) -> __m512i {
+    _mm512_add_epi32(
+        _mm512_shuffle_i64x2::<0x44>(t0, t1),
+        _mm512_shuffle_i64x2::<0xEE>(t0, t1),
+    )
+}
+
 /// The two slots `w0, w1` times `a0, a1`, folded to 8 lanes each and packed into one vector.
 #[inline(always)]
 unsafe fn fold_pair(w0: *const i16, w1: *const i16, a0: *const i16, a1: *const i16) -> __m512i {
@@ -208,10 +218,7 @@ unsafe fn fold_pair(w0: *const i16, w1: *const i16, a0: *const i16, a1: *const i
         _mm512_load_si512(w1 as *const __m512i),
         _mm512_load_si512(a1 as *const __m512i),
     );
-    _mm512_add_epi32(
-        _mm512_shuffle_i64x2::<0x44>(t0, t1),
-        _mm512_shuffle_i64x2::<0xEE>(t0, t1),
-    )
+    pack2(t0, t1)
 }
 
 /// One 27-slot block of one batch into 14 accumulator vectors, and, with `PF`, the 27 A lines the
@@ -554,4 +561,592 @@ pub fn commit_block_fused<const Q: u16, const PF: bool, const DIST: usize>(
         }
     }
     finish::<Q>(&acc)
+}
+
+// =============================================================================================
+// quadratic-slot limbs
+// =============================================================================================
+//
+// For q in `params::QS_QUAD` the ring does not split completely: the transform ends at 324
+// quadratic leaves `Z_q[X]/(X^2 - c_j)`, `c_j = psi'^QUAD_SLOT_EXP[j]`, and leaf j occupies rows
+// `2j` (constant term) and `2j+1` (X coefficient) of the 648-row output. A slot product is the
+// quadratic product
+//
+//     (a_0 + a_1 X)(b_0 + b_1 X) = (a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X,
+//
+// and the commitment wants its sum over the ring elements, so the three sums
+//
+//     P_0 = sum_i a_0 b_0,   P_1 = sum_i a_1 b_1,   P_2 = sum_i (a_0 b_1 + a_1 b_0)
+//
+// are accumulated raw and combined once per leaf at the end:
+// `y[2j] = P_0 + c_j P_1`, `y[2j+1] = P_2`.
+//
+// **Karatsuba.** `P_2` is one `vpmaddwd` instead of two when it is formed as
+// `(a_0 + a_1)(b_0 + b_1) - P_0 - P_1`: one `vpaddw` on each side, three multiply-port uops per
+// leaf against four. The A side always fits (`|b_0 + b_1| <= q - 1`), but the W side is the
+// kernel's *lazily reduced* output, `|a_k| <= output_bound(q)` = 4.87 q / 5.13 q / 1.94 q, so the
+// sum fits an i16 lane only for q = 2917 (2 * 4.87 q = 28412 < 2^15; 4861 and 12637 would reach
+// 49874 and 49032). Those two therefore accumulate `a_0 b_1` and `a_1 b_0` into `P_2` with two
+// `vpmaddwd` — the same three accumulators, the same combine with the Karatsuba correction
+// dropped, one more multiply-port uop per leaf. [`karatsuba`] is that condition.
+//
+// **The packed accumulator** is the splitting one's, per 18-row block: one vector holds `P_0` of a
+// leaf in lanes 0..8 and `P_1` in lanes 8..16 (9 per block), and one vector holds the `P_2` of two
+// leaves (5 per block, the ninth leaf duplicated into the upper half as slot 26 is in `mac27`),
+// so a block costs 14 accumulator vectors exactly as a 27-slot block of the splitting kernel
+// does. 36 blocks: 32.3 KB, L1-resident. A lane again carries four products per batch.
+
+use crate::simd::vertical_bin_quad::{self as vq, BlockSink as QBlockSink};
+
+/// Bound on one lane of the quadratic kernel's output ([`vq::output_bound`]).
+pub const fn w_bound_quad(q: u16) -> i64 {
+    vq::output_bound(q) as i64
+}
+
+/// Can the Karatsuba sum `a_0 + a_1` of two output rows live in an i16 lane? (2917: yes.)
+pub const fn karatsuba(q: u16) -> bool {
+    2 * w_bound_quad(q) <= 32767
+}
+const _: () = assert!(karatsuba(2917));
+const _: () = assert!(!karatsuba(4861) && !karatsuba(12637));
+
+/// What one batch adds to a lane of the `P_0 | P_1` accumulator: four products of `|W| |A|`.
+pub const fn acc_per_batch_quad01(q: u16) -> i64 {
+    4 * w_bound_quad(q) * a_bound(q)
+}
+
+/// What one batch adds to a lane of the `P_2` accumulator: four products of `2|W|` by
+/// `|b_0 + b_1| <= q - 1` with Karatsuba, eight of `|W| |A|` without.
+pub const fn acc_per_batch_quad2(q: u16) -> i64 {
+    if karatsuba(q) {
+        4 * (2 * w_bound_quad(q)) * (2 * a_bound(q))
+    } else {
+        8 * w_bound_quad(q) * a_bound(q)
+    }
+}
+
+/// The largest power of two P with `acc_after_reduce(q) + P * per <= i32::MAX`.
+pub const fn period_for(q: u16, per: i64) -> usize {
+    let mut p = 1usize;
+    while acc_after_reduce(q) + 2 * (p as i64) * per <= i32::MAX as i64 {
+        p *= 2;
+    }
+    p
+}
+
+/// Batches between two fold-backs of the `P_0 | P_1` accumulator (16 / 8 / 2).
+pub const fn red_period_quad01(q: u16) -> usize {
+    period_for(q, acc_per_batch_quad01(q))
+}
+/// Batches between two fold-backs of the `P_2` accumulator (4 / 4 / 1).
+pub const fn red_period_quad2(q: u16) -> usize {
+    period_for(q, acc_per_batch_quad2(q))
+}
+
+const fn fits_quad(q: u16) -> bool {
+    acc_after_reduce(q) + (red_period_quad01(q) as i64) * acc_per_batch_quad01(q)
+        <= i32::MAX as i64
+        && acc_after_reduce(q) + (red_period_quad2(q) as i64) * acc_per_batch_quad2(q)
+            <= i32::MAX as i64
+}
+const _: () = assert!(fits_quad(2917) && fits_quad(4861) && fits_quad(12637));
+
+/// Accumulator vectors per 18-row block: 9 for `P_0 | P_1`, 5 for `P_2`.
+pub const QACC01_PER_BLK: usize = 9;
+pub const QACC2_PER_BLK: usize = 5;
+/// Blocks the quadratic kernel hands out (36 x 18 rows = 648).
+pub const QBLOCKS: usize = 36;
+
+#[repr(C, align(64))]
+pub struct QuadAcc {
+    /// `p01[9 blk + j]`: lanes 0..8 are `P_0` of leaf `9 blk + j`, lanes 8..16 its `P_1`.
+    pub p01: [[i32; 16]; QBLOCKS * QACC01_PER_BLK],
+    /// `p2[5 blk + j/2]`: lanes `8 (j % 2) ..` are `P_2` of leaf `9 blk + j` (leaf 8 in lanes
+    /// 0..8, its duplicate in 8..16).
+    pub p2: [[i32; 16]; QBLOCKS * QACC2_PER_BLK],
+}
+
+impl QuadAcc {
+    pub fn zero() -> Box<QuadAcc> {
+        unsafe {
+            let mut b = Box::<QuadAcc>::new_uninit();
+            core::ptr::write_bytes(b.as_mut_ptr() as *mut u8, 0, core::mem::size_of::<QuadAcc>());
+            b.assume_init()
+        }
+    }
+}
+
+/// One leaf: the packed `P_0 | P_1` contribution and the `P_2` one, off four loads.
+///
+/// The four vectors are loaded once and used by both products — with the accumulator stores in
+/// between, LLVM has to assume they alias and reloads them, which measures 30 % of the sink.
+#[inline(always)]
+unsafe fn leaf<const Q: u16>(w: *const i16, a: *const i16) -> (__m512i, __m512i) {
+    let w0 = _mm512_load_si512(w as *const __m512i);
+    let w1 = _mm512_load_si512(w.add(32) as *const __m512i);
+    let a0 = _mm512_load_si512(a as *const __m512i);
+    let a1 = _mm512_load_si512(a.add(32) as *const __m512i);
+    let p01 = pack2(_mm512_madd_epi16(w0, a0), _mm512_madd_epi16(w1, a1));
+    let p2 = if karatsuba(Q) {
+        _mm512_madd_epi16(_mm512_add_epi16(w0, w1), _mm512_add_epi16(a0, a1))
+    } else {
+        _mm512_add_epi32(_mm512_madd_epi16(w0, a1), _mm512_madd_epi16(w1, a0))
+    };
+    (p01, p2)
+}
+
+/// One 18-row block (9 leaves) of one batch into its 14 accumulator vectors, and, with `PF`, the
+/// 18 A lines the same block of a later batch will read.
+///
+/// # Safety
+/// `w`, `a`, `acc01` and `acc2` must be 64-byte aligned; `w` and `a` must cover 18 vectors,
+/// `acc01` [`QACC01_PER_BLK`] and `acc2` [`QACC2_PER_BLK`]. `apf` must be readable for 1152 bytes
+/// when `PF`.
+#[target_feature(enable = "avx512f,avx512bw")]
+pub unsafe fn mac_quad18<const Q: u16, const PF: bool>(
+    w: *const i16,
+    a: *const i16,
+    apf: *const i8,
+    acc01: *mut i32,
+    acc2: *mut i32,
+) {
+    for m in 0..4 {
+        let (j0, j1) = (2 * m, 2 * m + 1);
+        let (d0, t0) = leaf::<Q>(w.add(64 * j0), a.add(64 * j0));
+        let (d1, t1) = leaf::<Q>(w.add(64 * j1), a.add(64 * j1));
+        let s0 = _mm512_load_si512(acc01.add(16 * j0) as *const __m512i);
+        let s1 = _mm512_load_si512(acc01.add(16 * j1) as *const __m512i);
+        let s2 = _mm512_load_si512(acc2.add(16 * m) as *const __m512i);
+        _mm512_store_si512(acc01.add(16 * j0) as *mut __m512i, _mm512_add_epi32(s0, d0));
+        _mm512_store_si512(acc01.add(16 * j1) as *mut __m512i, _mm512_add_epi32(s1, d1));
+        _mm512_store_si512(
+            acc2.add(16 * m) as *mut __m512i,
+            _mm512_add_epi32(s2, pack2(t0, t1)),
+        );
+        if PF {
+            for i in 0..4 {
+                _mm_prefetch(apf.add(64 * (4 * m + i)), _MM_HINT_T1);
+            }
+        }
+    }
+    let (d, t) = leaf::<Q>(w.add(64 * 8), a.add(64 * 8));
+    let s0 = _mm512_load_si512(acc01.add(16 * 8) as *const __m512i);
+    let s2 = _mm512_load_si512(acc2.add(16 * 4) as *const __m512i);
+    _mm512_store_si512(acc01.add(16 * 8) as *mut __m512i, _mm512_add_epi32(s0, d));
+    _mm512_store_si512(
+        acc2.add(16 * 4) as *mut __m512i,
+        _mm512_add_epi32(s2, pack2(t, t)),
+    );
+    if PF {
+        _mm_prefetch(apf.add(64 * 16), _MM_HINT_T1);
+        _mm_prefetch(apf.add(64 * 17), _MM_HINT_T1);
+    }
+}
+
+/// One whole batch through [`mac_quad18`], for the paths that do not consume the transform block
+/// by block.
+///
+/// # Safety
+/// See [`mac_quad18`]; `w` and `a` must cover 648 vectors and the accumulators a whole [`QuadAcc`].
+#[target_feature(enable = "avx512f,avx512bw")]
+pub unsafe fn mac_quad_batch<const Q: u16, const PF: bool>(
+    w: *const i16,
+    a: *const i16,
+    apf: *const i8,
+    acc01: *mut i32,
+    acc2: *mut i32,
+) {
+    for bl in 0..QBLOCKS {
+        mac_quad18::<Q, PF>(
+            w.add(32 * 18 * bl),
+            a.add(32 * 18 * bl),
+            apf.add(64 * 18 * bl),
+            acc01.add(16 * QACC01_PER_BLK * bl),
+            acc2.add(16 * QACC2_PER_BLK * bl),
+        );
+    }
+}
+
+/// The fold-back over both quadratic accumulators.
+///
+/// # Safety
+/// AVX-512 F/BW.
+#[target_feature(enable = "avx512f,avx512bw")]
+pub unsafe fn reduce_quad_acc<const Q: u16>(acc: &mut QuadAcc) {
+    reduce_quad_part::<Q>(acc.p01.as_mut_ptr() as *mut i32, QBLOCKS * QACC01_PER_BLK);
+    reduce_quad_part::<Q>(acc.p2.as_mut_ptr() as *mut i32, QBLOCKS * QACC2_PER_BLK);
+}
+
+#[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn reduce_quad_part<const Q: u16>(acc: *mut i32, vecs: usize) {
+    for j in 0..vecs {
+        let p = acc.add(16 * j);
+        _mm512_store_si512(
+            p as *mut __m512i,
+            reduce_vec::<Q>(_mm512_load_si512(p as *const __m512i)),
+        );
+    }
+}
+
+/// The three sums per leaf combined into the 648 rows of the commitment, reduced to `[0, q)`:
+/// `y[2j] = P_0 + c_j P_1`, `y[2j+1] = P_2` (minus `P_0 + P_1` when the Karatsuba product was
+/// accumulated). Scalar, once per commitment.
+pub fn finish_quad<const Q: u16>(acc: &QuadAcc) -> [u32; N] {
+    let q = Q as i64;
+    let mut y = [0u32; N];
+    for blk in 0..QBLOCKS {
+        for j in 0..QACC01_PER_BLK {
+            let leaf = QACC01_PER_BLK * blk + j;
+            let v = &acc.p01[QACC01_PER_BLK * blk + j];
+            let p0: i64 = v[0..8].iter().map(|&x| x as i64).sum();
+            let p1: i64 = v[8..16].iter().map(|&x| x as i64).sum();
+            let g = j % 2;
+            let w = &acc.p2[QACC2_PER_BLK * blk + j / 2];
+            let mut p2: i64 = w[8 * g..8 * g + 8].iter().map(|&x| x as i64).sum();
+            if karatsuba(Q) {
+                p2 -= p0 + p1;
+            }
+            let c = ParamsQ::<Q>::LEAF_C[leaf] as i64;
+            y[2 * leaf] = (p0 + c % q * (p1 % q)).rem_euclid(q) as u32;
+            y[2 * leaf + 1] = p2.rem_euclid(q) as u32;
+        }
+    }
+    y
+}
+
+/// The 1152-byte scratch every 18-row block of the quadratic transform is written into.
+#[repr(C, align(64))]
+struct Blk18([i16; 18 * 32]);
+
+/// The quadratic multiply-accumulate sink: the same L1 scratch for every block, multiplied into
+/// the three accumulators against the block's A rows (prefetching a later batch's) the moment the
+/// kernel has stored it.
+struct MacQ<const Q: u16, const PF: bool> {
+    buf: *mut i16,
+    a: *const i16,
+    apf: *const i8,
+    acc01: *mut i32,
+    acc2: *mut i32,
+}
+
+impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
+    #[inline(always)]
+    unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
+        self.buf
+    }
+
+    #[target_feature(enable = "avx512f,avx512bw")]
+    unsafe fn block(&mut self, blk: usize, w: *const i16) {
+        mac_quad18::<Q, PF>(
+            w,
+            self.a.add(32 * 18 * blk),
+            self.apf.add(64 * 18 * blk),
+            self.acc01.add(16 * QACC01_PER_BLK * blk),
+            self.acc2.add(16 * QACC2_PER_BLK * blk),
+        );
+    }
+}
+
+/// One batch of a quadratic limb: the transform consumed block by block into `acc`, with the A
+/// prefetch one batch ahead and the two fold-backs on their own periods.
+///
+/// # Safety
+/// `idx` is the batch's index rows; `a` and `apf` are 648-vector A rows; `buf` is 18 writable
+/// 64-byte aligned vectors.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+unsafe fn quad_batch<const Q: u16>(
+    idx: &BinaryIndex32,
+    a: *const i16,
+    apf: *const i8,
+    buf: *mut i16,
+    p01: *mut i32,
+    p2: *mut i32,
+    done: usize,
+) {
+    vq::ntt_quad_bin_batch32_sink::<Q, _>(
+        idx,
+        &mut MacQ::<Q, true> { buf, a, apf, acc01: p01, acc2: p2 },
+    );
+    if done % red_period_quad01(Q) == 0 {
+        reduce_quad_part::<Q>(p01, QBLOCKS * QACC01_PER_BLK);
+    }
+    if done % red_period_quad2(Q) == 0 {
+        reduce_quad_part::<Q>(p2, QBLOCKS * QACC2_PER_BLK);
+    }
+}
+
+/// The commitment for one quadratic-slot limb: `y[2j] + y[2j+1] X = sum_i A_i W_i mod (X^2 - c_j)`
+/// for every leaf `j`, the 648 rows fully reduced.
+pub fn commit_quad<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
+    check(elems, a);
+    let mut acc = QuadAcc::zero();
+    let mut idx = BinaryIndex32::zero();
+    let mut buf: core::mem::MaybeUninit<Blk18> = core::mem::MaybeUninit::uninit();
+    let bp = buf.as_mut_ptr() as *mut i16;
+    unsafe {
+        for b in 0..a.len() {
+            slice_f162_into(chunk128(elems, b), &mut idx);
+            let (cur, apf) = rows_d(a, b, PF_DIST);
+            quad_batch::<Q>(
+                &idx,
+                cur,
+                apf,
+                bp,
+                acc.p01.as_mut_ptr() as *mut i32,
+                acc.p2.as_mut_ptr() as *mut i32,
+                b + 1,
+            );
+        }
+    }
+    finish_quad::<Q>(&acc)
+}
+
+// =============================================================================================
+// the multi-limb commitment
+// =============================================================================================
+
+/// One limb of a commitment: its prime, whether that prime's `R_648` ends in quadratic leaves,
+/// and its matrix `A` in the vertical layout.
+#[derive(Clone, Copy)]
+pub struct Limb<'a> {
+    pub q: u16,
+    pub quad: bool,
+    pub a: &'a [Batch32],
+}
+
+enum LimbAcc {
+    Split(Box<Acc>),
+    Quad(Box<QuadAcc>),
+}
+
+impl LimbAcc {
+    fn new(l: &Limb) -> LimbAcc {
+        if l.quad {
+            LimbAcc::Quad(QuadAcc::zero())
+        } else {
+            LimbAcc::Split(Acc::zero())
+        }
+    }
+    fn clear(&mut self) {
+        unsafe {
+            match self {
+                LimbAcc::Split(a) => core::ptr::write_bytes(
+                    a.as_mut() as *mut Acc as *mut u8,
+                    0,
+                    core::mem::size_of::<Acc>(),
+                ),
+                LimbAcc::Quad(a) => core::ptr::write_bytes(
+                    a.as_mut() as *mut QuadAcc as *mut u8,
+                    0,
+                    core::mem::size_of::<QuadAcc>(),
+                ),
+            }
+        }
+    }
+}
+
+/// The accumulators of one limb list, allocated once and reused for every chunk a key commits to
+/// (21.5 KB per splitting limb, 32.3 KB per quadratic one; they are cleared, not reallocated).
+pub struct Scratch {
+    accs: Vec<LimbAcc>,
+}
+
+impl Scratch {
+    pub fn new(limbs: &[Limb]) -> Scratch {
+        Scratch {
+            accs: limbs.iter().map(LimbAcc::new).collect(),
+        }
+    }
+}
+
+/// One split limb's batch, with the transform kept when `out` is given.
+///
+/// # Safety
+/// As [`quad_batch`]; `out` is 648 writable vectors.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+unsafe fn split_batch<const Q: u16, const KEEP: bool>(
+    idx: &BinaryIndex32,
+    a: *const i16,
+    apf: *const i8,
+    buf: *mut i16,
+    acc: *mut i32,
+    out: *mut i16,
+    done: usize,
+) {
+    if KEEP {
+        vb::ntt_bin_batch32_sink::<Q, false, _>(
+            idx,
+            &mut MacKeep::<true> { buf, a, apf, acc, out },
+        );
+    } else {
+        vb::ntt_bin_batch32_sink::<Q, false, _>(idx, &mut Mac::<true> { buf, a, apf, acc });
+    }
+    if done % red_period(Q) == 0 {
+        reduce_acc::<Q>(acc);
+    }
+}
+
+/// The commitment over a list of limbs: one front end (the index rows depend neither on q nor on
+/// the tree) and one kernel pass per limb per batch, each with its own accumulator, fold-back
+/// period and A prefetch.
+///
+/// `limbs[0]` is the base limb; `w`, when given, receives the transform of every ring element
+/// modulo `limbs[0].q` (non-temporal stores out of that limb's block sink), which is what
+/// [`crate::fold`] consumes. `out` receives one 648-row commitment per limb, in `[0, q)`.
+pub fn commit_limbs_into(
+    elems: &[F162],
+    limbs: &[Limb],
+    w: Option<&mut [Batch32]>,
+    st: &mut Scratch,
+    out: &mut [[u32; N]],
+) {
+    assert!(!limbs.is_empty(), "at least the base limb");
+    let nb = limbs[0].a.len();
+    check(elems, limbs[0].a);
+    for l in limbs {
+        assert_eq!(l.a.len(), nb, "every limb's A has one batch per 32 ring elements");
+    }
+    assert!(
+        st.accs.len() == limbs.len() && out.len() == limbs.len(),
+        "the scratch and the output do not match this limb list"
+    );
+    assert!(limbs.len() <= MAX_LIMBS, "at most {MAX_LIMBS} limbs");
+    let keep = w.map(|w| {
+        assert_eq!(w.len(), nb, "one output batch per A batch");
+        w.as_mut_ptr()
+    });
+    for a in st.accs.iter_mut() {
+        a.clear();
+    }
+    unsafe { commit_limbs_core(elems, limbs, keep, st, out) };
+}
+
+/// The base limb and the four [`crate::AdditionalLimb`]s: the widest limb list there is.
+pub const MAX_LIMBS: usize = 5;
+
+/// One limb, resolved: everything the batch loop needs as plain words, so that the loop does not
+/// walk a `Vec` of boxed accumulators per batch.
+#[derive(Clone, Copy)]
+struct Run {
+    q: u16,
+    quad: bool,
+    a: *const Batch32,
+    nb: usize,
+    acc: *mut i32,
+    acc2: *mut i32,
+    keep: *mut Batch32,
+}
+
+/// The batch loop of [`commit_limbs_into`], with the whole feature set enabled so that the
+/// per-limb entry points inline into it exactly as the two-prime loop they replace did.
+///
+/// # Safety
+/// The arguments are [`commit_limbs_into`]'s, already checked; `keep` is `nb` writable batches.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+unsafe fn commit_limbs_core(
+    elems: &[F162],
+    limbs: &[Limb],
+    keep: Option<*mut Batch32>,
+    st: &mut Scratch,
+    out: &mut [[u32; N]],
+) {
+    let nb = limbs[0].a.len();
+    let mut plan = [Run {
+        q: 0,
+        quad: false,
+        a: core::ptr::null(),
+        nb,
+        acc: core::ptr::null_mut(),
+        acc2: core::ptr::null_mut(),
+        keep: core::ptr::null_mut(),
+    }; MAX_LIMBS];
+    for (li, (l, acc)) in limbs.iter().zip(st.accs.iter_mut()).enumerate() {
+        let (p, p2) = match acc {
+            LimbAcc::Split(a) => (a.v.as_mut_ptr() as *mut i32, core::ptr::null_mut()),
+            LimbAcc::Quad(a) => (
+                a.p01.as_mut_ptr() as *mut i32,
+                a.p2.as_mut_ptr() as *mut i32,
+            ),
+        };
+        plan[li] = Run {
+            q: l.q,
+            quad: l.quad,
+            a: l.a.as_ptr(),
+            nb,
+            acc: p,
+            acc2: p2,
+            keep: if li == 0 {
+                keep.unwrap_or(core::ptr::null_mut())
+            } else {
+                core::ptr::null_mut()
+            },
+        };
+    }
+    let runs = &plan[..limbs.len()];
+
+    let mut idx = BinaryIndex32::zero();
+    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
+    let bp = buf.as_mut_ptr() as *mut i16;
+    for b in 0..nb {
+        slice_f162_into(chunk128(elems, b), &mut idx);
+        for r in runs.iter() {
+            let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
+            let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
+            if r.quad {
+                match r.q {
+                    2917 => quad_batch::<2917>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    4861 => quad_batch::<4861>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    12637 => quad_batch::<12637>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    _ => unreachable!("no quadratic kernel for q = {}", r.q),
+                }
+            } else {
+                let o = if r.keep.is_null() {
+                    core::ptr::null_mut()
+                } else {
+                    (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
+                };
+                match (r.q, o.is_null()) {
+                    (3889, true) => split_batch::<3889, false>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (3889, false) => split_batch::<3889, true>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (9721, true) => split_batch::<9721, false>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (9721, false) => split_batch::<9721, true>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    _ => unreachable!("no splitting kernel for q = {}", r.q),
+                }
+            }
+        }
+    }
+    if keep.is_some() {
+        _mm_sfence();
+        for b in 0..nb {
+            (*keep.unwrap().add(b)).representation = Representation::Ntt;
+        }
+    }
+    for (li, l) in limbs.iter().enumerate() {
+        out[li] = match &st.accs[li] {
+            LimbAcc::Split(a) => match l.q {
+                3889 => finish::<3889>(a),
+                9721 => finish::<9721>(a),
+                _ => unreachable!(),
+            },
+            LimbAcc::Quad(a) => match l.q {
+                2917 => finish_quad::<2917>(a),
+                4861 => finish_quad::<4861>(a),
+                12637 => finish_quad::<12637>(a),
+                _ => unreachable!(),
+            },
+        };
+    }
+}
+
+/// [`commit_limbs_into`] allocating its own scratch and output — one chunk, for tests and callers
+/// that commit once.
+pub fn commit_limbs(
+    elems: &[F162],
+    limbs: &[Limb],
+    w: Option<&mut [Batch32]>,
+) -> Vec<[u32; N]> {
+    let mut st = Scratch::new(limbs);
+    let mut out = vec![[0u32; N]; limbs.len()];
+    commit_limbs_into(elems, limbs, w, &mut st, &mut out);
+    out
 }

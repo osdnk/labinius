@@ -60,20 +60,20 @@ fn absorbed_data_separates() {
 
 #[test]
 fn absorb_elements_binds() {
-    use bin_ntt::PowerOfThreeRingElementWithTwoLimbs;
-    let mut x = PowerOfThreeRingElementWithTwoLimbs::zero();
-    let mut y = PowerOfThreeRingElementWithTwoLimbs::zero();
-    y.limb[1].v[161] = -3;
+    use bin_ntt::PowerOfThreeRingElementWithLimbs;
+    let mut x = PowerOfThreeRingElementWithLimbs::zero(2);
+    let mut y = PowerOfThreeRingElementWithLimbs::zero(2);
+    y.limbs[1].v[161] = -3;
     let mut a = Transcript::new(b"dom");
     let mut b = Transcript::new(b"dom");
-    a.absorb_elements(&[x]);
-    b.absorb_elements(&[y]);
+    a.absorb_elements(&[x.clone()]);
+    b.absorb_elements(&[y.clone()]);
     assert_ne!(sample_attempt(&mut a, 30), sample_attempt(&mut b, 30));
 
-    x.limb[0].v[0] = 1;
+    x.limbs[0].v[0] = 1;
     let mut c = Transcript::new(b"dom");
     let mut d = Transcript::new(b"dom");
-    c.absorb_elements(&[x, y]);
+    c.absorb_elements(&[x.clone(), y.clone()]);
     d.absorb_elements(&[y, x]);
     assert_ne!(sample_attempt(&mut c, 30), sample_attempt(&mut d, 30));
 }

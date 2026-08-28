@@ -51,7 +51,7 @@ fn columns_naive(w: &[F162], r0: &[F162], wdim: usize) -> Vec<F162> {
 }
 
 fn challenges(
-    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithTwoLimbs>,
+    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithLimbs>,
     r: usize,
 ) -> Vec<ShortChallenge> {
     let mut t = Transcript::new(b"bin-ntt/test/eval");
@@ -145,7 +145,7 @@ fn pipeline<const LW: usize, const LR: usize>(len_f162: usize) {
     let r = 1usize << LR;
     let wdim = 1usize << LW;
     assert_eq!(len_f162, wdim);
-    let ck = CommitmentKey::random(len_f162, 0xE7A1 ^ r as u64);
+    let ck = CommitmentKey::random_default(len_f162, 0xE7A1 ^ r as u64);
     let w = witness(r * len_f162, 0xE7A2 ^ (r as u64) << 8);
 
     let (c, aux) = ck.commit_with_aux(&w, r);

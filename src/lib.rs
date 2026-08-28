@@ -1,6 +1,8 @@
 //! NTT over R_q = Z_q[X] / (X^648 - X^324 + 1), the 1944-th cyclotomic ring (1944 = 2^3 * 3^5),
-//! for q in {3889, 9721} (both q = 1 mod 1944, so R_q splits into 648 linear factors), specialised
-//! for binary (0/1) input polynomials and vectorised with AVX-512 across many polynomials.
+//! for q in {3889, 9721} (q = 1 mod 1944, so R_q splits into 648 linear factors) and for
+//! q in {2917, 4861, 12637} (q = 1 mod 972 only, so it splits into 324 quadratic factors),
+//! specialised for binary (0/1) input polynomials and vectorised with AVX-512 across many
+//! polynomials. A commitment is taken over a list of those primes as limbs (`api`).
 //!
 //! Module map
 //! - `params`  : all ring constants (roots, twiddles, Montgomery forms), computed at compile time.
@@ -9,7 +11,8 @@
 //! - `rng`     : tiny deterministic RNG for tests/benches (no external crates).
 //! - `perf`    : perf_event_open wrapper (cycles, instructions, uops per port) for the bench.
 //! - `simd`    : the AVX-512 kernels (one module per variant).
-//! - `api`     : the public API (`CommitmentKey`, `PowerOfThreeRingElement`, the height-4 view).
+//! - `api`     : the public API (`AdditionalLimb`, `CommitmentKey`, `PowerOfThreeRingElement`,
+//!               the height-4 view).
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
 //! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
 //! - `eval`    : the left-expansion over `F162`, the binary side of the fold, and the verifier.

@@ -1,7 +1,9 @@
 # bin-ntt — design notes for the AVX-512 kernels
 
 Target machine only: Intel i7-11850H (Tiger Lake), single thread. Goal: forward NTT of binary
-polynomials over R_q = Z_q[X]/(X^648 - X^324 + 1), q in {3889, 9721}, as fast as possible. The
+polynomials over R_q = Z_q[X]/(X^648 - X^324 + 1), q in {3889, 9721} (section 1) and in
+{2917, 4861, 12637} (section 1b), as fast as possible, and the commitment over any list of those
+primes as limbs (section 6b). The
 input is a stream of `bin_fields::scalar::F162`; four consecutive elements form one ring element
 by plain interleaving (coefficient of X^{4m+k} = bit m of element k), see `src/f162.rs`. The
 yardstick is Gregor Seiler's estimate of ~650 cycles per polynomial for a generic-input NTT on this
@@ -186,14 +188,38 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
 
 `commit::<Q>(elems: &[F162], a: &[Batch32]) -> [u32; 648]` computes
 y[j] = sum_i A_i[j] * NTT_Q(w_i)[j] mod q for one row of A stored in the vertical layout
-(centered i16), `commit_2q` both primes off one slicing. Products are raw `vpdpwssd`
-accumulations into i32 (16 batches per fold-back for 3889, 8 for 9721, from |W| <= 7.5 q /
-2.29 q and |A| <= (q-1)/2); the fold-back x = l + (h + c) R mod q (l = low half as i16, h =
-high half, c = sign bit of the low half, R = 2^16 mod q) is exact; the accumulator is packed to
-8 lanes per slot; each 27-slot block is consumed through the kernel's `BlockSink` hook while in
-L1; the next batch's A rows are prefetched into L2 at the block boundaries. `commit_h` is the
-same commitment in the horizontal layout with L1-resident groups of 4 (front end, `ntt_gen_hbatch4`,
-`vpdpwssd` on lanes permuted to `4j + p`, f32-rounded exact reduction every 18 / 10 groups).
+(centered i16). Products are raw `vpdpwssd` accumulations into i32 (8 batches per fold-back for
+3889, 4 for 9721, from |W| <= 7.5 q / 2.29 q, |A| <= (q-1)/2 and four products per packed lane);
+the fold-back x = l + (h + c) R mod q (l = low half as i16, h = high half, c = sign bit of the low
+half, R = 2^16 mod q) is exact; the accumulator is packed to 8 lanes per slot; each 27-slot block
+is consumed through the kernel's `BlockSink` hook while in L1; the next batch's A rows are
+prefetched into L2 at the block boundaries. `commit_h` is the same commitment in the horizontal
+layout with L1-resident groups of 4 (front end, `ntt_gen_hbatch4`, `vpdpwssd` on lanes permuted to
+`4j + p`, f32-rounded exact reduction every 18 / 10 groups).
+
+**Limbs.** `commit_limbs_into(elems, limbs: &[Limb], keep, scratch, out)` runs a whole limb list
+off one front end: the `BinaryIndex32` rows depend on neither the prime nor the tree, so the
+witness is sliced once per batch and each `Limb { q, quad, a }` then adds one kernel pass, one
+accumulator and one A stream. `keep` writes the first limb's transform out of its `MacKeep` sink
+(what `fold` consumes); `Scratch` holds the accumulators across the chunks of one key.
+`commit_2q` and `commit_quad::<Q>` are the single-configuration entry points.
+
+**The quadratic basemul** (`mac_quad18`, the sink of `vertical_bin_quad`'s 18-row blocks). Leaf j
+occupies rows 2j, 2j+1, so a slot product is
+`(a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X` with `c_j = ParamsQ::<Q>::LEAF_C[j]`, and the
+commitment needs only its sum over the ring elements: three raw accumulators per leaf,
+`P_0 = sum a_0 b_0`, `P_1 = sum a_1 b_1`, `P_2`, combined once at the end into
+`y[2j] = P_0 + c_j P_1` and `y[2j+1] = P_2` (`finish_quad`). `P_2` is Karatsuba —
+`(a_0 + a_1)(b_0 + b_1)`, one `vpaddw` on each side and one multiply-port uop, the correction
+`- P_0 - P_1` folded into the combine — where `2 |W|` fits an i16 lane, i.e. for q = 2917
+(`karatsuba(q)`, a `const fn` of `vertical_bin_quad::output_bound`); 4861 and 12637 would reach
+49874 and 49032, and accumulate `a_0 b_1` and `a_1 b_0` into `P_2` with two products instead.
+Packing follows the splitting accumulator: `P_0 | P_1` of one leaf in the two lane groups of one
+vector, the `P_2` of two leaves in another (14 vectors per 18-row block, 32.3 KB, L1-resident),
+and each of the two accumulators has its own fold-back period from its own per-batch bound —
+`4 |W| |A|` against `4 (2|W|) (q-1)` (Karatsuba) or `8 |W| |A|` (schoolbook) — every one of them
+a `const` assertion that `acc_after_reduce + period * per_batch` fits i32. Periods: 16 / 4
+(2917), 8 / 4 (4861), 2 / 1 (12637).
 
 ## 7. Tests and benchmarks
 
@@ -217,3 +243,11 @@ same commitment in the horizontal layout with L1-resident groups of 4 (front end
   the `R_162` decomposition, both kernels against `scalar::ntt_quad` row for row, the i32 shadow
   model, the declared bounds, and the product identity through the SIMD outputs. The bench prints
   all five primes side by side.
+* `tests/limbs.rs` and `src/bin/bench_limbs.rs`: the limb list. Every limb's commitment against
+  the scalar reference in its own domain (`scalar::ntt` and a slot product, or
+  `mul_quad_slots(ntt_quad(lift4(w)), A)`), the four-way decomposition per limb, the accumulator
+  bounds and periods, adversarial inputs over more batches than any period, the whole
+  commit / expand / fold / verify pipeline for the limb lists `[9721]`, `[2917]`,
+  `[4861, 12637]` and all four, and the default configuration bit for bit against `commit_2q`.
+  The bench prints one limb of a commitment for all five primes: transform, whole commitment,
+  base multiplication, fold-back periods.

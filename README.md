@@ -3,7 +3,7 @@
 AVX-512 NTT and Ajtai commitment (inner product in the NTT domain) over the 1944-th
 cyclotomic ring
 
-    R_q = Z_q[X] / (X^648 - X^324 + 1),    1944 = 2^3 * 3^5,    q in {3889, 9721},
+    R_q = Z_q[X] / (X^648 - X^324 + 1),    1944 = 2^3 * 3^5,    q in {2917, 3889, 4861, 9721, 12637},
 
 for **binary inputs given as a stream of F162 elements**: four consecutive elements a, b, c, d
 of `bin_fields::scalar::F162` (the type used by binius64-f162, `F162([u64; 3])`, 162 bits)
@@ -11,10 +11,12 @@ are read as one ring element by plain interleaving,
 
     coefficient of X^{4m+k}  =  bit m of element k        (k = 0..4 for a, b, c, d;  m = 0..162),
 
-so 2^18 F162 elements are 2^16 ring elements with 0/1 coefficients. Both primes are 1 mod 1944,
-so R_q splits into 648 linear factors and the transform is complete. Single-threaded, tuned for
-one specific core (Intel i7-11850H, Tiger Lake), signed 16-bit lanes throughout, Rust stable.
-All bit-shuffling from the F162 byte layout to the kernel's input is inside the measured time.
+so 2^18 F162 elements are 2^16 ring elements with 0/1 coefficients. A commitment is taken over a
+list of limbs: the base prime 3889 and any subset of the four others. 3889 and 9721 are 1 mod
+1944, so R_q splits into 648 linear factors; 2917, 4861 and 12637 are 1 mod 972 only, and the
+transform ends at 324 quadratic leaves. Single-threaded, tuned for one specific core (Intel
+i7-11850H, Tiger Lake), signed 16-bit lanes throughout, Rust stable. All bit-shuffling from the
+F162 byte layout to the kernel's input is inside the measured time.
 
 ## Headline: the full inner product, 2^18 F162 = 2^16 ring elements, one core
 
@@ -71,30 +73,42 @@ variants), `bench_commit_h` (the horizontal one), `bench_f162` (the NTT alone).
 
 ## API
 
-Five types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
+Six types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
 
 * `PowerOfThreeRingElement { v: [i16; 162] }` — one element of the 3^5-th cyclotomic ring
   `R_162 = Z_q[Z] / Phi_243(Z)` for one prime, in its NTT domain: 162 slots, centered signed
   residues in `[-(q-1)/2, (q-1)/2]` (`normalized(q)` gives `[0, q)`).
-* `PowerOfThreeRingElementWithTwoLimbs { limb: [PowerOfThreeRingElement; 2] }` — limb k is the
-  residue modulo `PRIMES[k]`, `PRIMES = [3889, 9721]`.
-* `CommitmentKey` — the matrix A for both primes, uniform in the NTT domain, centered, in the
-  vertical layout `commit` streams. `CommitmentKey::random(len_f162, seed)` (length in F162
-  elements, a multiple of 128 = 32 ring elements), `len_f162()`, `bytes()`.
+* `AdditionalLimb { Q2917, Q4861, Q9721, Q12637 }` — a limb a key carries on top of the base prime
+  `BASE_PRIME = 3889`, with `prime()` and `is_quadratic()`. `Q9721` is the second prime for which
+  `R_648` splits into 648 linear slots; the other three are the quadratic-slot primes of "Limbs"
+  below, for which it ends at 324 quadratic leaves. The two kinds differ in the kernel and in the
+  slot algebra, in nothing that reaches the caller.
+* `PowerOfThreeRingElementWithLimbs { limbs: Vec<PowerOfThreeRingElement> }` — one element of
+  `R_162` by its residues: `base()` is the residue modulo `BASE_PRIME`, `additional(i)` the one
+  modulo the key's `i`-th additional limb, in the order the key was built with.
+* `CommitmentKey` — the matrix A for every limb of the key, uniform in that limb's NTT domain,
+  centered, in the vertical layout the kernels stream.
+  `CommitmentKey::random(len_f162, seed, additional)` (length in F162 elements, a multiple of
+  128 = 32 ring elements), `random_default(len_f162, seed)` for the default limb list `[Q9721]`,
+  and `len_f162()`, `limbs()`, `additional()`, `prime(k)`, `bytes()`.
 * `VerticallyAlignedMatrix<T>` — `rows()` x `cols()`, stored column by column, with `get(row, col)`,
   `column(col)`, `columns()`. One column is one commitment.
 * `AuxData` — what `commit_with_aux` leaves behind for the folding step below: the witness's
-  transform modulo `PRIMES[0]` and the raw 648-slot commitments of the `r` chunks.
+  transform modulo `BASE_PRIME` and the raw 648-row commitments of the `r` chunks, per limb.
 
 ```rust
-let ck = CommitmentKey::random(1 << 18, seed);
+use bin_ntt::AdditionalLimb::*;
+let ck = CommitmentKey::random(1 << 18, seed, &[Q9721, Q2917]);
 let c = ck.commit(&witness, 1);
-let slots = &c.get(0, 0).limb[0].v[..];   // component 0 mod 3889: 162 centered slots
+let slots = &c.get(0, 0).base().v[..];          // component 0 mod 3889: 162 centered slots
+let other = &c.get(0, 0).additional(1).v[..];   // the same component mod 2917
 ```
 
 `ck.commit(&witness, r)` takes `r` a power of two and `witness.len() == r * ck.len_f162()`. It
 splits the witness into r consecutive chunks, commits each under the same key, and returns a
-**4 x r** matrix of `PowerOfThreeRingElementWithTwoLimbs`: column c is the commitment of chunk c.
+**4 x r** matrix of `PowerOfThreeRingElementWithLimbs`: column c is the commitment of chunk c, and
+entry `limbs[k]` of every element is its residue modulo the key's k-th limb. One front end slices
+the witness for all limbs; each limb then costs one kernel pass and one A stream.
 
 **The four rows.** One commitment is a single element y of `R_648`; the four rows are its four
 components in the basis 1, X, X^2, X^3 over `S = Z_q[Y]/(Y^162 - Y^81 + 1) = R_162`, Y = X^4,
@@ -114,15 +128,15 @@ y_k(theta^v) — equivalently the component read as a polynomial in Z evaluated 
 radix-4 butterfly (i^2 = -1, so one product per class) over 16 slots at a time, 0.18 ms even when
 it runs 512 times.
 
-**Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 F162 = 2^16 ring elements,
-both primes, best of 3, ~4.2 GHz):
+**Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 F162 = 2^16 ring elements, the
+default limb list `[Q9721]`, best of 3, ~4.2 GHz):
 
-| r   | key, both primes | total ms | cycles / ring element and prime | of which decomposition |
-|-----|-----------------:|---------:|--------------------------------:|-----------------------:|
-| 1   |          170 MB  | **15.3** | **488**                         | 1 us                   |
-| 4   |         42.5 MB  | 14.5     | 456                             | 5 us                   |
-| 16  |         10.6 MB  | **13.5** | **417**                         | 13 us                  |
-| 256 |         0.66 MB  | 13.9     | 433                             | 177 us                 |
+| r   | key, two limbs | total ms | cycles / ring element and limb | of which decomposition |
+|-----|---------------:|---------:|-------------------------------:|-----------------------:|
+| 1   |        170 MB  | **15.2** | **487**                        | 2 us                   |
+| 4   |       42.5 MB  | 14.4     | 454                            | 8 us                   |
+| 16  |       10.6 MB  | **13.4** | **414**                        | 16 us                  |
+| 256 |       0.66 MB  | 13.8     | 432                            | 207 us                 |
 
 The same 170 MB of A is read whatever r is; splitting the witness only changes where it is read
 from. At r = 16 the key is 10.6 MB and L3-resident, which is worth 15 % over the cold r = 1 run; at
@@ -131,14 +145,61 @@ decomposition and to the per-chunk fixed cost of the kernel. Front end plus tran
 cache-resident, is 316 / 340 cycles per ring element (q = 3889 / 9721) and the base multiplication
 59, so 375 / 399 of the r = 1 cost is compute and the rest is A that does not hide.
 
+### Limbs
+
+Five primes can be a limb: `BASE_PRIME = 3889` and the four `AdditionalLimb`s. 3889 and 9721 are
+`1 mod 1944`, so `R_648` splits into 648 linear slots and a limb's slot product is a scalar
+product; 2917, 4861 and 12637 are `1 mod 972` but `973 mod 1944`, so it ends at 324 quadratic
+leaves `Z_q[X]/(X^2 - psi'^u)` and a slot product is a quadratic product (see "Quadratic-slot
+limbs" for the tree and "The commitment" for how the commitment accumulates it). Every limb has
+the same public output: four elements of `R_162`, 162 slots each, in the `POW3_SLOT_EXP` order —
+`decompose_648_to_4x162` for a splitting limb, `decompose_quad_648_to_4x162` for a quadratic one,
+and the class order of the two maps is the same (a `const` assertion in `api.rs`).
+
+**Measured**, one limb of a commitment over 2^18 F162 = 2^16 ring elements against its own 85 MB
+of A, best of 3, ~4.2 GHz (`cargo run --release --offline --bin bench_limbs -- 2`); cheapest
+first:
+
+| q     | tree             | transform | commitment | cycles / element | of which basemul | fold-back |
+|-------|------------------|----------:|-----------:|-----------------:|-----------------:|----------:|
+| 2917  | quadratic, 324x2 | 302       | **7.6 ms** | **497**          | 100              | 16 / 4    |
+| 3889  | split, 648       | 316       | **7.5 ms** | **502**          | 58               | 8         |
+| 4861  | quadratic, 324x2 | 302       | 7.7 ms     | 502              | 100              | 8 / 4     |
+| 9721  | split, 648       | 345       | 7.9 ms     | 516              | 58               | 4         |
+| 12637 | quadratic, 324x2 | 324       | 8.4 ms     | 537              | 100              | 2 / 1     |
+
+"transform" is the front end plus the binary kernel, cache-resident, in cycles per ring element;
+"basemul" is the block sink's multiply-accumulate alone with the transform block in L1 and A in
+L2; "fold-back" is how many batches an accumulator absorbs between two exact fold-backs (for a
+quadratic limb, `P_0 | P_1` and `P_2` have their own). A quadratic limb wins ~14 to ~40 cycles per
+element on the transform and gives ~42 back on the base multiplication, which carries three sums
+per two rows instead of one per row: 2917 and 3889 are a dead heat, and the ranking of the five is
+2917 ~ 3889 ~ 4861 < 9721 < 12637.
+
+The reduction schedule of each limb's binary kernel, and the accumulator bounds the commitment
+derives from its declared output bound (`2^15/q` is the head-room):
+
+| q     | 2^15/q | binary kernel                                | output  | accumulator |
+|-------|-------:|----------------------------------------------|--------:|-------------|
+| 2917  | 11.23  | no reduction anywhere                        | 4.87 q  | Karatsuba `P_2`; 16 batches per fold-back for `P_0 \| P_1`, 4 for `P_2` |
+| 3889  | 8.42   | no reduction anywhere                        | 7.50 q  | 8 batches per fold-back |
+| 4861  | 6.74   | no reduction anywhere                        | 5.13 q  | schoolbook `P_2` (`2\|W\|` leaves i16); 8 batches, 4 for `P_2` |
+| 9721  | 3.37   | lookup Barrett on the `a0` of level 4, multiply Barrett on level 6 | 2.29 q | 4 batches per fold-back |
+| 12637 | 2.59   | lookup Barrett on the `a0` of levels 3, 4, 5 | 1.94 q  | schoolbook `P_2`; 2 batches, 1 for `P_2` |
+
+`main.rs` takes `--limbs 2917,4861,9721,12637` (any subset) and prints, per configured limb, the
+commitment of that limb alone and the totals. With all five limbs the 2^18-F162 commitment is
+40.9 ms (530 cycles per ring element and limb, 425 MB of key), the fold 4.7 ms and the verifier
+2.1 ms.
+
 ### Short challenges
 
 `src/challenge.rs`, re-exported at the crate root, is the challenge side of a Fiat-Shamir protocol
 over this commitment: short elements of the same `R_162` the commitment's four components live in.
 
 * `Transcript` — a blake3 transcript. `Transcript::new(domain)`, `absorb_bytes`, `absorb_u64`,
-  `absorb_elements(&[PowerOfThreeRingElementWithTwoLimbs])` (the raw little-endian `i16` slots,
-  limb 0 then limb 1, 648 bytes per element). `fill(label, out)` clones the absorbing state,
+  `absorb_elements(&[PowerOfThreeRingElementWithLimbs])` (the raw little-endian `i16` slots, limb
+  after limb, 324 bytes per limb and element). `fill(label, out)` clones the absorbing state,
   appends a per-transcript sample counter and the label, and reads the extendable output — so a
   derivation is bound to everything absorbed before it, successive derivations are independent,
   and everything is a deterministic function of the absorbed bytes.
@@ -204,9 +265,9 @@ of scalars per slot, `NTT(v)[u] = sum_j NTT(c_j)[u] NTT(W_j)[u]`, with no ring m
 anywhere.
 
 `CommitmentKey::commit_with_aux(&witness, r)` returns the same `4 x r` matrix as `commit` together
-with an opaque `AuxData`: the transform of every witness element modulo `q1 = 3889`, written
-straight out of the commitment's block sink with non-temporal stores, and the raw 648-slot
-commitments `C_j` of the `r` chunks for both primes. `fold(&key, &aux, &challenges)` then returns
+with an opaque `AuxData`: the transform of every witness element modulo the base limb `q1 = 3889`,
+written straight out of that limb's block sink with non-temporal stores, and the raw 648-row
+commitments `C_j` of the `r` chunks for every limb. `fold(&key, &aux, &challenges)` then returns
 
 ```rust
 let (c, aux) = ck.commit_with_aux(&witness, 256);          // 4 x 256, plus 85 MB of aux
@@ -221,9 +282,16 @@ let coeffs = &out.v[0].v[..];        // v as 648 centered integer coefficients o
 
 `FoldOutput` carries `v`, the amortised witness as `len_ring` `RingElement`s in **coefficient
 form**, centered (`v_components(i)` splits one into its four `R_162` components, coefficients
-`4m + k`); `v_ntt`, its transform for both primes; `y = A v` as four
-`PowerOfThreeRingElementWithTwoLimbs`, the same shape as one column of a commitment; `y_raw`, the
-same before the decomposition; and `max_abs_v`.
+`4m + k`); `v_ntt`, its transform for every limb; `y = A v` as four
+`PowerOfThreeRingElementWithLimbs`, the same shape as one column of a commitment; `y_raw`, the
+same before the decomposition, 648 rows per limb; and `max_abs_v`.
+
+Only the base limb's transform is kept, so an additional limb costs a forward transform of `v` —
+`vertical_gen` for a splitting limb, `vertical_gen_quad` for a quadratic one, both fed the
+centered coefficients of `v` (`|v| <= (q1-1)/2 <= q`, their input bound) — and its own `A v`,
+which for a quadratic limb runs the same three-accumulator basemul as the commitment. Neither
+depends on `r`: at `r = 256` the four additional limbs together add 0.16 ms of forward transform
+and 0.08 ms of `A v` to a 4.5 ms fold.
 
 **The accumulation.** The witness transform keeps the binary kernel's own lazy reduction
 (`|W| <= 7.5 q1`) and the challenge slots are fully reduced (`|c| <= (q1-1)/2`), so one chunk adds
@@ -241,8 +309,8 @@ terms, so it has mean zero and standard deviation `sqrt(r w / 2) = 52`; the larg
 `648 x 256` coefficients measures **265**, against `q1 / 2 = 1944.5`. The centered lift of
 `v mod q1` is therefore the true integer vector, which is what makes `v` usable as the witness of
 the next round, and it is the only place in the fold where the integers matter. Modulo `q1` the
-accumulator's own output is already `NTT(v)`, so only `q2` needs a forward transform — of 8
-batches, not of the witness.
+accumulator's own output is already `NTT(v)`, so only the additional limbs need a forward
+transform — of 8 batches each, not of the witness.
 
 **Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 `F162` = 2^16 ring elements,
 `r = 256` chunks of 256 ring elements, weight-21 challenges, best of 3, ~4.2 GHz):
@@ -256,8 +324,8 @@ batches, not of the witness.
 | — challenge NTTs                             | 0.10     | 8 batches of `c(-X^4)`, `vertical_gen`          |
 | — accumulation                               | 4.27     | 85 MB read at 20 GB/s: the DRAM floor           |
 | — inverse NTT, `q1`                          | 0.07     | 8 batches, `vertical_gen::intt_gen_batch32`, plus reading `v` out of the vertical layout |
-| — forward NTT, `q2`                          | 0.03     | 8 batches, `vertical_gen`                       |
-| — `y = A v`                                  | 0.04     | 8 batches per prime on the commitment's `vpdpwssd` accumulator |
+| — forward NTT, additional limbs              | 0.04     | 8 batches per limb, `vertical_gen` / `vertical_gen_quad` |
+| — `y = A v`                                  | 0.03     | 8 batches per limb on the commitment's `vpdpwssd` accumulator |
 | `commit_into_aux` + `fold`                   | **19.3** | the whole prover is in "Left-expansion and the binary side" below |
 
 The 85 MB an `AuxData` holds is one `mmap`: `commit_with_aux` measures 37 ms because 22 of them
@@ -318,9 +386,13 @@ let v = Verifier { key: &ck, commitments: &RawCommitments::from_aux(&aux), point
 assert!(v.verify(&u, &challenges, &out.v));        // u^T eq(r1) = t,  A v = Y c,  B v = u^T c
 ```
 
-`verify_fold` recomputes `A v` from `v` alone — the centered range of `q1` first, then
-`vertical_gen::ntt_gen_batch32` on the 8 batches per prime and the commitment's own accumulator —
-and compares it slot by slot against `sum_j c_j C_j`, so nothing of the prover's is trusted.
+`verify_fold` recomputes `A v` from `v` alone — the centered range of `q1` first, then the limb's
+own forward kernel on the 8 batches (`vertical_gen`, or `vertical_gen_quad` for a quadratic limb)
+and the commitment's own accumulator — and compares it row by row against `sum_j c_j C_j`, whose
+slot products are scalar for a splitting limb and `scalar::mul_quad_slots`' leaf products for a
+quadratic one. `RawCommitments` holds those `C_j` per limb; nothing of the prover's is trusted,
+and every limb is checked. Over the default two limbs it costs 0.65 ms, over all five 2.1 ms, the
+challenge transforms being the bulk of it.
 
 **The kernels.** Every step is one dot product over `F`, and all of them run on `bin_fields`'
 word-sliced AVX-512 kernels: limb k of 8 consecutive elements in one zmm, `mac_soa8` XOR-ing the
@@ -336,26 +408,27 @@ the table above at the clock this one settled at):
 
 | group     | step                                | ms        | note                                                     |
 |-----------|-------------------------------------|----------:|----------------------------------------------------------|
-| prover    | `commit_into_aux`                   | 14.94     |                                                          |
-| prover    | 256 challenges                      | 2.44      |                                                          |
-| prover    | `fold`                              | 4.53      |                                                          |
+| prover    | `commit_into_aux`                   | 14.61     | 63.9 Mcycles                                             |
+| prover    | 256 challenges                      | 2.15      |                                                          |
+| prover    | `fold`                              | 4.54      | 21.1 Mcycles                                             |
 | prover    | `left_expand`                       | **0.28**  | 2^18 products, one per witness element                   |
-| prover    | **total**                           | **22.19** |                                                          |
-| statement | `sample_point`                      | 0.0004    | one XOF derivation, 18 elements                          |
-| statement | `evaluate_mle`                      | **0.297** | the same 2^18 products, plus 256                         |
+| prover    | **total**                           | **21.56** |                                                          |
+| statement | `sample_point`                      | 0.0005    | one XOF derivation, 18 elements                          |
+| statement | `evaluate_mle`                      | **0.299** | the same 2^18 products, plus 256                         |
 | verifier  | `check_claim`                       | 0.007     | 256 products                                             |
-| verifier  | `fold_binary`                       | 0.005     | 256 products                                             |
-| verifier  | `verify_fold`                       | 0.611     | 2 x (`NTT(v)` 0.04, `A v` 0.011, 256 challenge NTTs 0.10, 648-slot `sum_j c_j C_j` 0.08) |
-| verifier  | `verify_binary`                     | 0.099     | `v mod 2` bit by bit 0.073, `eq(r0, .)` 0.025, the 1024-term product 0.002 |
-| verifier  | **total**                           | **0.723** |                                                          |
+| verifier  | `fold_binary`                       | 0.004     | 256 products                                             |
+| verifier  | `verify_fold`                       | 0.640     | per limb: `NTT(v)` 0.04, `A v` 0.01, 256 challenge NTTs 0.10, 648-row `sum_j c_j C_j` 0.08 |
+| verifier  | `verify_binary`                     | 0.102     | `v mod 2` bit by bit 0.073, `eq(r0, .)` 0.025, the 1024-term product 0.002 |
+| verifier  | **total**                           | **0.754** |                                                          |
 
 The left expansion costs 0.28 ms against the fold's 4.5 and the commitment's 15, so it is 1.3 % of
-the prover; the whole verifier is 0.72 ms, another 30x below that. The same 2^18 products through `F162`'s scalar
+the prover; the whole verifier is 0.75 ms, another 30x below that. The same 2^18 products through `F162`'s scalar
 `Mul` — one `pclmul` chain and one reduction each — take 2.74 ms, so the word-sliced path with its
 deferred reduction is **9.2x** faster; at 0.28 ms it is reading the 6.3 MB witness at 21 GB/s,
 which is this machine's DRAM read bandwidth, so the transpose inside the loop is free and the step
 is at its floor. `verify_fold` has no such floor to hit: its four pieces are all small, and the
-largest of them is transforming the 256 challenges, which the verifier cannot avoid.
+largest of them is transforming the 256 challenges, which the verifier cannot avoid — and which
+it pays once per limb, so a five-limb key takes it to 2.1 ms against a 45.6 ms prover.
 
 ## Building and testing
 
@@ -364,10 +437,13 @@ F/BW/VL/VBMI/VBMI2/VNNI/GFNI and are tuned for Tiger Lake only. The `bin-fields`
 pinned to the git revision binius64-f162 resolves to and is vendored in the cargo git cache, so
 `--offline` works.
 
-    cargo test --release --offline     # ~100 tests: scalar reference, every kernel, driver and
-                                       # commitment vs the reference, bounds via i32/i64 shadow
-                                       # models, overflow proofs, bit-exact equivalences
+    cargo test --release --offline     # ~130 tests: scalar reference, every kernel, driver and
+                                       # commitment vs the reference, every limb and limb list,
+                                       # bounds via i32/i64 shadow models, overflow proofs,
+                                       # bit-exact equivalences
     cargo run --release --offline --bin bench_commit -- 2
+    cargo run --release --offline --bin bench_limbs -- 2
+    cargo run --release --offline -- 2 18 --limbs 2917,4861,9721,12637
 
 ## What is computed
 
@@ -471,9 +547,9 @@ Three more primes are supported, for which `R_648` does **not** split completely
 so q = 1 mod 972 but q = 973 mod 1944: a primitive 972-nd root of unity `psi'` exists, a 1944-th
 one does not, and `Phi_1944` factors into **324 irreducible quadratics** `X^2 - psi'^u`, u over the
 324 units mod 972. (The two roots of such a factor are `psi^u` and `psi^{u+972} = -psi^u` in the
-quadratic extension where `psi = sqrt(psi')` would live.) These are limbs for a multi-limb API that
-wants more primes of this shape than the two that split; 2917 is the smallest, which is what makes
-it interesting: `2^15 / q = 11.2` lanes of head-room.
+quadratic extension where `psi = sqrt(psi')` would live.) They are `AdditionalLimb`s of a key like
+any other, for a caller that wants more primes than the two that split; 2917 is the smallest,
+which is what makes it interesting: `2^15 / q = 11.2` lanes of head-room.
 
 **The tree** is the splitting one with its *second* radix-2 level — the one that needs a 1944-th
 root — removed, and nothing else changed:
@@ -556,7 +632,7 @@ the saved loads and stores on moves; splitting levels 2 and 3 into separate pass
 (379 against 382 at 80 more instructions). In the binary kernel the two forms of the tail are a
 dead heat at 267, but offering both behind a `const` parameter costs 60 cycles, so it ships one.
 
-**What the multi-limb API has to know.** The 648 units mod 1944 that the splitting tree evaluates
+**What a limb of this shape owes the API.** The 648 units mod 1944 that the splitting tree evaluates
 at collapse pairwise into the 324 leaves here, and both roots of a leaf lie in the same `R_162`
 class `v = u mod 486` — the exponent that names an `R_162` slot — because `theta = psi^4 = psi'^2`
 and `theta^u` depends only on `u mod 486`. Each of the 162 classes therefore owns exactly two
@@ -571,13 +647,16 @@ unchanged. With `Y = X^4` a leaf has `Y = c^2 = psi'^{2v} = theta^v` whichever o
 `E+` the plus leaf's two rows, `E-` the minus leaf's. `scalar::decompose_quad_648_to_4x162::<Q>`
 is that map, output in `api::POW3_SLOT_EXP` order and fully reduced — the counterpart of
 `decompose_648_to_4x162`'s radix-4 butterfly, and cheaper (2 multiplications per class against 5).
+`api` runs it with the per-class constant `2^-1 psi'^{-v}` precomputed, which is what a commitment
+of `r` chunks calls `r` times per quadratic limb (0.2 ms at `r = 256`), and `tests/limbs.rs`
+checks that against the scalar map.
 
 ## The commitment (`simd/commit.rs`)
 
 * **Raw products, rare reductions.** An inner product needs the sum of the products mod q, not
   each product mod q. `vpdpwssd` accumulates 16 x 16-bit products pairwise into 32-bit lanes —
   one multiply-port uop per slot vector and batch, against five for a Montgomery product plus
-  add — and the i32 lanes absorb 16 batches (3889) or 8 batches (9721) of products before a
+  add — and the i32 lanes absorb 8 batches (3889) or 4 batches (9721) of products before a
   fold-back, given |W| <= 7.5 q / 2.29 q (the transform's proved output bound) and
   |A| <= (q-1)/2. The fold-back is exact: write a lane as 2^16 h + u with u the unsigned low
   half; reading the low half as a signed word l gives u = l + 2^16 c with c its sign bit, so
@@ -604,7 +683,34 @@ is that map, output in `api::POW3_SLOT_EXP` order and fully reduced — the coun
   27-slot block) vs L2 (a 41 KB batch): 60 vs 85 cycles per element, against a 39-cycle uop
   floor — the L1 residency of the transform output is worth ~5 % of the commitment; the
   accumulator's residency and the prefetch schedule are what matter.
-* `commit_2q` runs both primes off one front end (two accumulators, 170 MB of A).
+* `commit_limbs` runs a whole limb list off one front end: the index rows depend on neither the
+  prime nor the tree, so the witness is sliced once per batch and each limb then adds one kernel
+  pass, one accumulator and one A stream. `commit_2q` is the two-prime special case.
+
+**The quadratic basemul: Karatsuba on the plain rows.** A quadratic limb's kernel hands its 648
+output rows out as 36 blocks of 18 — rows `2j`, `2j+1` being the two coefficients `a_0, a_1` of
+leaf `j` — and the leaf's product against the key's rows `b_0, b_1` is
+`(a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X` with `c_j = psi'^QUAD_SLOT_EXP[j]`. The
+commitment wants only the sum over the ring elements, so three raw `vpdpwssd` accumulators per
+leaf carry it: `P_0 += a_0 b_0`, `P_1 += a_1 b_1` and `P_2`, from which `y[2j] = P_0 + c_j P_1`
+and `y[2j+1] = P_2 - P_0 - P_1` once per leaf at the end. Karatsuba forms `P_2` as
+`(a_0 + a_1)(b_0 + b_1)`: one `vpaddw` on each side and *one* multiply-port uop, against two for
+`a_0 b_1 + a_1 b_0`. `vpdpwssd` pairs adjacent 16-bit lanes, i.e. adjacent ring elements, which
+the commitment sums over anyway.
+
+The A side always fits (`|b_0 + b_1| <= q - 1`), but the W side is the kernel's lazily reduced
+output: `2 |W|` is `9.7 q = 28412` for 2917 and would be 49874 and 49032 for 4861 and 12637, past
+i16. Those two accumulate `a_0 b_1` and `a_1 b_0` into `P_2` instead — the same three
+accumulators, one more multiply-port uop per leaf, the Karatsuba correction dropped
+(`simd::commit::karatsuba` is that condition, a `const fn` of the declared output bound). It costs
+nothing measurable either way: the sink is bound by its accumulator traffic, not by the multiply
+port, and 2917 and 4861 both measure 100 cycles per ring element against the splitting limbs' 58.
+The reason is the packing — three sums per two rows against one per row, so 27 lane groups per 18
+rows against 27 per 27 rows, half again as much accumulator per row. The two accumulators are
+packed like the splitting one (`P_0 | P_1` of a leaf in one vector, the `P_2` of two leaves in
+another: 14 vectors per block, 32.3 KB in all, L1-resident), each with its own fold-back period
+from its own per-batch bound — `4 |W| |A|` for `P_0 | P_1` against `4 (2|W|) (q-1)` for a
+Karatsuba `P_2` — both `const`-asserted to fit i32 exactly as the splitting bound is.
 
 ### The horizontal commitment (`simd/commit_h.rs`)
 
@@ -821,11 +927,12 @@ Measured or modelled on this core, roughly in order of value for the commitment:
 
 ## Layout of the crate
 
-    src/api.rs                  the public API: CommitmentKey, PowerOfThreeRingElement(WithTwoLimbs), VerticallyAlignedMatrix
+    src/api.rs                  the public API: AdditionalLimb, CommitmentKey, PowerOfThreeRingElement(WithLimbs), VerticallyAlignedMatrix
     src/challenge.rs            short fixed-weight ternary challenges over R_162, blake3 transcript
     src/fold.rs                 the folding step: v = sum_j c_j W_j in the NTT domain, and A v
     src/eval.rs                 the left-expansion over F162 (Pi_translate), the binary fold, the verifier
-    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256, folds the r = 256 run and verifies it
+    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256, folds the r = 256 run and verifies it;
+                                --limbs 2917,4861,9721,12637 selects the limb list and times each limb
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
     src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)
@@ -836,7 +943,8 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/simd/vertical_bin_asm.rs the binary kernel (LUT + folding, asm levels 4-6, block hook) — production
     src/simd/vertical_bin.rs    the same kernel in intrinsics (reference for the asm one)
     src/simd/ntt_f162.rs        NTT drivers for the F162 input (single prime, both primes, streamed, Montgomery form)
-    src/simd/commit.rs          the Ajtai commitment on the vertical kernel (block-fused, VNNI accumulation)
+    src/simd/commit.rs          the Ajtai commitment on the vertical kernels (block-fused, VNNI accumulation),
+                                over a list of limbs; the quadratic basemul and its accumulators
     src/simd/commit_h.rs        the commitment in the horizontal layout (L1-resident groups of 4)
     src/simd/vertical_bin_quad.rs the binary kernel for the quadratic-slot tree (q in QS_QUAD)
     src/simd/vertical_gen_quad.rs generic-input kernel for the quadratic-slot tree
@@ -846,6 +954,9 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)
     src/bin/bench_commit.rs     the headline benchmark;  bench_commit_h.rs, bench_f162.rs, bench_*.rs
     src/bin/bench_quad.rs       the quadratic-slot kernels next to the splitting ones (all five primes)
+    src/bin/bench_limbs.rs      one limb of a commitment, all five primes: transform, commitment, basemul
     src/bin/kernel_loop.rs      one kernel in a tight loop, for perf stat / perf record
+    tests/limbs.rs              every limb against the scalar reference, the four-limb pipelines, the
+                                default configuration bit for bit
     tests/*.rs                  correctness;  tools/  C microbenchmarks (ports, instruction table, DRAM)
     DESIGN.md                   design notes: tree, arithmetic, bounds, port facts, kernel APIs

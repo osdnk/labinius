@@ -16,13 +16,13 @@
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-//! # use bin_ntt::PowerOfThreeRingElementWithTwoLimbs;
-//! # let commitment = [PowerOfThreeRingElementWithTwoLimbs::zero()];
+//! # use bin_ntt::PowerOfThreeRingElementWithLimbs;
+//! # let commitment = [PowerOfThreeRingElementWithLimbs::zero(2)];
 //! let mut t = Transcript::new(b"bin-ntt/example");
 //! t.absorb_elements(&commitment);
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
-use crate::api::{PowerOfThreeRingElementWithTwoLimbs, N162};
+use crate::api::{PowerOfThreeRingElementWithLimbs, N162};
 use bin_fields::scalar::F162;
 use blake3::Hasher;
 use std::f64::consts::PI;
@@ -76,13 +76,13 @@ impl Transcript {
         self.state.update(&x.to_le_bytes());
     }
 
-    /// Absorb ring elements as their raw little-endian `i16` slots, limb 0 then limb 1: 648 bytes
-    /// per element, no allocation.
-    pub fn absorb_elements(&mut self, elements: &[PowerOfThreeRingElementWithTwoLimbs]) {
+    /// Absorb ring elements as their raw little-endian `i16` slots, limb after limb: 324 bytes
+    /// per limb and element (648 for the default two-limb key).
+    pub fn absorb_elements(&mut self, elements: &[PowerOfThreeRingElementWithLimbs]) {
         self.state.update(&(elements.len() as u64).to_le_bytes());
-        let mut buf = [0u8; 4 * N162];
+        let mut buf = vec![0u8; 2 * N162 * elements.first().map_or(0, |e| e.len())];
         for e in elements {
-            for (k, limb) in e.limb.iter().enumerate() {
+            for (k, limb) in e.limbs.iter().enumerate() {
                 for (s, &x) in limb.v.iter().enumerate() {
                     buf[2 * (k * N162 + s)..2 * (k * N162 + s) + 2]
                         .copy_from_slice(&x.to_le_bytes());

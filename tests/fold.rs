@@ -20,7 +20,7 @@ fn witness(n: usize, seed: u64) -> Vec<F162> {
 
 /// `r` challenges bound to the commitment, as a verifier would draw them.
 fn challenges(
-    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithTwoLimbs>,
+    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithLimbs>,
     r: usize,
 ) -> Vec<ShortChallenge> {
     let mut t = Transcript::new(b"bin-ntt/test/fold");
@@ -93,7 +93,7 @@ fn check_aux(aux: &AuxData, w: &[F162], len_ring: usize) {
 
 /// `commit_with_aux` on `r` chunks of `len_f162` `F162`, checked against everything scalar.
 fn run(len_f162: usize, r: usize, deep: bool) {
-    let ck = CommitmentKey::random(len_f162, 0xF01D ^ r as u64);
+    let ck = CommitmentKey::random_default(len_f162, 0xF01D ^ r as u64);
     let len_ring = len_f162 / 4;
     let w = witness(r * len_f162, 0xC0FFEE ^ (r as u64) << 8);
 
@@ -210,11 +210,11 @@ fn run(len_f162: usize, r: usize, deep: bool) {
         for t in 0..4 {
             for s in 0..N162 {
                 assert_eq!(
-                    (out.y[t].limb[0].v[s] as i32).rem_euclid(Q1 as i32) as u32,
+                    (out.y[t].limbs[0].v[s] as i32).rem_euclid(Q1 as i32) as u32,
                     want[t][s]
                 );
                 assert_eq!(
-                    (out.y[t].limb[1].v[s] as i32).rem_euclid(Q2 as i32) as u32,
+                    (out.y[t].limbs[1].v[s] as i32).rem_euclid(Q2 as i32) as u32,
                     want2[t][s]
                 );
             }
@@ -242,7 +242,7 @@ fn crosses_the_fold_back() {
 #[test]
 fn deterministic() {
     let (len_f162, r) = (256usize, 8usize);
-    let ck = CommitmentKey::random(len_f162, 0xD37);
+    let ck = CommitmentKey::random_default(len_f162, 0xD37);
     let w = witness(r * len_f162, 0xD37E);
     let (c1, a1) = ck.commit_with_aux(&w, r);
     let (c2, a2) = ck.commit_with_aux(&w, r);

@@ -28,16 +28,17 @@
 //! products, and the accumulator is folded back exactly, `x = l + (h + c) R mod q`, every
 //! [`FOLD_PERIOD`] chunks.
 //!
-//! Only the small prime's transform is kept. `v` is inverted back to coefficients modulo
+//! Only the base limb's transform is kept. `v` is inverted back to coefficients modulo
 //! `q1 = 3889` — where it becomes a genuine small-integer vector, see [`FoldOutput::max_abs_v`] —
-//! and transformed forward again modulo `q2 = 9721`, which is why the second prime costs an
-//! 8-batch NTT instead of a second 85 MB stream.
+//! and transformed forward again modulo every additional limb (`vertical_gen`, or
+//! `vertical_gen_quad` for a quadratic-slot one), which is why an additional limb costs an
+//! 8-batch NTT and its own `A v` instead of a second 85 MB stream.
 //!
 //! ```no_run
 //! use bin_ntt::{fold, CommitmentKey, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
 //! # use bin_fields::scalar::F162;
 //! # let witness: Vec<F162> = Vec::new();
-//! let ck = CommitmentKey::random(1 << 10, 0xC0FFEE);
+//! let ck = CommitmentKey::random_default(1 << 10, 0xC0FFEE);
 //! let (c, aux) = ck.commit_with_aux(&witness, 256);
 //! let mut t = Transcript::new(b"bin-ntt/fold");
 //! for j in 0..256 {
@@ -50,20 +51,23 @@
 //! let _ = &out.v; // the amortised witness, 256 ring elements, centered coefficients
 //! ```
 use crate::api::{
-    decompose_components, AuxData, CommitmentKey, PowerOfThreeRingElement,
-    PowerOfThreeRingElementWithTwoLimbs, N162, PRIMES,
+    components_of, AuxData, CommitmentKey, PowerOfThreeRingElementWithLimbs, BASE_PRIME, N162,
+    PRIMES,
 };
 use crate::challenge::ShortChallenge;
-use crate::params::N;
+use crate::params::{ParamsQ, N, QUAD_SLOTS};
 use crate::simd::commit as cm;
-use crate::simd::vertical_gen::{intt_gen_batch32, ntt_gen_batch32};
+use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
+use crate::simd::vertical_gen_quad::{self as vgq, ntt_quad_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
 use std::time::Instant;
 
-/// The prime the witness transform is kept in, and the one the fold accumulates over.
-pub const Q1: u16 = PRIMES[0];
-/// The second prime, reached by an inverse transform of `v` and a forward one on 8 batches.
+/// The prime the witness transform is kept in, and the one the fold accumulates over: the base
+/// limb of every key.
+pub const Q1: u16 = BASE_PRIME;
+/// The second prime of the default limb list, reached — like every additional limb — by an
+/// inverse transform of `v` and a forward one on `len_ring / 32` batches.
 pub const Q2: u16 = PRIMES[1];
 
 // =============================================================================================
@@ -131,15 +135,49 @@ unsafe fn barrett29<const Q: u16>(p: __m512i) -> __m512i {
     _mm512_min_epu32(r, _mm512_sub_epi32(r, q))
 }
 
-/// `x mod q` centered into `[-(q-1)/2, (q-1)/2]` for 32 i16 lanes with `|x| <= 4q`: shift by `4q`
-/// into `[0, 8q) < 2^16`, three unsigned conditional subtracts, then the centering subtract.
+/// Declared output bound of the generic-input kernel of `q` — `vertical_gen` for a splitting
+/// prime, `vertical_gen_quad` for a quadratic-slot one.
+pub const fn gen_bound(q: u16) -> i32 {
+    if q == 3889 {
+        13231
+    } else if q == 9721 {
+        20652
+    } else {
+        vgq::output_bound(q)
+    }
+}
+const _: () = assert!(gen_bound(3889) == vg::Tw::<3889>::OUTPUT_BOUND);
+const _: () = assert!(gen_bound(9721) == vg::Tw::<9721>::OUTPUT_BOUND);
+
+/// The shift [`center_epi16`] uses: the smallest power of two `K` with `K q >= gen_bound(q)`
+/// (4 for 3889 and 9721 and 4861, 8 for 2917, 2 for 12637).
+pub const fn center_k(q: u16) -> u32 {
+    let mut k = 1u32;
+    while (k * q as u32) < gen_bound(q) as u32 {
+        k *= 2;
+    }
+    k
+}
+
+/// `K q + gen_bound(q)` must stay inside a u16 lane, which is what makes the unsigned trick work.
+const fn center_fits(q: u16) -> bool {
+    center_k(q) * q as u32 + gen_bound(q) as u32 <= 65535
+}
+const _: () = assert!(center_fits(3889) && center_fits(9721));
+const _: () = assert!(center_fits(2917) && center_fits(4861) && center_fits(12637));
+
+/// `x mod q` centered into `[-(q-1)/2, (q-1)/2]` for 32 i16 lanes with `|x| <= K q`: shift by
+/// `K q` into `[0, 2 K q) < 2^16`, `log2 K + 1` unsigned conditional subtracts, then the
+/// centering subtract.
 #[inline(always)]
 unsafe fn center_epi16<const Q: u16>(x: __m512i) -> __m512i {
     let q = Q as u32;
-    let mut v = _mm512_add_epi16(x, _mm512_set1_epi16((4 * q) as i16));
-    for k in [4u32, 2, 1] {
+    let mut k = center_k(Q);
+    let mut v = _mm512_add_epi16(x, _mm512_set1_epi16((k * q) as i16));
+    while k >= 1 {
         let s = _mm512_sub_epi16(v, _mm512_set1_epi16((k * q) as i16));
         v = _mm512_min_epu16(v, s);
+        k /= 2;
     }
     let hi = _mm512_cmpgt_epu16_mask(v, _mm512_set1_epi16(((q - 1) / 2) as i16));
     _mm512_mask_sub_epi16(v, hi, v, _mm512_set1_epi16(q as i16))
@@ -159,7 +197,7 @@ unsafe fn max_abs_batch(b: &Batch32) -> i32 {
 }
 
 /// Every slot of a batch fully reduced and centered (`|v| <= (q-1)/2`); the input must satisfy
-/// `|v| <= 4q`, which both vertical kernels' output bounds do.
+/// `|v| <= center_k(Q) * q`, which every generic kernel's output bound does.
 #[target_feature(enable = "avx512f,avx512bw")]
 pub(crate) unsafe fn center_batch<const Q: u16>(b: &mut Batch32) {
     for j in 0..N {
@@ -201,15 +239,54 @@ fn embed(challenges: &[ShortChallenge]) -> Vec<Batch32> {
 /// Transform the embedded challenges modulo `Q` and fully reduce them to centered slots, which is
 /// what the accumulation bound of [`FOLD_PERIOD`] assumes.
 pub(crate) fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
-    let r = challenges.len();
-    assert!(r >= 2 && r % 2 == 0, "the fold pairs the chunks: r must be even");
-    let mut bs = embed(challenges);
+    let mut bs = slots(challenges);
     unsafe {
         for b in bs.iter_mut() {
             ntt_gen_batch32::<Q>(b);
             center_batch::<Q>(b);
         }
     }
+    pack(&bs, challenges.len())
+}
+
+/// The same on the quadratic-slot tree: the 648 rows are then the two coefficients of each of the
+/// 324 leaves, which is the algebra [`combine_limb`] multiplies in.
+pub(crate) fn challenge_ntt_quad<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
+    let mut bs = slots(challenges);
+    unsafe {
+        for b in bs.iter_mut() {
+            ntt_quad_gen_batch32::<Q>(b);
+            center_batch::<Q>(b);
+        }
+    }
+    pack(&bs, challenges.len())
+}
+
+/// The challenge transforms of one limb, dispatched on its prime.
+pub(crate) fn challenge_ntt_limb(
+    q: u16,
+    quad: bool,
+    challenges: &[ShortChallenge],
+) -> ChallengeNtt {
+    match (q, quad) {
+        (3889, false) => challenge_ntt::<3889>(challenges),
+        (9721, false) => challenge_ntt::<9721>(challenges),
+        (2917, true) => challenge_ntt_quad::<2917>(challenges),
+        (4861, true) => challenge_ntt_quad::<4861>(challenges),
+        (12637, true) => challenge_ntt_quad::<12637>(challenges),
+        _ => unreachable!("no limb with q = {q}"),
+    }
+}
+
+fn slots(challenges: &[ShortChallenge]) -> Vec<Batch32> {
+    let r = challenges.len();
+    assert!(r >= 2 && r % 2 == 0, "the fold pairs the chunks: r must be even");
+    embed(challenges)
+}
+
+/// The transformed batches read out per challenge and packed into the dword pairs the
+/// accumulation wants.
+fn pack(bs: &[Batch32], r: usize) -> ChallengeNtt {
     let mut slot = vec![[0i16; N]; r];
     for j in 0..r {
         for u in 0..N {
@@ -378,6 +455,96 @@ pub(crate) fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] 
     cm::finish::<Q>(&acc)
 }
 
+/// The same for a quadratic-slot limb, on the quadratic accumulator of
+/// [`crate::simd::commit`]: three sums per leaf, combined into the leaf's two rows at the end.
+/// `|v| <= (q-1)/2` and `|A| <= (q-1)/2`, so the fold-back periods are the wider [`av_period`]
+/// ones rather than the commitment's.
+pub(crate) fn a_times_v_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    assert_eq!(a.len(), v.len());
+    let mut acc = cm::QuadAcc::zero();
+    let (p01, p2) = (
+        acc.p01.as_mut_ptr() as *mut i32,
+        acc.p2.as_mut_ptr() as *mut i32,
+    );
+    unsafe {
+        for b in 0..a.len() {
+            let ar = a[b].v.as_ptr() as *const i16;
+            cm::mac_quad_batch::<Q, false>(
+                v[b].v.as_ptr() as *const i16,
+                ar,
+                ar as *const i8,
+                p01,
+                p2,
+            );
+            if (b + 1) % av_period(Q) == 0 {
+                cm::reduce_quad_acc::<Q>(&mut acc);
+            }
+        }
+    }
+    cm::finish_quad::<Q>(&acc)
+}
+
+/// Batches of `A v` between two fold-backs of a quadratic limb's accumulators: both operands are
+/// centered (`(q-1)/2`), so the widest lane grows by `16 ((q-1)/2)^2` per batch (the Karatsuba
+/// `P_2`) or `8 ((q-1)/2)^2` (the schoolbook one).
+pub const fn av_period(q: u16) -> usize {
+    let per = if cm::karatsuba(q) {
+        16 * cm::a_bound(q) * cm::a_bound(q)
+    } else {
+        8 * cm::a_bound(q) * cm::a_bound(q)
+    };
+    cm::period_for(q, per)
+}
+const _: () = assert!(av_period(2917) >= 1 && av_period(4861) >= 1 && av_period(12637) >= 1);
+
+/// `sum_j c_j C_j` for one limb, in that limb's slot algebra: a scalar product per slot for a
+/// splitting limb, and for a quadratic one the leaf product
+/// `(c_0 C_0 + leaf_c c_1 C_1) + (c_0 C_1 + c_1 C_0) X` (`scalar::mul_quad_slots`), summed over
+/// the chunks. The verifier's side of `A v = sum_j c_j C_j`.
+pub(crate) fn combine_limb(
+    q: u16,
+    quad: bool,
+    ch: &ChallengeNtt,
+    cs: &[[u32; N]],
+) -> [u32; N] {
+    if !quad {
+        let m = q as i64;
+        let mut out = [0u32; N];
+        for u in 0..N {
+            let mut s = 0i64;
+            for (j, c) in cs.iter().enumerate() {
+                s += ch.slot[j][u] as i64 * c[u] as i64;
+            }
+            out[u] = s.rem_euclid(m) as u32;
+        }
+        return out;
+    }
+    match q {
+        2917 => combine_quad::<2917>(ch, cs),
+        4861 => combine_quad::<4861>(ch, cs),
+        12637 => combine_quad::<12637>(ch, cs),
+        _ => unreachable!("no quadratic limb with q = {q}"),
+    }
+}
+
+fn combine_quad<const Q: u16>(ch: &ChallengeNtt, cs: &[[u32; N]]) -> [u32; N] {
+    let q = Q as i64;
+    let mut out = [0u32; N];
+    for j in 0..QUAD_SLOTS {
+        let leaf = ParamsQ::<Q>::LEAF_C[j] as i64;
+        let (mut s0, mut s1) = (0i64, 0i64);
+        for (t, c) in cs.iter().enumerate() {
+            let (a0, a1) = (ch.slot[t][2 * j] as i64, ch.slot[t][2 * j + 1] as i64);
+            let (b0, b1) = (c[2 * j] as i64, c[2 * j + 1] as i64);
+            s0 = (s0 + a0 * b0 + leaf * (a1 * b1 % q)) % q;
+            s1 = (s1 + a0 * b1 + a1 * b0) % q;
+        }
+        out[2 * j] = s0.rem_euclid(q) as u32;
+        out[2 * j + 1] = s1.rem_euclid(q) as u32;
+    }
+    out
+}
+
 // =============================================================================================
 // the output
 // =============================================================================================
@@ -385,16 +552,18 @@ pub(crate) fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] 
 /// Wall time of the five stages of one [`fold`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FoldTimings {
-    /// Embedding and transforming the `r` challenges (both primes when the check runs).
+    /// Embedding and transforming the `r` challenges modulo the base limb, and modulo every
+    /// other limb when the check runs.
     pub challenge_ntt_ms: f64,
     /// The `r`-term slot-wise accumulation over the kept witness — the 85 MB stream.
     pub accumulate_ms: f64,
     /// `vertical_gen::intt_gen_batch32::<3889>` on the `len_ring/32` batches, and reading the
     /// centered coefficients out of the vertical layout.
     pub inverse_ntt_ms: f64,
-    /// The forward transform of `v` modulo `q2`.
-    pub forward_q2_ms: f64,
-    /// `A v` for both primes and the four-way decomposition of the result.
+    /// The forward transform of `v` modulo every additional limb (`vertical_gen` for a splitting
+    /// one, `vertical_gen_quad` for a quadratic one).
+    pub forward_add_ms: f64,
+    /// `A v` for every limb and the four-way decomposition of the result.
     pub y_ms: f64,
     /// Everything.
     pub total_ms: f64,
@@ -406,13 +575,13 @@ pub struct FoldOutput {
     /// (`|coefficient| <= (q1-1)/2`, and in fact a few hundred — see [`max_abs_v`](Self::max_abs_v)),
     /// so these are the true integer coefficients of `sum_j c_j W_j`.
     pub v: Vec<RingElement>,
-    /// `NTT(v)` for both primes, `len_ring / 32` batches each, centered.
-    pub v_ntt: [Vec<Batch32>; 2],
-    /// `A v` as the four `R_162` components, both primes, centered — the same shape as one column
-    /// of a [`crate::VerticallyAlignedMatrix`] returned by a commitment.
-    pub y: [PowerOfThreeRingElementWithTwoLimbs; 4],
-    /// The same `A v` before the decomposition: 648 slots in `[0, q)` per prime.
-    pub y_raw: [[u32; N]; 2],
+    /// `NTT(v)` for every limb of the key, `len_ring / 32` batches each, centered.
+    pub v_ntt: Vec<Vec<Batch32>>,
+    /// `A v` as the four `R_162` components over every limb, centered — the same shape as one
+    /// column of a [`crate::VerticallyAlignedMatrix`] returned by a commitment.
+    pub y: [PowerOfThreeRingElementWithLimbs; 4],
+    /// The same `A v` before the decomposition: 648 rows in `[0, q)` per limb.
+    pub y_raw: Vec<[u32; N]>,
     /// `max_i max_k |v_i[k]|`, the largest integer coefficient of the folded witness.
     ///
     /// A coefficient of `v` is a sum of `r * w` signed 0/1 terms (`r` challenges of weight `w`,
@@ -454,7 +623,7 @@ pub fn fold(key: &CommitmentKey, aux: &AuxData, challenges: &[ShortChallenge]) -
     fold_with(key, aux, challenges, cfg!(debug_assertions))
 }
 
-/// [`fold`] with the consistency check forced on (`sum_j c_j C_j == A v` modulo both primes).
+/// [`fold`] with the consistency check forced on (`sum_j c_j C_j == A v` for every limb).
 pub fn fold_checked(
     key: &CommitmentKey,
     aux: &AuxData,
@@ -476,19 +645,15 @@ pub fn fold_with(
 ) -> FoldOutput {
     let r = aux.chunks();
     assert_eq!(challenges.len(), r, "one challenge per chunk");
+    assert_eq!(aux.limbs(), key.limbs(), "the key and the auxiliary data disagree");
     let bpc = aux.batches_per_chunk();
     assert_eq!(bpc, key.len_ring() / 32, "the key and the chunks disagree");
     let mut t = FoldTimings::default();
     let t_all = Instant::now();
 
-    // (a) the challenges, embedded as c(-X^4) and transformed.
+    // (a) the challenges, embedded as c(-X^4) and transformed modulo the base limb.
     let t0 = Instant::now();
     let ch1 = challenge_ntt::<Q1>(challenges);
-    let ch2 = if check {
-        Some(challenge_ntt::<Q2>(challenges))
-    } else {
-        None
-    };
     t.challenge_ntt_ms = ms(t0);
 
     // (b) the slot-wise inner product over the kept witness.
@@ -515,44 +680,58 @@ pub fn fold_with(
     let v: Vec<RingElement> = (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect();
     t.inverse_ntt_ms = ms(t0);
 
-    // (d) forward again modulo q2 (|coefficient| <= (q1-1)/2 < q2, so the kernel's input bound
-    //     holds); modulo q1 the accumulator's own output already is NTT(v), so it is kept.
+    // (d) forward again modulo every additional limb (|coefficient| <= (q1-1)/2 < q, so every
+    //     generic kernel's input bound holds); modulo q1 the accumulator's own output already is
+    //     NTT(v), so it is kept.
     let t0 = Instant::now();
-    let mut v2 = vb;
-    unsafe {
-        for b in v2.iter_mut() {
-            ntt_gen_batch32::<Q2>(b);
-            center_batch::<Q2>(b);
-        }
+    let mut v_ntt = vec![v1];
+    for k in 1..key.limbs() {
+        let mut b = vb.clone();
+        forward_limb(key.prime(k), key.is_quadratic(k), &mut b);
+        v_ntt.push(b);
     }
-    t.forward_q2_ms = ms(t0);
+    t.forward_add_ms = ms(t0);
 
-    // (e) y = A v, both primes, then the four R_162 components.
+    // (e) y = A v for every limb, then the four R_162 components.
     let t0 = Instant::now();
-    let y_raw = [
-        a_times_v::<Q1>(key.row(0), &v1),
-        a_times_v::<Q2>(key.row(1), &v2),
-    ];
-    let d1 = decompose_components::<Q1>(&y_raw[0]);
-    let d2 = decompose_components::<Q2>(&y_raw[1]);
-    let mut y = [PowerOfThreeRingElementWithTwoLimbs {
-        limb: [PowerOfThreeRingElement::zero(); 2],
-    }; 4];
-    for k in 0..4 {
-        y[k].limb = [d1[k], d2[k]];
-    }
+    let y_raw: Vec<[u32; N]> = (0..key.limbs())
+        .map(|k| a_times_v_limb(key.prime(k), key.is_quadratic(k), key.row(k), &v_ntt[k]))
+        .collect();
+    let per: Vec<[crate::api::PowerOfThreeRingElement; 4]> = (0..key.limbs())
+        .map(|k| components_of(key.prime(k), key.is_quadratic(k), &y_raw[k]))
+        .collect();
+    let y: [PowerOfThreeRingElementWithLimbs; 4] = core::array::from_fn(|c| {
+        PowerOfThreeRingElementWithLimbs {
+            limbs: per.iter().map(|d| d[c]).collect(),
+        }
+    });
     t.y_ms = ms(t0);
 
     // (f) the linearity identity that validates every step above.
     if check {
-        linear_check::<Q1>(&ch1, aux, 0, &y_raw[0]);
-        linear_check::<Q2>(ch2.as_ref().unwrap(), aux, 1, &y_raw[1]);
+        let t0 = Instant::now();
+        for k in 0..key.limbs() {
+            let (q, quad) = (key.prime(k), key.is_quadratic(k));
+            let ch = if k == 0 {
+                None
+            } else {
+                Some(challenge_ntt_limb(q, quad, challenges))
+            };
+            let want = combine_limb(q, quad, ch.as_ref().unwrap_or(&ch1), &aux.raw[k]);
+            for u in 0..N {
+                assert_eq!(
+                    want[u], y_raw[k][u],
+                    "q = {q}: A v != sum_j c_j C_j at row {u}"
+                );
+            }
+        }
+        t.challenge_ntt_ms += ms(t0);
     }
 
     t.total_ms = ms(t_all);
     FoldOutput {
         v,
-        v_ntt: [v1, v2],
+        v_ntt,
         y,
         y_raw,
         max_abs_v: max_abs,
@@ -560,18 +739,46 @@ pub fn fold_with(
     }
 }
 
-/// `A v == sum_j c_j C_j` slot by slot, modulo one prime.
-fn linear_check<const Q: u16>(ch: &ChallengeNtt, aux: &AuxData, k: usize, y: &[u32; N]) {
-    let q = Q as i64;
-    for u in 0..N {
-        let mut s = 0i64;
-        for j in 0..ch.slot.len() {
-            s += ch.slot[j][u] as i64 * aux.commitment(k, j)[u] as i64;
+/// `NTT(v)` for one limb, in place on centered coefficient batches, fully reduced and centered.
+pub(crate) fn forward_limb(q: u16, quad: bool, bs: &mut [Batch32]) {
+    unsafe {
+        for b in bs.iter_mut() {
+            b.representation = Representation::Coefficients;
+            match (q, quad) {
+                (3889, false) => {
+                    ntt_gen_batch32::<3889>(b);
+                    center_batch::<3889>(b);
+                }
+                (9721, false) => {
+                    ntt_gen_batch32::<9721>(b);
+                    center_batch::<9721>(b);
+                }
+                (2917, true) => {
+                    ntt_quad_gen_batch32::<2917>(b);
+                    center_batch::<2917>(b);
+                }
+                (4861, true) => {
+                    ntt_quad_gen_batch32::<4861>(b);
+                    center_batch::<4861>(b);
+                }
+                (12637, true) => {
+                    ntt_quad_gen_batch32::<12637>(b);
+                    center_batch::<12637>(b);
+                }
+                _ => unreachable!("no limb with q = {q}"),
+            }
         }
-        assert_eq!(
-            s.rem_euclid(q) as u32,
-            y[u],
-            "q = {Q}: A v != sum_j c_j C_j at slot {u}"
-        );
+    }
+}
+
+/// `A v` for one limb, dispatched on its prime.
+pub(crate) fn a_times_v_limb(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    match (q, quad) {
+        (3889, false) => a_times_v::<3889>(a, v),
+        (9721, false) => a_times_v::<9721>(a, v),
+        (2917, true) => a_times_v_quad::<2917>(a, v),
+        (4861, true) => a_times_v_quad::<4861>(a, v),
+        (12637, true) => a_times_v_quad::<12637>(a, v),
+        _ => unreachable!("no limb with q = {q}"),
     }
 }

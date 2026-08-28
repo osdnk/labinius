@@ -8,7 +8,7 @@ use bin_ntt::params::{pow_mod, Params, N, SLOT_EXP};
 use bin_ntt::rng::Rng;
 use bin_ntt::types::Batch32;
 use bin_ntt::{
-    scalar, CommitmentKey, PowerOfThreeRingElementWithTwoLimbs, VerticallyAlignedMatrix,
+    scalar, CommitmentKey, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix,
 };
 
 const CONDUCTOR: u64 = 1944;
@@ -148,7 +148,7 @@ fn random_witness(n: usize, seed: u64) -> Vec<F162> {
 }
 
 fn check_commit(len_f162: usize, r: usize) {
-    let ck = CommitmentKey::random(len_f162, 0x5EED ^ r as u64);
+    let ck = CommitmentKey::random_default(len_f162, 0x5EED ^ r as u64);
     assert_eq!(ck.len_f162(), len_f162);
     let witness = random_witness(r * len_f162, 0xBEEF_CAFEu64.wrapping_mul(r as u64 + 1));
     let c = ck.commit(&witness, r);
@@ -165,7 +165,7 @@ fn check_commit(len_f162: usize, r: usize) {
             for l in 0..2 {
                 for s in 0..N162 {
                     let q = PRIMES[l] as i32;
-                    let v = c.get(k, col).limb[l].v[s] as i32;
+                    let v = c.get(k, col).limbs[l].v[s] as i32;
                     assert!(v.abs() <= (q - 1) / 2, "centered: r = {r}, limb {l}, slot {s}, v = {v}");
                     assert_eq!(
                         v.rem_euclid(q) as u32,
@@ -197,27 +197,27 @@ fn commit_r4() {
 /// A key of a different length, and the zero witness.
 #[test]
 fn commit_zero_and_sizes() {
-    let ck = CommitmentKey::random(512, 9);
+    let ck = CommitmentKey::random_default(512, 9);
     assert_eq!(ck.len_ring(), 128);
     assert_eq!(ck.bytes(), 2 * 4 * core::mem::size_of::<Batch32>());
     let zero = vec![F162([0; 3]); 2 * 512];
     let c = ck.commit(&zero, 2);
     for e in c.iter() {
-        assert_eq!(*e, PowerOfThreeRingElementWithTwoLimbs::zero());
+        assert_eq!(*e, PowerOfThreeRingElementWithLimbs::zero(2));
     }
 }
 
 #[test]
 #[should_panic]
 fn commit_wrong_length() {
-    let ck = CommitmentKey::random(256, 1);
+    let ck = CommitmentKey::random_default(256, 1);
     ck.commit(&random_witness(256, 2), 2);
 }
 
 #[test]
 #[should_panic]
 fn commit_r_not_a_power_of_two() {
-    let ck = CommitmentKey::random(256, 1);
+    let ck = CommitmentKey::random_default(256, 1);
     ck.commit(&random_witness(3 * 256, 2), 3);
 }
 

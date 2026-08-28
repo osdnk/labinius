@@ -43,7 +43,7 @@
 //! # use bin_ntt::{eval, CommitmentKey, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
 //! # use bin_fields::scalar::F162;
 //! # let witness: Vec<F162> = Vec::new();
-//! # let ck = CommitmentKey::random(1 << 10, 1);
+//! # let ck = CommitmentKey::random_default(1 << 10, 1);
 //! let (c, aux) = ck.commit_with_aux(&witness, 256);
 //! let mut t = Transcript::new(b"bin-ntt/eval");
 //! for j in 0..256 { t.absorb_elements(c.column(j)); }
@@ -54,9 +54,8 @@
 //! ```
 use crate::api::{AuxData, CommitmentKey};
 use crate::challenge::{ShortChallenge, Transcript};
-use crate::fold::{a_times_v, center_batch, challenge_ntt, Q1, Q2};
+use crate::fold::{a_times_v_limb, challenge_ntt_limb, combine_limb, forward_limb, Q1};
 use crate::params::N;
-use crate::simd::vertical_gen::ntt_gen_batch32;
 use crate::types::{Batch32, Representation, RingElement};
 use bin_fields::f162 as bf;
 use bin_fields::scalar::F162;
@@ -279,11 +278,11 @@ pub fn fold_binary(u: &[F162], challenges: &[ShortChallenge]) -> F162 {
 // the verifier
 // =============================================================================================
 
-/// The `r` commitments a verifier holds, in the form the fold's identity lives in: 648 slots in
-/// `[0, q)` per chunk and prime, before the four-way `R_162` decomposition.
+/// The `r` commitments a verifier holds, in the form the fold's identity lives in: 648 rows in
+/// `[0, q)` per chunk and limb, before the four-way `R_162` decomposition.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RawCommitments {
-    c: [Vec<[u32; N]>; 2],
+    c: Vec<Vec<[u32; N]>>,
 }
 
 impl RawCommitments {
@@ -291,22 +290,34 @@ impl RawCommitments {
     pub fn from_aux(aux: &AuxData) -> Self {
         let r = aux.chunks();
         RawCommitments {
-            c: [0usize, 1].map(|k| (0..r).map(|j| *aux.commitment(k, j)).collect()),
+            c: (0..aux.limbs())
+                .map(|k| (0..r).map(|j| *aux.commitment(k, j)).collect())
+                .collect(),
         }
     }
     /// Number of chunks.
     pub fn chunks(&self) -> usize {
         self.c[0].len()
     }
-    /// The commitment of chunk `j` modulo `PRIMES[k]`.
+    /// Number of limbs.
+    pub fn limbs(&self) -> usize {
+        self.c.len()
+    }
+    /// The commitment of chunk `j` for limb `k`.
     pub fn get(&self, k: usize, j: usize) -> &[u32; N] {
         &self.c[k][j]
     }
+    /// All `r` commitments of limb `k`.
+    pub fn limb(&self, k: usize) -> &[[u32; N]] {
+        &self.c[k]
+    }
 }
 
-/// `A v == sum_j c_j C_j` for both primes, recomputed from `v` alone: the folded witness is
-/// transformed forward modulo each prime and multiplied into the key, and the right-hand side is
-/// the slot-wise inner product of the transformed challenges against the commitments.
+/// `A v == sum_j c_j C_j` for every limb, recomputed from `v` alone: the folded witness is
+/// transformed forward modulo each limb's prime and multiplied into that limb's key, and the
+/// right-hand side is the slot-wise inner product of the transformed challenges against the
+/// commitments — a scalar product per slot for a splitting limb, the quadratic leaf product
+/// (`scalar::mul_quad_slots`) for a quadratic one.
 ///
 /// The centered range of `q1` is checked first — `v` reaching the verifier as anything larger is
 /// not the small-integer vector the fold promises, and is rejected before it is transformed.
@@ -318,11 +329,11 @@ pub fn verify_fold(
 ) -> bool {
     assert_eq!(v.len(), key.len_ring(), "v is not one chunk of ring elements");
     assert_eq!(challenges.len(), c.chunks(), "one challenge per chunk");
+    assert_eq!(key.limbs(), c.limbs(), "the key and the commitments disagree");
     let half = (Q1 as i16 - 1) / 2;
-    if v
-        .iter()
-        .any(|e| e.representation != Representation::Coefficients || e.v.iter().any(|x| x.abs() > half))
-    {
+    if v.iter().any(|e| {
+        e.representation != Representation::Coefficients || e.v.iter().any(|x| x.abs() > half)
+    }) {
         return false;
     }
 
@@ -333,33 +344,13 @@ pub fn verify_fold(
         vb[i / 32].set(i % 32, e);
     }
 
-    ok::<Q1>(key.row(0), &vb, c, 0, challenges) && ok::<Q2>(key.row(1), &vb, c, 1, challenges)
-}
-
-/// One prime of [`verify_fold`].
-fn ok<const Q: u16>(
-    a: &[Batch32],
-    v: &[Batch32],
-    c: &RawCommitments,
-    k: usize,
-    challenges: &[ShortChallenge],
-) -> bool {
-    let mut vb = v.to_vec();
-    unsafe {
-        for b in vb.iter_mut() {
-            b.representation = Representation::Coefficients;
-            ntt_gen_batch32::<Q>(b);
-            center_batch::<Q>(b);
-        }
-    }
-    let y = a_times_v::<Q>(a, &vb);
-    let ch = challenge_ntt::<Q>(challenges);
-    (0..N).all(|u| {
-        let mut s = 0i64;
-        for j in 0..challenges.len() {
-            s += ch.slot[j][u] as i64 * c.get(k, j)[u] as i64;
-        }
-        s.rem_euclid(Q as i64) as u32 == y[u]
+    (0..key.limbs()).all(|k| {
+        let (q, quad) = (key.prime(k), key.is_quadratic(k));
+        let mut b = vb.clone();
+        forward_limb(q, quad, &mut b);
+        let y = a_times_v_limb(q, quad, key.row(k), &b);
+        let ch = challenge_ntt_limb(q, quad, challenges);
+        combine_limb(q, quad, &ch, c.limb(k)) == y
     })
 }
 
