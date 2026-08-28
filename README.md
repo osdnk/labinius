@@ -35,15 +35,13 @@ element (8.1 per F162, port-5 bound), kernel 280 / 318 (q = 3889 / 9721), togeth
 the rest of the headline is the DRAM streams, and the 340 MB output is fully hidden behind the
 non-temporal stores (streamed 333 vs materialised 363).
 
-For scale: 650 cycles per polynomial (the estimate we started from for a generic-input NTT of
-this size on this core) is ~38 ms. Multiplying in the NTT domain on the same 2^18 elements —
+For scale: 650 cycles per polynomial (an expert estimate for a generic-input NTT of this size on
+this core) is ~38 ms. Multiplying in the NTT domain on the same 2^18 elements —
 `y = sum_i a_i o NTT(w_i)` with 2^18 distinct NTT-domain `a_i` streamed from DRAM — takes
 38.9 ms / 672 cycles per ring element (q = 3889); the product itself is ~100 uops per element,
 the rest is the extra 340 MB of reads.
 
-Reproduce: `cargo run --release --offline --bin bench_f162 -- <cpu>`. The older `BinaryPoly`
-front end (one 648-bit polynomial per `[u64; 11]`) is still there with its own benchmarks
-(`bench_all`, `bench_vertical_bin*`), at 359 / 391 cycles per polynomial on the same day.
+Reproduce: `cargo run --release --offline --bin bench_f162 -- <cpu>`.
 
 Comparison kernels (generic i16 input, cache-resident cycles per polynomial): vertical generic
 423 / 467, horizontal generic (Gregor Seiler's 4-polynomials-per-zmm layout) 540 / 587; both
@@ -89,7 +87,7 @@ multiply-port uops per 32 ring elements as the kernel below (the multiply count 
 layout-invariant, and the binary trick removes the same two levels either way), so the kernel
 was kept and only the front end was rebuilt for the F162 layout. (The sign-alternating lift
 Z -> -X^4 would make each component a ring homomorphism from Z[Z]/Phi_243; the plain interleave
-was chosen by the user and is what is implemented.)
+is the specified lift.)
 
 ### Types
 
@@ -104,8 +102,9 @@ was chosen by the user and is what is implemented.)
 * `BinaryIndex32` — the kernel's input: 162 rows of 64 bytes, `row[i][2p] = n`,
   `row[i][2p+1] = 16 + n`, n = the 4-bit nibble (c_i, c_{i+162}, c_{i+324}, c_{i+486}) of ring
   element p, which is exactly the `vpermb` index the fused first two levels consume.
-* `BinaryPoly { bits: [u64; 11] }`, `BinaryBatch32` — the older one-polynomial-per-`[u64;11]`
-  front end.
+* `BinaryPoly { bits: [u64; 11] }` — a plain 648-coefficient 0/1 polynomial (bit i = coefficient
+  i), the coefficient-domain form of a lifted ring element used by the tests and the comparison
+  kernels' benches; `transpose.rs` slices it into `BinaryIndex32` with the same GFNI machinery.
 * `HBatch4 { v: [[i16; 32]; 81] }` — the horizontal layout, 4 polynomials per batch.
 
 ### Arithmetic
@@ -196,19 +195,19 @@ prefetch of the input (noise).
   retiring, ~49 % back-end bound (the two vector ALU ports), 1.6 % front-end, 1.2-1.6 %
   bad speculation — no branch, decode or microcode issue to fix.
 
-### `simd/ntt_f162.rs`, `simd/vertical_bin_io.rs` — drivers
+### `simd/ntt_f162.rs` — drivers
 
 `ntt_f162` slices 128 F162 into one `BinaryIndex32` scratch, runs the kernel with
 non-temporal stores on the last level, repeats per batch. `ntt_f162_2q` runs both primes off
 one slicing (-21 cycles per transform). `ntt_f162_stream` hands each batch to a closure.
-Measured on the `BinaryPoly` path and carried over where they won: software-pipelining the
-slicer's phases into the kernel's radix-3 loops of the previous batch (-14 cycles, at the cost
-of a fused copy of the kernel — `vertical_bin_io::ntt_bin_polys_pipelined`); rejected: huge
-pages for the output (TLB walks 0.31 -> 0 per element, time unchanged — they hide behind the
-NT stores), producer-supplied index rows (the extra 58 MB of DRAM reads cost more than the
-slicing saved), `sfence` per batch, batch grouping, cached stores (+200 cycles), input
-prefetching (noise to +45 with the NTA hint), consumer-side prefetch of `a_i` in the accumulate
-loop (-15 at 2^15 elements, +30 at 2^18).
+Driver variants measured and rejected: huge pages for the output (TLB walks 0.31 -> 0 per
+element, time unchanged — they hide behind the NT stores), producer-supplied index rows (the
+extra 58 MB of DRAM reads cost more than the slicing saved), `sfence` per batch, batch
+grouping, cached stores (+200 cycles), input prefetching (noise to +45 with the NTA hint),
+consumer-side prefetch of `a_i` in the accumulate loop (-15 at 2^15 elements, +30 at 2^18).
+Software-pipelining the slicer's phases into the kernel's radix-3 loops of the previous batch
+(p5-bound work against p0-bound work) gained 14 cycles in a prototype and is listed under the
+remaining strategies.
 
 ### `simd/vertical_gen.rs` — generic-input vertical kernel (423 / 467)
 
@@ -256,11 +255,11 @@ still ~60 % above the vertical binary kernel.
 General Montgomery product of two batches (4 multiplies per slot, then a second multiplication
 by 2^32 mod q to make the result exact), and batch x fixed element (3 multiplies per slot; the
 element's Montgomery form and companion are stored as duplicated u32 so the broadcasts are pure
-loads). `bench_f162` / `bench_all` also have the accumulating form `y += a_i o NTT(w_i)` with
-`vpmaddwd` pairwise 16-to-32-bit accumulation, verified against the scalar reference. The
-second multiplication could be avoided by scaling the tables by 2^16 so the NTT outputs come out
-in Montgomery form, with 2^-16 (and 648^-1) absorbed by the inverse NTT's final scaling — not
-done, since no inverse NTT was requested.
+loads). `bench_f162` also has the accumulating form `y += a_i o NTT(w_i)` with `vpmaddwd`
+pairwise 16-to-32-bit accumulation, verified against the scalar reference. The second
+multiplication can be avoided by scaling the tables by 2^16 so the NTT outputs come out in
+Montgomery form, with 2^-16 (and 648^-1) absorbed by the inverse NTT's final scaling (see the
+remaining strategies).
 
 ## Machine facts that drove the design (`tools/ubench`, `tools/membw`)
 
@@ -292,9 +291,8 @@ Measured or modelled on this core, roughly in order of value:
 2. **Lookup Barrett for q = 9721**: `vpmulhrsw` -> biased `vpaddw` -> `vpermb` on a 16-entry
    `-t*q` table -> `vpaddw` (1 p0 + 1 p5 + 2 flexible instead of 2 p0 + 1) on the 648 Barretts
    per batch; static p0 243 -> 223 per element on the prime that is genuinely p0-bound.
-3. **Pipelined front end for the F162 path** (the slicer's phases interleaved with the previous
-   batch's radix-3 loops, p5-bound work against p0-bound work): -14 cycles measured on the
-   `BinaryPoly` path, not yet redone for the new phase structure.
+3. **Pipelined front end** (the slicer's phases interleaved with the previous batch's radix-3
+   loops, p5-bound work against p0-bound work): -14 cycles per element in a prototype.
 4. **Hand-scheduled level 3 and the lookup loop** in asm like levels 4-6: a few percent.
 5. **Per-element bit permutation** as the slicer (VBMI2 funnel shifts + `vpmultishiftqb` +
    `vgf2p8affineqb` + `vpermb` on each F162 separately, then a byte transpose): ~10 uops per
@@ -310,14 +308,13 @@ Measured or modelled on this core, roughly in order of value:
 
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
-    src/types.rs                BinaryPoly, BinaryBatch32, Batch32, RingElement
+    src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)
     src/scalar.rs               exact reference: product mod Phi_1944, NTT, evaluation
     src/simd/transpose_f162.rs  F162 x 128 -> BinaryIndex32 (GFNI + VBMI)
-    src/simd/transpose.rs       BinaryPoly x 32 -> nibble / index rows (older front end)
+    src/simd/transpose.rs       BinaryIndex32 and the GFNI bit-slicing of plain 648-bit polynomials
     src/simd/vertical_bin.rs    the binary kernel, intrinsics (LUT + folding), drivers
     src/simd/vertical_bin_asm.rs the binary kernel with the asm levels 4-6 (production kernel)
     src/simd/ntt_f162.rs        drivers for the F162 input (single prime, both primes, streamed)
-    src/simd/vertical_bin_io.rs driver experiments on the BinaryPoly path (2q, pipelined, ...)
     src/simd/vertical_gen.rs    generic-input vertical kernel
     src/simd/horizontal_gen.rs  generic-input horizontal kernel (HBatch4)
     src/simd/pointwise.rs       slot-wise Montgomery products

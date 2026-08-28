@@ -11,7 +11,7 @@ use bin_ntt::simd::pointwise;
 use bin_ntt::simd::transpose::BinaryIndex32;
 use bin_ntt::simd::transpose_f162 as tf;
 use bin_ntt::simd::vertical_bin_asm as va;
-use bin_ntt::simd::{ntt_f162 as nf, vertical_bin_io as io};
+use bin_ntt::simd::ntt_f162 as nf;
 use bin_ntt::types::*;
 use std::time::Instant;
 
@@ -68,7 +68,7 @@ fn random_elems(n: usize, seed: u64) -> Vec<F162> {
     (0..n).map(|_| F162::random(&mut rng)).collect()
 }
 
-/// y += sum over the batch of a[j][p] * w[j][p] (copied from `bench_all`).
+/// y += sum over the batch of a[j][p] * w[j][p].
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn accumulate_products<const Q: u16>(w: &Batch32, a: &Batch32, acc: &mut [[i32; 16]; N]) {
     use core::arch::x86_64::*;
@@ -84,6 +84,18 @@ unsafe fn accumulate_products<const Q: u16>(w: &Batch32, a: &Batch32, acc: &mut 
 }
 
 const NB: usize = 8; // 256 ring elements: input 24 KB, index rows 83 KB, output 331 KB -> L2
+
+/// Finishes the accumulation: y[j] = (sum of the 16 lanes) * 2^16 mod q (undoing the Montgomery
+/// factor of `mont_mul_epi16`), fully reduced.
+fn finish_accumulator<const Q: u16>(acc: &[[i32; 16]; N]) -> [u32; N] {
+    let q = Q as i64;
+    let mut y = [0u32; N];
+    for j in 0..N {
+        let s: i64 = acc[j].iter().map(|&x| x as i64).sum();
+        y[j] = ((s.rem_euclid(q) * 65536) % q) as u32;
+    }
+    y
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -248,7 +260,7 @@ fn main() {
             want[j] = (want[j] + w[j] as u64 * a[0].v[j][p] as u64) % 3889;
         }
     }
-    let got = io::finish_accumulator::<3889>(&acc_small);
+    let got = finish_accumulator::<3889>(&acc_small);
     for j in 0..N {
         assert_eq!(got[j] as u64, want[j], "accumulate mismatch at slot {j}");
     }

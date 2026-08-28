@@ -66,7 +66,8 @@ butterflies in flight.
 
 ## 4. Data types (`src/types.rs`)
 
-* `BinaryPoly { bits: [u64; 11] }` — natural storage form, bit i = coefficient i.
+* `BinaryPoly { bits: [u64; 11] }` — a plain 648-coefficient 0/1 polynomial, bit i = coefficient
+  i (test and comparison-bench input form).
 * `BinaryBatch32 { idx: [[u8; 32]; 162] }` — nibble-sliced: idx[i][p] = b_i | b_{i+162}<<1 |
   b_{i+324}<<2 | b_{i+486}<<3 of polynomial p. This IS the index of the fused levels 0+1 lookup.
 * `Batch32 { v: [[i16; 32]; 648], representation }` — vertical layout, 64-byte aligned.
@@ -119,7 +120,7 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   the production kernel.
 * `transpose` — `slice_polys(&[BinaryPoly; 32]) -> BinaryBatch32` (nibble form, equal to
   `BinaryBatch32::from_polys_scalar`) and `slice_polys_idx(..) -> BinaryIndex32` (the `vpermb`
-  index rows the kernel consumes) for the older one-polynomial-per-`[u64; 11]` input.
+  index rows the kernel consumes) for plain 648-bit polynomials.
 * `vertical_gen` — `ntt_gen_batch32::<Q>(&mut Batch32)` in place, Coefficients -> Ntt, input lanes
   |x| <= q; `ntt_gen_batches` over a slice with prefetching.
 * `horizontal_gen` — `HBatch4 { v: [[i16; 32]; 81] }` with v[r][8p + j] = coefficient r + 81 j of
@@ -136,8 +137,8 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   intermediate is < 2^15; and the multiplication tests through `pointwise` against
   `scalar::ntt(scalar::mul_mod_phi(a, b))`. Generic kernels also test random i16 inputs in [-q, q].
 * `src/bin/bench_f162.rs`: the headline (2^20 F162 -> 2^18 ring elements, both primes, single and
-  two-prime drivers, streamed, accumulate product); `src/bin/bench_all.rs`: the same for the older
-  `BinaryPoly` input with every kernel; both pinned to one core, `perf::PerfGroup` counters (cycles,
+  two-prime drivers, streamed, accumulate product), pinned to one core, `perf::PerfGroup`
+  counters (cycles,
   instructions, uops, ports 0/1/5). `src/bin/bench_<variant>.rs`: per-kernel breakdowns,
   cache-resident and out-of-cache cases, static instruction counts from the disassembly.
   DRAM floors measured with `tools/membw`: non-temporal stores 37 GB/s, regular stores 14 GB/s,
