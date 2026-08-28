@@ -462,6 +462,116 @@ the generic kernel. It stops there: folding the level-4 twiddles too triplicates
 instead of 0.75q, which breaks the 2^15 budget for both primes — the Barretts that then become
 necessary cost more than the multiplies saved.
 
+## Quadratic-slot limbs (2917, 4861, 12637)
+
+Three more primes are supported, for which `R_648` does **not** split completely:
+
+    q in {2917, 4861, 12637},   q - 1 = 2^2 * 3^5 * k   (2916 = 4*729, 4860 = 4*243*5, 12636 = 4*243*13),
+
+so q = 1 mod 972 but q = 973 mod 1944: a primitive 972-nd root of unity `psi'` exists, a 1944-th
+one does not, and `Phi_1944` factors into **324 irreducible quadratics** `X^2 - psi'^u`, u over the
+324 units mod 972. (The two roots of such a factor are `psi^u` and `psi^{u+972} = -psi^u` in the
+quadratic extension where `psi = sqrt(psi')` would live.) These are limbs for a multi-limb API that
+wants more primes of this shape than the two that split; 2917 is the smallest, which is what makes
+it interesting: `2^15 / q = 11.2` lanes of head-room.
+
+**The tree** is the splitting one with its *second* radix-2 level — the one that needs a 1944-th
+root — removed, and nothing else changed:
+
+    level 0:     X^648 - X^324 + 1 = (X^324 - psi'^162)(X^324 - psi'^810)     (Phi_6, zeta6 = psi'^162)
+    level 1:     radix 2   X^324 - psi'^e = (X^162 - psi'^{e/2})(X^162 + psi'^{e/2})
+    level 2..5:  radix 3   X^n - psi'^e = prod_s (X^{n/3} - psi'^{(e + 972 s)/3}),  162 -> 54 -> 18 -> 6 -> 2
+
+A sub-ring is `Z_q[X]/(X^n - psi'^e)` with `(n/2) | e` — the splitting tree's `n | e`, halved
+because the leaves are quadratic — and child s of a radix-p split sits at block offset `s n/p`, so
+`params::subring_exp_quad` is `subring_exp` with the conductor 972 and this radix list.
+`QUAD_SLOT_EXP[j]` is the exponent u of leaf j, a permutation of the units mod 972, and **leaf j
+occupies rows 2j and 2j+1** of the 648-row output: `a mod (X^2 - psi'^u) = a_0 + a_1 X`. A
+slot-wise product is one quadratic product per leaf, `(a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X`
+(`scalar::mul_quad_slots`), against a scalar product in the splitting case.
+
+**The multiply count is exactly the same.** Removing a radix-2 level removes one *level*, not any
+radix-3 butterfly: all four radix-3 levels still have 216 butterflies per batch of 32, and the
+binary kernel still folds levels 0 and 1 into the `vpermb` tables plus one level of twiddles. So
+the binary kernel costs 6480 multiply-port uops per batch (2160 Montgomery products), exactly what
+the splitting binary kernel costs, and the generic one 3240 products against 3564 — the vanished
+radix-2 level took its 324 with it. What changes is the shuffle port: only *one* level of twiddles
+can be folded into the tables (level 2 is radix 3, and its three roles are the three tables), so
+the binary kernel does 648 lookups per batch instead of 1080, and it has no two-lookup combines to
+add up. It is therefore *cheaper* than the splitting binary kernel at equal multiply count.
+
+**The reduction schedule** is where the per-prime work is: `2^15/q` is 11.23, 6.74 and 2.59.
+
+| q     | binary kernel                              | output   | generic kernel                                          | output   |
+|-------|--------------------------------------------|---------:|---------------------------------------------------------|---------:|
+| 2917  | no reduction anywhere                      | 4.87 q   | no reduction anywhere                                   | 7.94 q   |
+| 4861  | no reduction anywhere                      | 5.13 q   | one lookup Barrett, the `a0` input of level 4           | 3.26 q   |
+| 12637 | lookup Barrett on the `a0` of levels 3, 4, 5 | 1.94 q | lookup Barretts: the `a1` inputs and the `a0+a1-t` output of pass A, and the `a0` of levels 2..5 | 1.94 q |
+
+Every reduction is the shuffle-port **lookup Barrett** of `vertical_bin_asm` (`vpmultishiftqb` +
+`vpandd` + `vpord` + `vpermb` + `vpaddw`: 2 port-5 and 3 flexible uops, no multiply-port slot,
+`|r| <= q/2 + 2^10`), because these kernels are port-0-bound and their shuffle port is nearly
+empty. The placement is a `const` search — `vertical_bin_quad::bin_model` and
+`vertical_gen_quad::gen_flags` replay the whole schedule on bounds, position by position, and pick
+the cheapest flag set that keeps every intermediate inside i16; `tests/quad.rs` replays the same
+schedule in i32 against the kernel and checks the declared output bound. For 12637 all three
+binary-kernel reductions are necessary (dropping any one of them overflows), and in the generic
+kernel the pass-A input reduction is unavoidable in *any* placement: with `|x| <= q` the level-0
+output `a0 + a1 - zeta6 a1` reaches 2.60 q = 32811 and leaves i16 before anything downstream can
+help.
+
+**Measured**, one core, `taskset -c 2`, cache-resident batch of 32 for the kernels, 2^18 F162 =
+2^16 ring elements materialised with non-temporal stores for the transform (85 MB of output),
+best of 5 / of 3, ~4.1-4.3 GHz (`cargo run --release --offline --bin bench_quad`). Cycles per ring
+element; fastest first:
+
+| q     | tree             | binary kernel | generic kernel | 2^18 F162 transform |
+|-------|------------------|--------------:|---------------:|--------------------:|
+| 2917  | quadratic, 324x2 | **267**       | **382**        | **5.05 ms** (332)   |
+| 4861  | quadratic, 324x2 | **267**       | 399            | 5.25 ms (331)       |
+| 3889  | split, 648       | 280           | 422            | 5.52 ms (348)       |
+| 12637 | quadratic, 324x2 | 290           | 481            | 5.76 ms (361)       |
+| 9721  | split, 648       | 304           | 470            | 5.82 ms (371)       |
+
+So the ranking of all five primes is 2917 < 4861 < 3889 < 12637 < 9721 for the binary kernel and
+the full transform, and 2917 < 4861 < 3889 < 9721 < 12637 for the generic one (12637 pays 1512
+Barretts per batch there). The two head-room primes run at 261 port-0 uops per ring element
+against a 202.5 multiply floor, i.e. ~29 % of the adds are dispatched to the saturated port —
+the same fraction the splitting kernels see.
+
+**Kernels.** `simd/vertical_bin_quad.rs` is the binary one: the same `BinaryIndex32` rows and the
+same `transpose_f162` front end (the lookup index does not depend on the tree), 12 byte-split
+16-entry tables (768 bytes) carrying levels 0, 1 and the level-2 twiddle, then levels 2 and 3
+fused over groups of 9 vectors — the three level-2 triples `(i, i+54, i+108)` at
+`i = i0, i0+18, i0+36` are exactly the three inputs of one level-3 butterfly in each of the three
+54-blocks — and levels 4 and 5 over one 18-block of the 10 KB L1 scratch. Its `BlockSink` hook
+hands out **36 blocks of 18 consecutive output rows** (block `blk` is rows `18 blk .. 18 blk + 18`,
+the 9 leaves `9 blk .. 9 blk + 9`), the shape `commit.rs` consumes, against 24 blocks of 27 in the
+splitting kernel. `simd/vertical_gen_quad.rs` is the generic-input version for challenge
+transforms and folded witnesses. Both are plain intrinsics: LLVM spills nothing (checked in the
+disassembly) and the schedule lands within 4 % of the hand-written asm tail's quality, so no asm
+was written. Measured alternatives: in the generic kernel, keeping an 18-block live in registers
+across levels 4 and 5 costs 14 % (436 against 382 cycles at q = 2917) because the allocator spends
+the saved loads and stores on moves; splitting levels 2 and 3 into separate passes gains nothing
+(379 against 382 at 80 more instructions). In the binary kernel the two forms of the tail are a
+dead heat at 267, but offering both behind a `const` parameter costs 60 cycles, so it ships one.
+
+**What the multi-limb API has to know.** The 648 units mod 1944 that the splitting tree evaluates
+at collapse pairwise into the 324 leaves here, and both roots of a leaf lie in the same `R_162`
+class `v = u mod 486` — the exponent that names an `R_162` slot — because `theta = psi^4 = psi'^2`
+and `theta^u` depends only on `u mod 486`. Each of the 162 classes therefore owns exactly two
+leaves, `u = v` (constant `c = +psi'^v`) and `u = v + 486` (`c = -psi'^v`, since `psi'^486 = -1`),
+which `params::QUAD_CLASS_SLOT[0][s]` and `[1][s]` name for slot s of `api::POW3_SLOT_EXP` — the
+class sets of the two trees are the same 162 units mod 486, so the `R_162` slot order is
+unchanged. With `Y = X^4` a leaf has `Y = c^2 = psi'^{2v} = theta^v` whichever of the two it is, so
+`y mod (X^2 - c) = [Y_0 + c Y_2] + X [Y_1 + c Y_3]` and one 2-point butterfly per class inverts it:
+
+    Y_0 = (E+_0 + E-_0)/2,   Y_2 = (E+_0 - E-_0)/(2 psi'^v),   and likewise Y_1, Y_3 from the X rows,
+
+`E+` the plus leaf's two rows, `E-` the minus leaf's. `scalar::decompose_quad_648_to_4x162::<Q>`
+is that map, output in `api::POW3_SLOT_EXP` order and fully reduced — the counterpart of
+`decompose_648_to_4x162`'s radix-4 butterfly, and cheaper (2 multiplications per class against 5).
+
 ## The commitment (`simd/commit.rs`)
 
 * **Raw products, rare reductions.** An inner product needs the sum of the products mod q, not
@@ -719,7 +829,8 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
     src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)
-    src/scalar.rs               exact reference: product mod Phi_1944, NTT, inverse NTT, evaluation
+    src/scalar.rs               exact reference: product mod Phi_1944, NTT, inverse NTT, evaluation,
+                                and the quadratic-slot transform, its slot products and its R_162 decomposition
     src/simd/transpose_f162.rs  F162 x 128 -> BinaryIndex32 (GFNI + VBMI)
     src/simd/transpose.rs       BinaryIndex32 and the GFNI bit-slicing of plain 648-bit polynomials
     src/simd/vertical_bin_asm.rs the binary kernel (LUT + folding, asm levels 4-6, block hook) — production
@@ -727,11 +838,14 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/simd/ntt_f162.rs        NTT drivers for the F162 input (single prime, both primes, streamed, Montgomery form)
     src/simd/commit.rs          the Ajtai commitment on the vertical kernel (block-fused, VNNI accumulation)
     src/simd/commit_h.rs        the commitment in the horizontal layout (L1-resident groups of 4)
+    src/simd/vertical_bin_quad.rs the binary kernel for the quadratic-slot tree (q in QS_QUAD)
+    src/simd/vertical_gen_quad.rs generic-input kernel for the quadratic-slot tree
     src/simd/vertical_gen.rs    generic-input vertical kernel, forward and inverse
     src/simd/horizontal_gen.rs  generic-input horizontal kernel (HBatch4)
     src/simd/pointwise.rs       slot-wise Montgomery products
     src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)
     src/bin/bench_commit.rs     the headline benchmark;  bench_commit_h.rs, bench_f162.rs, bench_*.rs
+    src/bin/bench_quad.rs       the quadratic-slot kernels next to the splitting ones (all five primes)
     src/bin/kernel_loop.rs      one kernel in a tight loop, for perf stat / perf record
     tests/*.rs                  correctness;  tools/  C microbenchmarks (ports, instruction table, DRAM)
     DESIGN.md                   design notes: tree, arithmetic, bounds, port facts, kernel APIs

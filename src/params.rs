@@ -220,3 +220,211 @@ pub fn red16_i16(a: i16, q: u16) -> i16 {
     let t = ((((a as i32) * red16_v(q) as i32) >> 16) >> red16_shift(q)) as i16;
     a.wrapping_sub(t.wrapping_mul(q as i16))
 }
+
+// =============================================================================================
+// The quadratic-slot tree: q = 1 mod 972 but not mod 1944
+// =============================================================================================
+//
+// For q in [`QS_QUAD`] the group Z_q^* has order 2^2 * 3^5 * k, so a primitive 972-nd root of
+// unity psi' exists but a 1944-th one does not: Phi_1944 splits into 324 irreducible quadratics
+// instead of 648 linear factors. A quadratic factor is X^2 - psi'^u for a unit u mod 972 — its
+// two roots would be psi^u and psi^{u+972} = -psi^u if psi = sqrt(psi') existed — and every unit
+// appears exactly once.
+//
+// The tree keeps the shape of the splitting one with the *second* radix-2 level removed:
+//
+//     level 0: the Phi_6 split   X^648 - X^324 + 1 = (X^324 - psi'^162)(X^324 - psi'^810)
+//     level 1: radix 2           X^324 - psi'^e = (X^162 - psi'^{e/2})(X^162 + psi'^{e/2})
+//     level 2..5: radix 3        X^n - psi'^e = prod_s (X^{n/3} - psi'^{(e + 972 s)/3})
+//                                162 -> 54 -> 18 -> 6 -> 2
+//
+// A sub-ring is Z_q[X]/(X^n - psi'^e) with (n/2) | e (the splitting tree's n | e, halved because
+// the leaves are quadratic); child s of a radix-p split sits at block offset s*n/p, exactly as in
+// the splitting tree. Leaf j is therefore Z_q[X]/(X^2 - psi'^`QUAD_SLOT_EXP[j]`) and holds
+// `a mod (X^2 - c_j) = a_0 + a_1 X` in rows `2j` and `2j+1` of the 648-row output.
+//
+// Multiply count: 216 radix-3 butterflies per level and 4 radix-3 levels below the Phi_6 split,
+// against the splitting tree's 4 radix-3 levels below one more radix-2 level — the same 6480
+// multiply-port uops per batch of 32 for the binary kernel, 3240 Montgomery products against
+// 3564 for the generic one.
+
+/// Conductor of the root of unity the quadratic-slot tree uses: psi' is a primitive 972-nd root.
+pub const CONDUCTOR_QUAD: u32 = 972;
+/// The primes for which `R_648` does *not* split completely: q = 1 mod 972, q = 973 mod 1944.
+pub const QS_QUAD: [u16; 3] = [2917, 4861, 12637];
+/// Number of quadratic leaves.
+pub const QUAD_SLOTS: usize = 324;
+/// Radix of the split that turns level `l` into level `l+1` (level 0 is the whole ring).
+pub const RADIX_Q: [usize; 6] = [2, 2, 3, 3, 3, 3];
+/// Number of sub-rings at level `l` (level 6 = the 324 quadratic leaves).
+pub const SUBRINGS_Q: [usize; 7] = [1, 2, 4, 12, 36, 108, 324];
+/// Degree of one sub-ring at level `l`.
+pub const DEGREE_Q: [usize; 7] = [648, 324, 162, 54, 18, 6, 2];
+
+/// Smallest x in [2, q) whose multiplicative order is exactly 972 (972 = 2^2 * 3^5, so the
+/// maximal proper divisors are 486 and 324).
+pub const fn find_psi972(q: u64) -> u64 {
+    let mut x = 2u64;
+    loop {
+        if pow_mod(x, 972, q) == 1 && pow_mod(x, 486, q) != 1 && pow_mod(x, 324, q) != 1 {
+            return x;
+        }
+        x += 1;
+    }
+}
+
+/// Exponent e of sub-ring k at level `level` (1..=6) of the quadratic-slot tree: that sub-ring is
+/// `Z_q[X]/(X^n - psi'^e)`, n = `DEGREE_Q[level]`. The recursion is `subring_exp`'s with the
+/// conductor 972 and the tree `RADIX_Q`; level 1 is the Phi_6 split, whose children are
+/// `X^324 - zeta6` and `X^324 - zeta6^-1` with zeta6 = psi'^162.
+pub const fn subring_exp_quad(level: usize, k: usize) -> u32 {
+    if level == 1 {
+        return if k == 0 { 162 } else { 810 };
+    }
+    let p = RADIX_Q[level - 1] as u32;
+    (subring_exp_quad(level - 1, k / p as usize) + CONDUCTOR_QUAD * (k as u32 % p)) / p
+}
+
+/// psi'-exponent of the twiddle used when splitting sub-ring k of level `level` (1..=5):
+/// zeta = psi'^(e/p); the p children are `X^{n/p} - zeta * rho_p^s` with rho_2 = -1 = psi'^486
+/// and rho_3 = omega = psi'^324.
+pub const fn twiddle_exp_quad(level: usize, k: usize) -> u32 {
+    subring_exp_quad(level, k) / RADIX_Q[level] as u32
+}
+
+const fn quad_slot_exp_table() -> [u16; QUAD_SLOTS] {
+    let mut t = [0u16; QUAD_SLOTS];
+    let mut j = 0;
+    while j < QUAD_SLOTS {
+        t[j] = subring_exp_quad(6, j) as u16;
+        j += 1;
+    }
+    t
+}
+
+/// `QUAD_SLOT_EXP[j]` = u such that leaf j is `Z_q[X]/(X^2 - psi'^u)`; a permutation of the 324
+/// units mod 972. Rows `2j` and `2j+1` of a transform hold `a mod (X^2 - psi'^u) = a_0 + a_1 X`.
+pub const QUAD_SLOT_EXP: [u16; QUAD_SLOTS] = quad_slot_exp_table();
+
+const _: () = {
+    // every leaf exponent is a unit mod 972 and each of the 324 units occurs exactly once
+    let mut seen = [false; 972];
+    let mut j = 0;
+    while j < QUAD_SLOTS {
+        let u = QUAD_SLOT_EXP[j] as usize;
+        assert!(u % 2 == 1 && u % 3 != 0);
+        assert!(!seen[u]);
+        seen[u] = true;
+        j += 1;
+    }
+};
+
+/// The `R_162` class of leaf j and which of the class's two leaves it is.
+///
+/// The two roots of `X^2 - psi'^u` are `psi^u` and `psi^{u + 972}` (in the quadratic extension
+/// where psi = sqrt(psi') lives), and both have the same class `v = u mod 486` — the exponent
+/// that names an `R_162` slot ([`crate::api::POW3_SLOT_EXP`]), since `theta = psi^4 = psi'^2` and
+/// `theta^u` depends only on `u mod 486`. Each class therefore owns exactly two leaves,
+/// `u = v` (`c = +psi'^v`) and `u = v + 486` (`c = -psi'^v`, because `psi'^486 = -1`).
+///
+/// `QUAD_CLASS_SLOT[0][s]` is the leaf of class `POW3_SLOT_EXP[s]` with `c = +psi'^v`,
+/// `QUAD_CLASS_SLOT[1][s]` the one with `c = -psi'^v`.
+const fn quad_class_tables() -> ([u16; 162], [[u16; 162]; 2]) {
+    let mut class = [0u16; QUAD_SLOTS];
+    let mut slot = [[u16::MAX; 162]; 2];
+    let mut j = 0;
+    while j < QUAD_SLOTS {
+        let u = QUAD_SLOT_EXP[j] as usize;
+        class[j] = (u % 486) as u16;
+        j += 1;
+    }
+    // POW3_SLOT_EXP is the R_162 slot order (the classes in the order of first appearance in the
+    // splitting tree's SLOT_EXP); the class sets of the two trees agree — both are the units
+    // mod 486 — which the assertion below checks.
+    let mut s = 0;
+    while s < 162 {
+        let v = crate::api::POW3_SLOT_EXP[s] as usize;
+        let mut j = 0;
+        while j < QUAD_SLOTS {
+            let u = QUAD_SLOT_EXP[j] as usize;
+            if u == v {
+                slot[0][s] = j as u16;
+            } else if u == v + 486 {
+                slot[1][s] = j as u16;
+            }
+            j += 1;
+        }
+        assert!(slot[0][s] != u16::MAX && slot[1][s] != u16::MAX);
+        s += 1;
+    }
+    let mut cl = [0u16; 162];
+    let mut s = 0;
+    while s < 162 {
+        cl[s] = crate::api::POW3_SLOT_EXP[s];
+        s += 1;
+    }
+    (cl, slot)
+}
+
+const QUAD_CLASS: ([u16; 162], [[u16; 162]; 2]) = quad_class_tables();
+
+/// The 162 `R_162` classes in [`crate::api::POW3_SLOT_EXP`] order (a copy of it, kept here so the
+/// quad tables read from one place).
+pub const QUAD_POW3_CLASS: [u16; 162] = QUAD_CLASS.0;
+/// `QUAD_CLASS_SLOT[sign][s]`: the leaf of class `QUAD_POW3_CLASS[s]` whose constant is
+/// `+psi'^v` (sign = 0) or `-psi'^v` (sign = 1).
+pub const QUAD_CLASS_SLOT: [[u16; 162]; 2] = QUAD_CLASS.1;
+
+/// Per-prime constants of the quadratic-slot tree. `ParamsQ::<2917>::PSI972` etc.
+///
+/// Everything that does not involve a root of unity (`QINV`, `R`, `to_mont`, `mont_pre`, ...) is
+/// taken from [`Params`], which never touches its own `PSI` — that one is the primitive 1944-th
+/// root and does not exist for these primes.
+pub struct ParamsQ<const Q: u16>;
+
+impl<const Q: u16> ParamsQ<Q> {
+    /// Smallest primitive 972-nd root of unity mod q.
+    pub const PSI972: u16 = find_psi972(Q as u64) as u16;
+    /// Primitive cube root of unity, omega = psi'^324 (omega^2 + omega + 1 = 0).
+    pub const OMEGA: u16 = pow_mod(Self::PSI972 as u64, 324, Q as u64) as u16;
+    /// Primitive sixth root of unity, zeta6 = psi'^162 (zeta6^-1 = 1 - zeta6).
+    pub const ZETA6: u16 = pow_mod(Self::PSI972 as u64, 162, Q as u64) as u16;
+    /// theta = psi'^2, the primitive 486-th root of unity an `R_162` slot evaluates at.
+    pub const THETA: u16 = pow_mod(Self::PSI972 as u64, 2, Q as u64) as u16;
+
+    /// psi'^e mod q.
+    pub const fn psi_pow(e: u32) -> u16 {
+        pow_mod(Self::PSI972 as u64, e as u64, Q as u64) as u16
+    }
+    /// Plain twiddle zeta for sub-ring k at level `level` (1..=5).
+    pub const fn zeta(level: usize, k: usize) -> u16 {
+        Self::psi_pow(twiddle_exp_quad(level, k))
+    }
+    /// Table of plain twiddles for a whole level (K = `SUBRINGS_Q[level]`).
+    pub const fn zetas<const K: usize>(level: usize) -> [u16; K] {
+        let mut t = [0u16; K];
+        let mut k = 0;
+        while k < K {
+            t[k] = Self::zeta(level, k);
+            k += 1;
+        }
+        t
+    }
+    pub const ZETA_L1: [u16; 2] = Self::zetas::<2>(1);
+    pub const ZETA_L2: [u16; 4] = Self::zetas::<4>(2);
+    pub const ZETA_L3: [u16; 12] = Self::zetas::<12>(3);
+    pub const ZETA_L4: [u16; 36] = Self::zetas::<36>(4);
+    pub const ZETA_L5: [u16; 108] = Self::zetas::<108>(5);
+
+    /// `LEAF_C[j] = psi'^QUAD_SLOT_EXP[j]`, the constant of leaf j: slot j is
+    /// `Z_q[X]/(X^2 - LEAF_C[j])`.
+    pub const LEAF_C: [u16; QUAD_SLOTS] = {
+        let mut t = [0u16; QUAD_SLOTS];
+        let mut j = 0;
+        while j < QUAD_SLOTS {
+            t[j] = Self::psi_pow(QUAD_SLOT_EXP[j] as u32);
+            j += 1;
+        }
+        t
+    };
+}

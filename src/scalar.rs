@@ -200,3 +200,139 @@ pub fn intt_mont<const Q: u16>(v: &Coeffs) -> Coeffs {
 pub fn intt_mont_pow<const Q: u16>(v: &Coeffs, k: u32) -> Coeffs {
     intt_scaled::<Q>(v, pow_mod(Params::<Q>::RINV as u64, k as u64, Q as u64) as u32)
 }
+
+// =============================================================================================
+// the quadratic-slot transform (q in QS_QUAD: q = 1 mod 972, not mod 1944)
+// =============================================================================================
+
+/// Forward NTT on the quadratic-slot tree (see `params`): the 324 leaves
+/// `Z_q[X]/(X^2 - psi'^QUAD_SLOT_EXP[j])` in tree order, leaf j in rows `2j` (constant term) and
+/// `2j+1` (X coefficient) — `out[2j] + out[2j+1] X = a mod (X^2 - psi'^u_j)`.
+///
+/// Levels: the Phi_6 split, one radix-2 level, then four radix-3 levels 162 -> 54 -> 18 -> 6 -> 2.
+/// The butterflies are exactly [`ntt`]'s; only the tree and the root of unity differ.
+pub fn ntt_quad<const Q: u16>(a: &Coeffs) -> Coeffs {
+    let q = Q as u64;
+    let psi = ParamsQ::<Q>::PSI972 as u64;
+    let w = ParamsQ::<Q>::OMEGA as u64;
+    let w2 = w * w % q;
+    let mut v = [0u64; N];
+    for i in 0..N {
+        v[i] = a[i] as u64 % q;
+    }
+    // level 0: Phi_6 split, children X^324 - zeta6 and X^324 - zeta6^-1 with zeta6^-1 = 1 - zeta6.
+    let z6 = ParamsQ::<Q>::ZETA6 as u64;
+    for i in 0..324 {
+        let (a0, a1) = (v[i], v[i + 324]);
+        let t = a1 * z6 % q;
+        v[i] = (a0 + t) % q;
+        v[i + 324] = (a0 + a1 + q - t) % q;
+    }
+    for level in 1..=5 {
+        let n = DEGREE_Q[level];
+        let p = RADIX_Q[level];
+        let m = n / p;
+        for k in 0..SUBRINGS_Q[level] {
+            let base = k * n;
+            let zeta = pow_mod(psi, twiddle_exp_quad(level, k) as u64, q);
+            if p == 2 {
+                for i in 0..m {
+                    let (a0, a1) = (v[base + i], v[base + m + i]);
+                    let t = a1 * zeta % q;
+                    v[base + i] = (a0 + t) % q;
+                    v[base + m + i] = (a0 + q - t) % q;
+                }
+            } else {
+                let zeta2 = zeta * zeta % q;
+                for i in 0..m {
+                    let a0 = v[base + i];
+                    let t1 = v[base + m + i] * zeta % q;
+                    let t2 = v[base + 2 * m + i] * zeta2 % q;
+                    v[base + i] = (a0 + t1 + t2) % q;
+                    v[base + m + i] = (a0 + w * t1 + w2 * t2) % q;
+                    v[base + 2 * m + i] = (a0 + w2 * t1 + w * t2) % q;
+                }
+            }
+        }
+    }
+    let mut out = [0u32; N];
+    for i in 0..N {
+        out[i] = v[i] as u32;
+    }
+    out
+}
+
+/// `a mod (X^2 - psi'^u) = (r0, r1)` by Horner's rule in X, an independent check of [`ntt_quad`].
+pub fn eval_quad_at<const Q: u16>(a: &Coeffs, u: u32) -> (u32, u32) {
+    let q = Q as u64;
+    let c = pow_mod(ParamsQ::<Q>::PSI972 as u64, u as u64, q);
+    let (mut r0, mut r1) = (0u64, 0u64);
+    for i in (0..N).rev() {
+        // r <- r * X + a[i]  in Z_q[X]/(X^2 - c)
+        let (n0, n1) = ((r1 * c + a[i] as u64) % q, r0);
+        r0 = n0;
+        r1 = n1;
+    }
+    (r0 as u32, r1 as u32)
+}
+
+/// Slot-wise product of two quadratic-slot transforms: for every leaf j,
+/// `(a_0 + a_1 X)(b_0 + b_1 X) mod (X^2 - c_j) = (a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X`.
+///
+/// `ntt_quad(a * b mod Phi_1944) == mul_quad_slots(ntt_quad(a), ntt_quad(b))`.
+pub fn mul_quad_slots<const Q: u16>(a: &Coeffs, b: &Coeffs) -> Coeffs {
+    let q = Q as u64;
+    let mut c = [0u32; N];
+    for j in 0..QUAD_SLOTS {
+        let cj = ParamsQ::<Q>::LEAF_C[j] as u64;
+        let (a0, a1) = (a[2 * j] as u64 % q, a[2 * j + 1] as u64 % q);
+        let (b0, b1) = (b[2 * j] as u64 % q, b[2 * j + 1] as u64 % q);
+        c[2 * j] = ((a0 * b0 + cj * (a1 * b1 % q)) % q) as u32;
+        c[2 * j + 1] = ((a0 * b1 + a1 * b0) % q) as u32;
+    }
+    c
+}
+
+/// The quadratic-slot analogue of `api::decompose_648_to_4x162`: the four `R_162` components of a
+/// ring element, read off its quadratic-slot transform.
+///
+/// With `Y = X^4` an element is `y = y_0(Y) + X y_1(Y) + X^2 y_2(Y) + X^3 y_3(Y)`, the `y_k` in
+/// `R_162 = Z_q[Y]/(Y^162 - Y^81 + 1)`. A leaf `X^2 = c` has `Y = c^2`, so
+///
+/// ```text
+///     y mod (X^2 - c) = [Y_0 + c Y_2] + X [Y_1 + c Y_3],       Y_k = y_k(c^2).
+/// ```
+///
+/// The two leaves of one class `v` are `c = +psi'^v` and `c = -psi'^v` ([`QUAD_CLASS_SLOT`]) and
+/// both give `c^2 = psi'^{2v} = theta^v`, so the class is inverted by a 2-point butterfly
+///
+/// ```text
+///     Y_0 = (E^+_0 + E^-_0)/2,   Y_2 = (E^+_0 - E^-_0)/(2 psi'^v),
+///     Y_1 = (E^+_1 + E^-_1)/2,   Y_3 = (E^+_1 - E^-_1)/(2 psi'^v),
+/// ```
+///
+/// `E^+` the plus leaf's two rows, `E^-` the minus leaf's. The output is in the `R_162` slot order
+/// of [`crate::api::POW3_SLOT_EXP`]: `out[k][s] = y_k(theta^{v_s})`, fully reduced in `[0, q)`.
+pub fn decompose_quad_648_to_4x162<const Q: u16>(y: &Coeffs) -> [[u32; 162]; 4] {
+    let q = Q as u64;
+    let inv2 = inv_mod(2, q);
+    let mut out = [[0u32; 162]; 4];
+    for s in 0..162 {
+        let v = QUAD_POW3_CLASS[s] as u64;
+        let jp = QUAD_CLASS_SLOT[0][s] as usize;
+        let jm = QUAD_CLASS_SLOT[1][s] as usize;
+        // psi'^{-v} = psi'^{972 - v}
+        let ipv = pow_mod(
+            ParamsQ::<Q>::PSI972 as u64,
+            (CONDUCTOR_QUAD as u64 - v) % CONDUCTOR_QUAD as u64,
+            q,
+        );
+        for k in 0..2 {
+            let ep = y[2 * jp + k] as u64 % q;
+            let em = y[2 * jm + k] as u64 % q;
+            out[k][s] = ((ep + em) % q * inv2 % q) as u32;
+            out[k + 2][s] = ((ep + q - em) % q * inv2 % q * ipv % q) as u32;
+        }
+    }
+    out
+}

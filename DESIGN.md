@@ -23,6 +23,37 @@ definitions every kernel follows.
 * Slot j holds a(psi^SLOT_EXP[j]).  Output type `Batch32 { v: [[i16;32]; 648], representation: Ntt }`
   (v[j][p] = slot j of polynomial p) for the vertical layouts.
 
+## 1b. The quadratic-slot tree (`params::QS_QUAD = {2917, 4861, 12637}`)
+
+These primes are 1 mod 972 and 973 mod 1944: psi' = smallest primitive 972-nd root of unity
+exists (2, 2, 50), a 1944-th one does not, and Phi_1944 factors into 324 irreducible quadratics
+`X^2 - psi'^u`, u over the units mod 972. omega = psi'^324, zeta6 = psi'^162, psi'^486 = -1.
+
+* Tree (`RADIX_Q = [2, 2, 3, 3, 3, 3]`, `DEGREE_Q = [648, 324, 162, 54, 18, 6, 2]`,
+  `SUBRINGS_Q = [1, 2, 4, 12, 36, 108, 324]`): the splitting tree with its *second* radix-2 level
+  removed. Level 0 the Phi_6 split (children `X^324 - psi'^162`, `X^324 - psi'^810`), level 1 one
+  radix 2, levels 2..5 radix 3 (162 -> 54 -> 18 -> 6 -> 2). A sub-ring is `Z_q[X]/(X^n - psi'^e)`
+  with `(n/2) | e`; radix-p split into `X^{n/p} - psi'^{(e + 972 s)/p}`, child s at block offset
+  `s n/p`. `subring_exp_quad` / `twiddle_exp_quad` are `subring_exp` / `twiddle_exp` with the
+  conductor 972 and this radix list; the butterflies are unchanged (section 1).
+* Leaf j is `Z_q[X]/(X^2 - psi'^QUAD_SLOT_EXP[j])` and occupies **rows 2j and 2j+1**:
+  `a mod (X^2 - c_j) = a_0 + a_1 X`. `scalar::ntt_quad` defines the order, `scalar::eval_quad_at`
+  the leaf reduction, `scalar::mul_quad_slots` the slot product
+  `(a_0 b_0 + c_j a_1 b_1) + (a_0 b_1 + a_1 b_0) X`.
+* `R_162` view: both roots of a leaf have the same class `v = u mod 486`, so each of the 162
+  classes of `api::POW3_SLOT_EXP` owns two leaves, `c = +psi'^v` (`QUAD_CLASS_SLOT[0][s]`) and
+  `c = -psi'^v` (`[1][s]`). With `Y = X^4`, `Y = c^2 = theta^v` for both, so
+  `y mod (X^2 - c) = [Y_0 + c Y_2] + X [Y_1 + c Y_3]` and a 2-point butterfly per class inverts
+  it: `scalar::decompose_quad_648_to_4x162`.
+* Cost: the same 216 butterflies at each of four radix-3 levels as the splitting tree, hence the
+  same 6480 multiply-port uops per batch of 32 for the binary kernel (3240 Montgomery products
+  instead of 3564 for the generic one); only one level of twiddles can be folded into the binary
+  kernel's tables, so it does 648 lookups per batch instead of 1080.
+* Bounds: 2^15/q = 11.23, 6.74, 2.59. Reductions are the lookup Barrett of section 2 wherever
+  they are needed at all; the placement is a `const` search (`vertical_bin_quad::bin_model`,
+  `vertical_gen_quad::gen_flags`) that replays the schedule position by position and is checked
+  by the i32 shadow model in `tests/quad.rs`. See README, "Quadratic-slot limbs".
+
 ## 2. Arithmetic (signed i16 lanes)
 
 * Hard invariant: every lane value must satisfy |x| < 2^15. Budget: 8.42q for 3889, 3.37q for 9721.
@@ -133,6 +164,14 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   index rows the kernel consumes) for plain 648-bit polynomials.
 * `vertical_gen` — `ntt_gen_batch32::<Q>(&mut Batch32)` in place, Coefficients -> Ntt, input lanes
   |x| <= q; `ntt_gen_batches` over a slice with prefetching.
+* `vertical_bin_quad` — the quadratic-slot binary kernel (section 1b):
+  `ntt_quad_bin_batch32::<Q>(&BinaryIndex32, &mut Batch32)` and `_nt`, the block hook
+  `ntt_quad_bin_batch32_sink` (`BlockSink`, **36 blocks of 18 consecutive output rows**, i.e. 9
+  quadratic leaves each), and the drivers `ntt_quad_f162::<Q>(&[F162], &mut [Batch32])`,
+  `ntt_quad_f162_stream`, `ntt_quad_bin_polys`. Same `transpose_f162` front end as the splitting
+  kernel.
+* `vertical_gen_quad` — `ntt_quad_gen_batch32::<Q>(&mut Batch32)` in place, input |x| <= q,
+  `ntt_quad_gen_batches` with prefetching, `ntt_quad_gen_batch32_plan` for the fusion variants.
 * `horizontal_gen` — `HBatch4 { v: [[i16; 32]; 81] }` with v[r][8p + j] = coefficient r + 81 j of
   polynomial p (one polynomial per 128-bit lane, 8 coefficients of stride 81 per lane);
   `ntt_gen_hbatch4::<Q>(&mut HBatch4)`; output slot 81 j + r; `HBatch4::get(p)` returns tree order.
@@ -173,3 +212,8 @@ same commitment in the horizontal layout with L1-resident groups of 4 (front end
   cache-resident and out-of-cache cases, static instruction counts from the disassembly.
   DRAM floors measured with `tools/membw`: non-temporal stores 37 GB/s, regular stores 14 GB/s,
   reads 19.5 GB/s.
+* `tests/quad.rs` and `src/bin/bench_quad.rs`: the same for the quadratic-slot tree, over its
+  three primes — the scalar reference against the leaf reduction and against the definition of
+  the `R_162` decomposition, both kernels against `scalar::ntt_quad` row for row, the i32 shadow
+  model, the declared bounds, and the product identity through the SIMD outputs. The bench prints
+  all five primes side by side.
