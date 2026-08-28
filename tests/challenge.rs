@@ -1,5 +1,5 @@
 //! Short challenges: determinism of the transcript, the shape of a challenge, the canonical
-//! embedding against a naive reference, the rejection bound, and the NTT convention against
+//! embedding against a naive reference, the rejection bound, and the acceptance statistics.
 use bin_ntt::api::N162;
 use bin_ntt::challenge::{
     canonical_inf_norm_sq, canonical_inf_norm_sq_naive, sample_attempt, sample_short_challenge,
