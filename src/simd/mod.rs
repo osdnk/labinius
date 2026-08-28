@@ -5,7 +5,11 @@
 //! `-C target-cpu=native` (see `.cargo/config.toml`).
 
 pub mod horizontal_gen;
+pub mod ntt_f162;
 pub mod pointwise;
 pub mod transpose;
+pub mod transpose_f162;
 pub mod vertical_bin;
+pub mod vertical_bin_asm;
+pub mod vertical_bin_io;
 pub mod vertical_gen;

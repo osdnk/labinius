@@ -3,5 +3,13 @@
 version = 4
 
 [[package]]
+name = "bin-fields"
+version = "0.1.0"
+source = "git+https://github.com/osdnk/field-benches?rev=84ee9ce#84ee9ce30eccc26aac5604b7942a699d116e8d0e"
+
+[[package]]
 name = "bin-ntt"
 version = "0.1.0"
+dependencies = [
+ "bin-fields",
+]

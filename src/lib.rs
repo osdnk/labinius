@@ -11,6 +11,7 @@
 //! - `simd`    : the AVX-512 kernels (one module per variant).
 #![allow(clippy::needless_range_loop)]
 
+pub mod f162;
 pub mod params;
 pub mod perf;
 pub mod rng;

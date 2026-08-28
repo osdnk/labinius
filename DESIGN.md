@@ -1,7 +1,9 @@
 # bin-ntt — design notes for the AVX-512 kernels
 
 Target machine only: Intel i7-11850H (Tiger Lake), single thread. Goal: forward NTT of binary
-polynomials over R_q = Z_q[X]/(X^648 - X^324 + 1), q in {3889, 9721}, as fast as possible; the
+polynomials over R_q = Z_q[X]/(X^648 - X^324 + 1), q in {3889, 9721}, as fast as possible. The
+input is a stream of `bin_fields::scalar::F162`; four consecutive elements form one ring element
+by plain interleaving (coefficient of X^{4m+k} = bit m of element k), see `src/f162.rs`. The
 yardstick is Gregor Seiler's estimate of ~650 cycles per polynomial for a generic-input NTT on this
 core. Cycles and instruction/uop counts per polynomial are measured with `src/perf.rs`. The
 measured results and the per-kernel strategies are in README.md; this file holds the shared
@@ -52,6 +54,7 @@ definitions every kernel follows.
 | vpermi2w / vpermt2w / vpermi2b / vpmovwb            | 0.5 / cycle | 2 uops |
 | vpbroadcastw m16 (p5 uop!)  vs  vpbroadcastd m32 (pure load, free) | 1 vs 0.5 | — |
 | kmovd/kmovq k, m (1 uop on p5)                      | 1 / cycle  | p5 |
+| merge-masked zmm load                               |            | ~1 extra p0/p5 uop on top of the load |
 | zmm load 2/cycle, zmm store 1/cycle                  |            | — |
 
 Consequences: cycles ~= max(p0 uops, (all ALU uops)/2); in practice 15-28% of the adds are
@@ -109,9 +112,14 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
 * `vertical_bin` — `ntt_bin_batch32::<Q>(&BinaryIndex32, &mut Batch32)`; drivers
   `ntt_bin_polys::<Q>(&[BinaryPoly], &mut [Batch32])` (materialised, non-temporal stores for the
   last level) and `ntt_bin_stream::<Q>(&[BinaryPoly], impl FnMut(usize, &Batch32))`.
+* `transpose_f162` — `slice_f162(&[F162; 128]) -> BinaryIndex32`: the production front end
+  (scalar reference `f162::index_rows_scalar`). `ntt_f162` — drivers `ntt_f162::<Q>(&[F162],
+  &mut [Batch32])`, `ntt_f162_2q`, `ntt_f162_stream`.
+* `vertical_bin_asm` — same API as `vertical_bin`, levels 4-6 in `asm!`, bit-identical output;
+  the production kernel.
 * `transpose` — `slice_polys(&[BinaryPoly; 32]) -> BinaryBatch32` (nibble form, equal to
   `BinaryBatch32::from_polys_scalar`) and `slice_polys_idx(..) -> BinaryIndex32` (the `vpermb`
-  index rows the kernel consumes).
+  index rows the kernel consumes) for the older one-polynomial-per-`[u64; 11]` input.
 * `vertical_gen` — `ntt_gen_batch32::<Q>(&mut Batch32)` in place, Coefficients -> Ntt, input lanes
   |x| <= q; `ntt_gen_batches` over a slice with prefetching.
 * `horizontal_gen` — `HBatch4 { v: [[i16; 32]; 81] }` with v[r][8p + j] = coefficient r + 81 j of
@@ -127,8 +135,9 @@ code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
   bound holds; an i32 shadow model replays the kernel's operation sequence and asserts every
   intermediate is < 2^15; and the multiplication tests through `pointwise` against
   `scalar::ntt(scalar::mul_mod_phi(a, b))`. Generic kernels also test random i16 inputs in [-q, q].
-* `src/bin/bench_all.rs`: the headline (2^18 polynomials -> preallocated output, both primes, every
-  kernel, plus the NTT-domain products), pinned to one core, `perf::PerfGroup` counters (cycles,
+* `src/bin/bench_f162.rs`: the headline (2^20 F162 -> 2^18 ring elements, both primes, single and
+  two-prime drivers, streamed, accumulate product); `src/bin/bench_all.rs`: the same for the older
+  `BinaryPoly` input with every kernel; both pinned to one core, `perf::PerfGroup` counters (cycles,
   instructions, uops, ports 0/1/5). `src/bin/bench_<variant>.rs`: per-kernel breakdowns,
   cache-resident and out-of-cache cases, static instruction counts from the disassembly.
   DRAM floors measured with `tools/membw`: non-temporal stores 37 GB/s, regular stores 14 GB/s,

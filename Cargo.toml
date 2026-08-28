@@ -5,6 +5,8 @@ edition = "2021"
 description = "AVX-512 NTT over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, q in {3889, 9721}"
 
 [dependencies]
+# The F162 type exactly as used by binius64-f162 (pinned to the revision that repo resolves to).
+bin-fields = { git = "https://github.com/osdnk/field-benches", rev = "84ee9ce" }
 
 [profile.release]
 opt-level = 3
