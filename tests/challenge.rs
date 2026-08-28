@@ -1,13 +1,10 @@
 //! Short challenges: determinism of the transcript, the shape of a challenge, the canonical
 //! embedding against a naive reference, the rejection bound, and the NTT convention against
-//! `scalar::ntt` + `decompose_648_to_4x162`.
-use bin_ntt::api::{decompose_648_to_4x162, N162, PRIMES};
+use bin_ntt::api::N162;
 use bin_ntt::challenge::{
     canonical_inf_norm_sq, canonical_inf_norm_sq_naive, sample_attempt, sample_short_challenge,
     ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT, MAX_WEIGHT,
 };
-use bin_ntt::params::N;
-use bin_ntt::scalar;
 use std::time::Instant;
 
 fn transcript(tag: u64) -> Transcript {
@@ -215,47 +212,4 @@ fn acceptance_statistics() {
             assert!(mean < 2.0, "bound 13 rejects too often: {mean}");
         }
     }
-}
-
-/// The lift of the challenge into `R_648` is `c(-X^4)`, so the coefficient of `X^{4m}` is
-/// `(-1)^m c_m`. Its NTT decomposed into the four `R_162` components must be `(to_ntt(), 0, 0, 0)`.
-fn conventions<const Q: u16>(c: &ShortChallenge, limb: usize) {
-    let q = Q as u32;
-    let mut lifted = [0u32; N];
-    for (m, &x) in c.coeffs().iter().enumerate() {
-        let s = if m % 2 == 0 { x as i32 } else { -(x as i32) };
-        lifted[4 * m] = s.rem_euclid(q as i32) as u32;
-    }
-    let d = decompose_648_to_4x162::<Q>(&scalar::ntt::<Q>(&lifted));
-    let want = c.to_ntt().limb[limb].normalized(Q);
-    assert_eq!(d[0], want, "component 0 mismatch mod {Q}");
-    for k in 1..4 {
-        assert!(
-            d[k].iter().all(|&x| x == 0),
-            "component {k} nonzero mod {Q}"
-        );
-    }
-}
-
-#[test]
-fn ntt_convention() {
-    let mut t = transcript(9);
-    for _ in 0..40 {
-        let (c, _) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
-        conventions::<{ PRIMES[0] }>(&c, 0);
-        conventions::<{ PRIMES[1] }>(&c, 1);
-    }
-    // Edge cases: the constant 1, a single top monomial, the full-weight challenge.
-    let mut d = [0i8; N162];
-    d[0] = 1;
-    conventions::<{ PRIMES[0] }>(&ShortChallenge::from_coeffs(&d), 0);
-    conventions::<{ PRIMES[1] }>(&ShortChallenge::from_coeffs(&d), 1);
-    let mut d = [0i8; N162];
-    d[161] = -1;
-    conventions::<{ PRIMES[0] }>(&ShortChallenge::from_coeffs(&d), 0);
-    conventions::<{ PRIMES[1] }>(&ShortChallenge::from_coeffs(&d), 1);
-    let c = sample_attempt(&mut t, MAX_WEIGHT);
-    conventions::<{ PRIMES[0] }>(&c, 0);
-    conventions::<{ PRIMES[1] }>(&c, 1);
-    conventions::<{ PRIMES[0] }>(&ShortChallenge::zero(), 0);
 }

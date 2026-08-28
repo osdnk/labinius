@@ -21,18 +21,8 @@
 //! let mut t = Transcript::new(b"bin-ntt/example");
 //! t.absorb_elements(&commitment);
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
-//! let c_ntt = c.to_ntt(); // the same challenge in the API's NTT domain, both primes
 //! ```
-//!
-//! [`ShortChallenge::to_ntt`] puts a challenge in exactly the domain
-//! [`crate::PowerOfThreeRingElement`] lives in: slot `s` is `c(Z)` at `Z = -theta^{v_s}`,
-//! `theta = psi^4`, `v_s = `[`crate::POW3_SLOT_EXP`]`[s]`, centered. So the challenge multiplies a
-//! commitment component slot by slot, and — since `R_162 = Z_q[Y]/(Y^162 - Y^81 + 1)` sits inside
-//! `R_648` as the coefficients of `1, X, X^2, X^3` — multiplying all four components by the same
-//! challenge is multiplication by `c(-X^4)` in `R_648` (the `tests/challenge.rs` conventions test
-//! checks precisely that).
-use crate::api::{PowerOfThreeRingElement, PowerOfThreeRingElementWithTwoLimbs, N162, PRIMES};
-use crate::params::{center, pow_mod, Params};
+use crate::api::{PowerOfThreeRingElementWithTwoLimbs, N162};
 use blake3::Hasher;
 use std::f64::consts::PI;
 use std::sync::LazyLock;
@@ -220,44 +210,6 @@ impl ShortChallenge {
             bits += ((N162 - i) as f64 / (i + 1) as f64).log2();
         }
         bits
-    }
-
-    /// The challenge in the NTT domain of [`crate::PowerOfThreeRingElement`], for both primes.
-    ///
-    /// Slot `s` is `c(-theta^{v_s}) mod q` with `theta = psi^4` and
-    /// `v_s = `[`crate::POW3_SLOT_EXP`]`[s]`, centered into `[-(q-1)/2, (q-1)/2]` — exactly the
-    /// convention of the commitment's output, so slot-wise products are ring products.
-    pub fn to_ntt(&self) -> PowerOfThreeRingElementWithTwoLimbs {
-        PowerOfThreeRingElementWithTwoLimbs {
-            limb: [
-                self.to_ntt_limb::<{ PRIMES[0] }>(),
-                self.to_ntt_limb::<{ PRIMES[1] }>(),
-            ],
-        }
-    }
-
-    fn to_ntt_limb<const Q: u16>(&self) -> PowerOfThreeRingElement {
-        let q = Q as u64;
-        let theta = pow_mod(Params::<Q>::PSI as u64, 4, q);
-        let mut out = PowerOfThreeRingElement::zero();
-        for s in 0..N162 {
-            let v = crate::api::POW3_SLOT_EXP[s] as u64;
-            // Z = -theta^v, a primitive 243-rd root of unity mod q.
-            let x = (q - pow_mod(theta, v, q)) % q;
-            let mut acc = 0u64;
-            let mut pw = 1u64;
-            let mut p = 0usize;
-            for i in 0..self.weight {
-                let target = self.positions[i] as usize;
-                while p < target {
-                    pw = pw * x % q;
-                    p += 1;
-                }
-                acc += if self.signs[i] > 0 { pw } else { q - pw };
-            }
-            out.v[s] = center(acc % q, q);
-        }
-        out
     }
 }
 

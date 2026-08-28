@@ -142,8 +142,7 @@ over this commitment: short elements of the same `R_162` the commitment's four c
   and everything is a deterministic function of the absorbed bytes.
 * `ShortChallenge { positions: [u8; MAX_WEIGHT], signs: [i8; MAX_WEIGHT], weight }` — a weight-`w`
   ternary element of `R_162`, stored as sorted distinct positions plus signs (`MAX_WEIGHT = 32`).
-  `coeffs() -> [i8; 162]`, `from_coeffs`, `log2_cardinality(w) = log2 C(162, w) + w`, and
-  `to_ntt() -> PowerOfThreeRingElementWithTwoLimbs`.
+  `coeffs() -> [i8; 162]`, `from_coeffs`, `log2_cardinality(w) = log2 C(162, w) + w`.
 * `sample_attempt(&mut Transcript, w)` is uniform over that set: a partial Fisher-Yates over the
   162 positions with each index drawn uniformly from `[i, 162)` by rejection on 16-bit XOF draws,
   and uniform signs. `sample_short_challenge(t, w, bound)` rejects until the challenge is short and
@@ -167,14 +166,11 @@ over all 162 roots) is the reference the whole thing is tested against.
 let mut t = Transcript::new(b"bin-ntt/example");
 t.absorb_elements(c.column(0));                                  // bind the commitment
 let (chal, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
-let slots = chal.to_ntt();                    // slot-wise multiplier for each of the four rows
+let coeffs = chal.coeffs();                   // the challenge as 162 coefficients in {-1, 0, 1}
 ```
 
-`to_ntt` uses exactly the API's convention: slot `s` is `c(Z)` at `Z = -theta^{v_s}`, `theta = psi^4`,
-`v_s = POW3_SLOT_EXP[s]`, centered. Lifted into `R_648` as `c(-X^4)` (coefficient of `X^{4m}` is
-`(-1)^m c_m`), a challenge therefore has `decompose_648_to_4x162(ntt(c(-X^4)))` equal to
-`(to_ntt(), 0, 0, 0)` — so multiplying all four rows of a commitment by `to_ntt()` slot by slot is
-multiplication by `c(-X^4)` in `R_648`, and `tests/challenge.rs` checks that for both primes.
+As an element of `R_162` a challenge lifts into `R_648` as `c(-X^4)` (coefficient of `X^{4m}` is
+`(-1)^m c_m`), which is what multiplying all four rows of a commitment by one challenge means.
 
 **Measured** (`cargo test --release --offline --test challenge -- --nocapture`, weight 21, 2000
 accepted challenges per row). The challenge set has `log2 C(162, 21) + 21 = 107.7` bits; an attempt
