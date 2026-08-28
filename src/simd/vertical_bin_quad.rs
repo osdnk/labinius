@@ -58,11 +58,9 @@
 //! 648 reductions per batch, none of them on the saturated port 0. All three are needed: dropping
 //! any one of them overflows i16 (`bin_model` is exhaustive over the flag set).
 use crate::params::*;
-use crate::simd::transpose;
 use crate::simd::vertical_bin_asm::barrett_lut_corr;
-pub use crate::simd::transpose::BinaryIndex32;
+pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::types::*;
-use bin_fields::scalar::F162;
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -546,7 +544,7 @@ impl BlockSink for OutSink {
 // ---------------------------------------------------------------------------------------------
 
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn ntt_core<const Q: u16, const NT: bool, S: BlockSink>(
+unsafe fn ntt_core<const Q: u16, S: BlockSink>(
     input: &BinaryIndex32,
     sink: &mut S,
 ) {
@@ -634,15 +632,9 @@ unsafe fn ntt_core<const Q: u16, const NT: bool, S: BlockSink>(
                     } else {
                         r3::<false>(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t5)
                     };
-                    if NT {
-                        _mm512_stream_si512(op.add(32 * (b + i)) as *mut __m512i, o0);
-                        _mm512_stream_si512(op.add(32 * (b + i + 2)) as *mut __m512i, o1);
-                        _mm512_stream_si512(op.add(32 * (b + i + 4)) as *mut __m512i, o2);
-                    } else {
-                        st(op, b + i, o0);
-                        st(op, b + i + 2, o1);
-                        st(op, b + i + 4, o2);
-                    }
+                    st(op, b + i, o0);
+                    st(op, b + i + 2, o1);
+                    st(op, b + i + 4, o2);
                 }
             }
             sink.block(kk, op);
@@ -657,18 +649,7 @@ unsafe fn ntt_core<const Q: u16, const NT: bool, S: BlockSink>(
 /// The host must have AVX-512 F/BW/VL/VBMI; `out` is 64-byte aligned (`Batch32` is).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_quad_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, false, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
-    out.representation = Representation::Ntt;
-}
-
-/// Same, but the output is written with non-temporal stores (for output that will not be re-read
-/// soon). The caller must `_mm_sfence()` after the last batch.
-///
-/// # Safety
-/// See [`ntt_quad_bin_batch32`].
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-pub unsafe fn ntt_quad_bin_batch32_nt<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    ntt_core::<Q, true, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
+    ntt_core::<Q, _>(input, &mut OutSink(out.v.as_mut_ptr() as *mut i16));
     out.representation = Representation::Ntt;
 }
 
@@ -682,76 +663,5 @@ pub unsafe fn ntt_quad_bin_batch32_sink<const Q: u16, S: BlockSink>(
     input: &BinaryIndex32,
     sink: &mut S,
 ) {
-    ntt_core::<Q, false, S>(input, sink);
-}
-
-// ---------------------------------------------------------------------------------------------
-// drivers
-// ---------------------------------------------------------------------------------------------
-
-/// Transpose + quadratic-slot NTT of `32 * out.len()` binary polynomials into a materialised
-/// `Batch32` array (non-temporal stores: the output of a large run does not fit any cache).
-pub fn ntt_quad_bin_polys<const Q: u16>(polys: &[BinaryPoly], out: &mut [Batch32]) {
-    assert_eq!(polys.len(), 32 * out.len());
-    let mut idx = BinaryIndex32::zero();
-    unsafe {
-        for (b, o) in out.iter_mut().enumerate() {
-            let chunk: &[BinaryPoly; 32] =
-                &*(polys.as_ptr().add(32 * b) as *const [BinaryPoly; 32]);
-            transpose::slice_polys_idx_into(chunk, &mut idx);
-            ntt_quad_bin_batch32_nt::<Q>(&idx, o);
-        }
-        _mm_sfence();
-    }
-}
-
-/// The `F162` front end: `elems.len()` must be `128 * out.len()` (128 `F162` = 32 ring elements =
-/// one `Batch32`). Same slicer as the splitting kernel's driver
-/// ([`crate::simd::transpose_f162`]), since the lookup index does not depend on the tree.
-pub fn ntt_quad_f162<const Q: u16>(elems: &[F162], out: &mut [Batch32]) {
-    drive::<Q, true>(elems, out);
-}
-
-/// [`ntt_quad_f162`] with regular stores (cache-resident output).
-pub fn ntt_quad_f162_cached<const Q: u16>(elems: &[F162], out: &mut [Batch32]) {
-    drive::<Q, false>(elems, out);
-}
-
-fn drive<const Q: u16, const NT: bool>(elems: &[F162], out: &mut [Batch32]) {
-    assert_eq!(core::mem::size_of::<F162>(), 24, "F162 is not 24 bytes");
-    assert_eq!(elems.len(), 128 * out.len(), "128 F162 per output batch");
-    let mut idx: Box<[BinaryIndex32; 2]> =
-        unsafe { Box::<[BinaryIndex32; 2]>::new_uninit().assume_init() };
-    unsafe {
-        for (b, o) in out.iter_mut().enumerate() {
-            let i = &mut idx[b & 1];
-            crate::simd::transpose_f162::slice_f162_into(
-                &*(elems.as_ptr().add(128 * b) as *const [F162; 128]),
-                i,
-            );
-            if NT {
-                ntt_quad_bin_batch32_nt::<Q>(i, o);
-            } else {
-                ntt_quad_bin_batch32::<Q>(i, o);
-            }
-        }
-        _mm_sfence();
-    }
-}
-
-/// Transpose + NTT, handing each finished batch to `f` instead of materialising it.
-pub fn ntt_quad_f162_stream<const Q: u16>(elems: &[F162], mut f: impl FnMut(usize, &Batch32)) {
-    assert_eq!(elems.len() % 128, 0);
-    let mut buf = Batch32::zero(Representation::Ntt);
-    let mut idx = BinaryIndex32::zero();
-    unsafe {
-        for b in 0..elems.len() / 128 {
-            crate::simd::transpose_f162::slice_f162_into(
-                &*(elems.as_ptr().add(128 * b) as *const [F162; 128]),
-                &mut idx,
-            );
-            ntt_quad_bin_batch32::<Q>(&idx, &mut buf);
-            f(b, &buf);
-        }
-    }
+    ntt_core::<Q, S>(input, sink);
 }

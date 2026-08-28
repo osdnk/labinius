@@ -1,15 +1,24 @@
-//! Correctness of the NTT-domain commitment `y[j] = sum_i A_i[j] * NTT_q(w_i)[j] mod q`: every
-//! entry point against the scalar reference for both primes, the raw accumulator's exact fold-back
-//! and its overflow bound (replayed in i64 against the real kernel output), and `commit_2q`
-//! against two separate `commit` calls.
+//! Correctness of the NTT-domain commitment `y[j] = sum_i A_i[j] * NTT_q(w_i)[j] mod q`: the
+//! commitment against the scalar reference for both primes, the raw accumulator's exact fold-back
+//! and its overflow bound (replayed in i64 against the real kernel output), and the two-limb
+//! commitment against two single-limb ones.
 use bin_fields::scalar::F162;
 use bin_ntt::f162::{self, RandomF162};
 use bin_ntt::params::N;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::commit::{self as cm, Acc};
-use bin_ntt::simd::ntt_f162 as nf;
+use bin_ntt::simd::transpose_f162 as tf;
+use bin_ntt::simd::vertical_bin_asm as vb;
 use bin_ntt::types::*;
+
+/// The production commitment over a single splitting limb.
+fn commit<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
+    cm::commit_limbs(elems, &[cm::Limb { q: Q, quad: false, a }], None)
+        .into_iter()
+        .next()
+        .unwrap()
+}
 
 const FULL: F162 = F162([!0u64, !0u64, (1u64 << 34) - 1]);
 
@@ -69,47 +78,21 @@ fn reference<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
     out
 }
 
-fn all_paths<const Q: u16>(
-    elems: &[F162],
-    a: &[Batch32],
-    period: usize,
-) -> Vec<(&'static str, [u32; N])> {
-    let mut w: Vec<Batch32> = (0..a.len()).map(|_| Batch32::zero(Representation::Ntt)).collect();
-    vec![
-        ("unfused", cm::commit_unfused::<Q, false>(elems, a, &mut w, period)),
-        ("unfused+pf", cm::commit_unfused::<Q, true>(elems, a, &mut w, period)),
-        ("batch-fused", cm::commit_batch_fused::<Q, false>(elems, a, period)),
-        ("batch-fused+pf", cm::commit_batch_fused::<Q, true>(elems, a, period)),
-        ("block-fused", cm::commit_block_fused::<Q, false, 1>(elems, a, period)),
-        ("block-fused+pf", cm::commit_block_fused::<Q, true, 1>(elems, a, period)),
-        ("block-fused+pf2", cm::commit_block_fused::<Q, true, 2>(elems, a, period)),
-        ("block-fused+pf6", cm::commit_block_fused::<Q, true, 6>(elems, a, period)),
-    ]
-}
-
-fn check<const Q: u16>(label: &str, elems: &[F162], a: &[Batch32], period: usize) {
+fn check<const Q: u16>(label: &str, elems: &[F162], a: &[Batch32]) {
     let want = reference::<Q>(elems, a);
-    for (name, got) in all_paths::<Q>(elems, a, period) {
-        for j in 0..N {
-            assert_eq!(
-                got[j], want[j],
-                "{label}: q = {Q}, {name}, period {period}: slot {j} ({} batches)",
-                a.len()
-            );
-        }
+    let got = commit::<Q>(elems, a);
+    for j in 0..N {
+        assert_eq!(got[j], want[j], "{label}: q = {Q}, slot {j} ({} batches)", a.len());
     }
 }
 
 fn random_case<const Q: u16>() {
-    for (nb, seed) in [(4usize, 1u64), (5, 2), (6, 3)] {
+    // batch counts on both sides of the fold-back period, and one that is a multiple of it.
+    let p = cm::red_period(Q);
+    for (nb, seed) in [(1usize, 1u64), (4, 2), (p, 3), (2 * p + 3, 4)] {
         let elems = random_elems(nb, seed);
         let a = random_a(nb, Q, seed ^ 0x5a5a);
-        // period 1..3 forces the fold-back to run several times on 4-6 batches; the production
-        // period is exercised by `bound_adversarial` below.
-        for period in [1, 2, 3] {
-            check::<Q>("random", &elems, &a, period);
-        }
-        check::<Q>("random", &elems, &a, cm::red_period(Q));
+        check::<Q>("random", &elems, &a);
     }
 }
 
@@ -164,7 +147,13 @@ fn bound_adversarial<const Q: u16>() {
     let a = extreme_a(nb, Q, 0xBEEF);
 
     let mut w: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
-    nf::ntt_f162::<Q>(&elems, &mut w);
+    let mut idx = bin_ntt::simd::transpose_f162::BinaryIndex32::zero();
+    for (b, o) in w.iter_mut().enumerate() {
+        unsafe {
+            tf::slice_f162_into(&*(elems.as_ptr().add(128 * b) as *const [F162; 128]), &mut idx);
+            vb::ntt_bin_batch32::<Q>(&idx, o);
+        }
+    }
 
     let mut maxw = 0i64;
     for b in &w {
@@ -208,10 +197,10 @@ fn bound_adversarial<const Q: u16>() {
         assert_eq!(s.rem_euclid(q) as u32, want[j], "shadow model disagrees at slot {j}");
     }
 
-    check::<Q>("adversarial", &elems, &a, period);
+    check::<Q>("adversarial", &elems, &a);
 
     let elems = random_elems(nb, 7);
-    check::<Q>("random x extreme A", &elems, &a, period);
+    check::<Q>("random x extreme A", &elems, &a);
 }
 
 #[test]
@@ -224,20 +213,38 @@ fn bound_adversarial_9721() {
     bound_adversarial::<9721>();
 }
 
-/// `commit` (the public entry point) and `commit_2q` against the reference / two `commit` calls.
+/// Two limbs off one slicing pass are the two single-limb commitments, and the kept transform is
+/// the base limb's kernel output.
 #[test]
-fn commit_and_2q() {
+fn two_limbs() {
     let nb = 5;
     let elems = random_elems(nb, 11);
     let a3 = random_a(nb, 3889, 12);
     let a9 = random_a(nb, 9721, 13);
-    let y3 = cm::commit::<3889>(&elems, &a3);
-    let y9 = cm::commit::<9721>(&elems, &a9);
+    let y3 = commit::<3889>(&elems, &a3);
+    let y9 = commit::<9721>(&elems, &a9);
     assert_eq!(y3, reference::<3889>(&elems, &a3));
     assert_eq!(y9, reference::<9721>(&elems, &a9));
-    let (z3, z9) = cm::commit_2q(&elems, &a3, &a9);
-    assert_eq!(z3, y3);
-    assert_eq!(z9, y9);
+
+    let mut w: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
+    let limbs = [
+        cm::Limb { q: 3889, quad: false, a: &a3 },
+        cm::Limb { q: 9721, quad: false, a: &a9 },
+    ];
+    let z = cm::commit_limbs(&elems, &limbs, Some(&mut w));
+    assert_eq!(z[0], y3);
+    assert_eq!(z[1], y9);
+
+    let mut idx = bin_ntt::simd::transpose_f162::BinaryIndex32::zero();
+    let mut want = Batch32::zero(Representation::Ntt);
+    for (b, got) in w.iter().enumerate() {
+        unsafe {
+            tf::slice_f162_into(&*(elems.as_ptr().add(128 * b) as *const [F162; 128]), &mut idx);
+            vb::ntt_bin_batch32::<3889>(&idx, &mut want);
+        }
+        assert!(got.v == want.v, "kept transform, batch {b}");
+        assert_eq!(got.representation, Representation::Ntt);
+    }
 }
 
 /// The all-zero input and the all-zero matrix.
@@ -246,10 +253,10 @@ fn degenerate() {
     let nb = 4;
     let zero = vec![F162([0; 3]); 128 * nb];
     let a = random_a(nb, 3889, 21);
-    assert_eq!(cm::commit::<3889>(&zero, &a), [0u32; N]);
+    assert_eq!(commit::<3889>(&zero, &a), [0u32; N]);
     let elems = random_elems(nb, 22);
     let za: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
-    assert_eq!(cm::commit::<9721>(&elems, &za), [0u32; N]);
+    assert_eq!(commit::<9721>(&elems, &za), [0u32; N]);
 }
 
 /// The accumulator is what the kernels assume, and the slot map is a bijection onto the

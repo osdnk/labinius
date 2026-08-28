@@ -6,11 +6,10 @@
 //!
 //! Module map
 //! - `params`  : all ring constants (roots, twiddles, Montgomery forms), computed at compile time.
-//! - `types`   : `BinaryPoly`, `BinaryBatch32`, `RingElement` (rokoko-style), `Batch32`.
-//! - `scalar`  : exact reference implementation (lift, schoolbook product mod Phi_1944, NTT).
-//! - `rng`     : tiny deterministic RNG for tests/benches (no external crates).
-//! - `perf`    : perf_event_open wrapper (cycles, instructions, uops per port) for the bench.
-//! - `simd`    : the AVX-512 kernels (one module per variant).
+//! - `types`   : `RingElement` (rokoko-style), `Batch32`.
+//! - `scalar`  : exact reference implementation (schoolbook product mod Phi_1944, NTT).
+//! - `rng`     : tiny deterministic RNG (no external crates).
+//! - `simd`    : the AVX-512 kernels.
 //! - `api`     : the public API (`AdditionalLimb`, `CommitmentKey`, `PowerOfThreeRingElement`,
 //!               the height-4 view).
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
@@ -24,7 +23,6 @@ pub mod eval;
 pub mod f162;
 pub mod fold;
 pub mod params;
-pub mod perf;
 pub mod rng;
 pub mod scalar;
 pub mod simd;

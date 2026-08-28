@@ -1,48 +1,79 @@
-//! Correctness, bound and multiplication tests for the binary vertical NTT.
+//! Correctness and bound tests for the binary vertical NTT.
+//!
+//! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
+//! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
+//! what a commitment feeds it.
+use bin_fields::scalar::F162;
+use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
-use bin_ntt::simd::pointwise::{self, MontElement};
-use bin_ntt::simd::transpose::{self, BinaryIndex32};
-use bin_ntt::simd::vertical_bin as vbref;
+use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_asm as vb;
 use bin_ntt::types::*;
 
 // ------------------------------------------------------------------ inputs
 
-fn monomial(d: usize) -> BinaryPoly {
-    let mut p = BinaryPoly::default();
-    p.set(d, true);
-    p
+/// The 648 binary coefficients of one ring element.
+type Bin = [u32; N];
+
+fn monomial(d: usize) -> Bin {
+    let mut c = [0u32; N];
+    c[d] = 1;
+    c
+}
+
+fn random_bin(rng: &mut Rng) -> Bin {
+    let mut c = [0u32; N];
+    for w in 0..N.div_ceil(64) {
+        let x = rng.next_u64();
+        for b in 0..64 {
+            if 64 * w + b < N {
+                c[64 * w + b] = ((x >> b) & 1) as u32;
+            }
+        }
+    }
+    c
+}
+
+/// The 128 `F162` of a batch, and the index rows the front end slices out of them.
+fn elems_of(polys: &[Bin; 32]) -> [F162; 128] {
+    let mut e = [F162([0; 3]); 128];
+    for p in 0..32 {
+        e[4 * p..4 * p + 4].copy_from_slice(&f162::pack4(&polys[p]));
+    }
+    e
+}
+
+fn idx_of(polys: &[Bin; 32]) -> BinaryIndex32 {
+    let mut out = BinaryIndex32::zero();
+    unsafe { tf::slice_f162_into(&elems_of(polys), &mut out) };
+    out
 }
 
 /// Adversarial inputs: all-zero, all-ones, alternating patterns and single monomials at the
 /// block boundaries of the tree.
-fn adversarial() -> Vec<BinaryPoly> {
+fn adversarial() -> Vec<Bin> {
     let mut v = Vec::new();
-    v.push(BinaryPoly::default()); // all zero
-    let mut ones = BinaryPoly::default();
-    for i in 0..N {
-        ones.set(i, true);
-    }
-    v.push(ones);
+    v.push([0u32; N]);
+    v.push([1u32; N]);
     for phase in 0..2 {
-        let mut alt = BinaryPoly::default();
+        let mut alt = [0u32; N];
         for i in 0..N {
-            alt.set(i, i % 2 == phase);
+            alt[i] = (i % 2 == phase) as u32;
         }
         v.push(alt);
-        let mut alt3 = BinaryPoly::default();
+        let mut alt3 = [0u32; N];
         for i in 0..N {
-            alt3.set(i, i % 3 == phase);
+            alt3[i] = (i % 3 == phase) as u32;
         }
         v.push(alt3);
     }
     // block-structured: the four 162-blocks the nibble index is built from
     for b in 0..4 {
-        let mut p = BinaryPoly::default();
+        let mut p = [0u32; N];
         for i in 0..162 {
-            p.set(i + 162 * b, true);
+            p[i + 162 * b] = 1;
         }
         v.push(p);
     }
@@ -52,47 +83,47 @@ fn adversarial() -> Vec<BinaryPoly> {
     v
 }
 
-fn batches(count: usize, seed: u64) -> Vec<[BinaryPoly; 32]> {
+fn batches(count: usize, seed: u64) -> Vec<[Bin; 32]> {
     let mut rng = Rng::new(seed);
     let adv = adversarial();
     let mut out = Vec::new();
     // one batch made only of adversarial inputs (padded with zeros / repeats)
-    let mut b0: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::default());
+    let mut b0: [Bin; 32] = [[0u32; N]; 32];
     for (i, p) in adv.iter().take(32).enumerate() {
         b0[i] = *p;
     }
     out.push(b0);
-    let mut b1: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::default());
+    let mut b1: [Bin; 32] = [[0u32; N]; 32];
     for (i, p) in adv.iter().skip(32).enumerate() {
         b1[i] = *p;
     }
     // and one that mixes the extreme "all ones" with random
     for i in adv.len().saturating_sub(32)..32 {
-        b1[i] = BinaryPoly::random(&mut rng);
+        b1[i] = random_bin(&mut rng);
     }
     out.push(b1);
     for _ in 0..count {
-        out.push(std::array::from_fn(|_| BinaryPoly::random(&mut rng)));
+        out.push(std::array::from_fn(|_| random_bin(&mut rng)));
     }
     out
 }
 
-// ------------------------------------------------------------------ transpose
+// ------------------------------------------------------------------ the front end
 
+/// The AVX-512 slicer against the scalar definition of the index rows.
 #[test]
 fn transpose_matches_scalar() {
     for polys in batches(64, 11) {
-        let want = BinaryBatch32::from_polys_scalar(&polys);
-        let got = unsafe { transpose::slice_polys(&polys) };
-        assert!(want.idx == got.idx, "slice_polys != from_polys_scalar");
-        for p in 0..32 {
-            assert_eq!(got.poly(p), polys[p]);
-        }
-        // the kernel-side byte-index layout: rows[i][2p] = n, rows[i][2p+1] = 16 + n
-        let widx = BinaryIndex32::from_nibbles(&want);
-        let gidx = unsafe { transpose::slice_polys_idx(&polys) };
+        let e = elems_of(&polys);
+        let want = f162::index_rows_scalar(&e);
+        let mut got = BinaryIndex32::zero();
+        unsafe { tf::slice_f162_into(&e, &mut got) };
         for i in 0..162 {
-            assert!(widx.rows[i] == gidx.rows[i], "slice_polys_idx row {i}");
+            assert!(want.rows[i] == got.rows[i], "slice_f162_into row {i}");
+        }
+        // and the lift really is the coefficient vector the test built
+        for p in 0..32 {
+            assert_eq!(f162::lift_elem(&e, p), polys[p], "lift_elem {p}");
         }
     }
 }
@@ -167,15 +198,12 @@ impl<const Q: u16> Shadow<Q> {
         self.r3(a0, t1, t2)
     }
 
-    fn run(&mut self, poly: &BinaryPoly) -> [i16; N] {
+    fn run(&mut self, poly: &Bin) -> [i16; N] {
         let bar = vb::needs_barrett(Q);
         let mut v = [0i16; N];
         let nib: Vec<usize> = (0..162)
             .map(|i| {
-                (poly.coeff(i)
-                    | poly.coeff(i + 162) << 1
-                    | poly.coeff(i + 324) << 2
-                    | poly.coeff(i + 486) << 3) as usize
+                (poly[i] | poly[i + 162] << 1 | poly[i + 324] << 2 | poly[i + 486] << 3) as usize
             })
             .collect();
         for k in 0..4 {
@@ -242,12 +270,12 @@ fn check_kernel<const Q: u16>() {
     let mut sh = Shadow::<Q>::new();
     let mut worst_out = 0i32;
     for polys in batches(64, 0xABCD ^ Q as u64) {
-        let bb = unsafe { transpose::slice_polys_idx(&polys) };
+        let bb = idx_of(&polys);
         let mut out = Batch32::zero(Representation::Coefficients);
         unsafe { vb::ntt_bin_batch32::<Q>(&bb, &mut out) };
         assert_eq!(out.representation, Representation::Ntt);
         for p in 0..32 {
-            let want = scalar::ntt::<Q>(&scalar::lift(&polys[p]));
+            let want = scalar::ntt::<Q>(&polys[p]);
             let e = out.get(p);
             let got = e.normalized(Q);
             for j in 0..N {
@@ -289,141 +317,6 @@ fn kernel_3889() {
 #[test]
 fn kernel_9721() {
     check_kernel::<9721>();
-}
-
-// ------------------------------------------------------------------ multiplication
-
-fn check_mul<const Q: u16>() {
-    let mut rng = Rng::new(77 ^ Q as u64);
-    let pa: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
-    let pb: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
-    let (mut na, mut nb, mut nc) = (
-        Batch32::zero(Representation::Ntt),
-        Batch32::zero(Representation::Ntt),
-        Batch32::zero(Representation::Ntt),
-    );
-    unsafe {
-        vb::ntt_bin_batch32::<Q>(&transpose::slice_polys_idx(&pa), &mut na);
-        vb::ntt_bin_batch32::<Q>(&transpose::slice_polys_idx(&pb), &mut nb);
-        pointwise::mul_batch_batch::<Q>(&na, &nb, &mut nc);
-    }
-    for p in 0..32 {
-        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pb[p]), Q);
-        assert_eq!(nc.get(p).normalized(Q), scalar::ntt::<Q>(&prod), "batch*batch q={Q} p={p}");
-    }
-    // batch * single element
-    let pe = BinaryPoly::random(&mut rng);
-    let ne = {
-        let polys: [BinaryPoly; 32] = std::array::from_fn(|_| pe);
-        let mut b = Batch32::zero(Representation::Ntt);
-        unsafe { vb::ntt_bin_batch32::<Q>(&transpose::slice_polys_idx(&polys), &mut b) };
-        b.get(0)
-    };
-    let me = MontElement::new::<Q>(&ne);
-    unsafe { pointwise::mul_batch_element::<Q>(&na, &me, &mut nc) };
-    for p in 0..32 {
-        let prod = scalar::mul_mod_phi(&scalar::lift(&pa[p]), &scalar::lift(&pe), Q);
-        assert_eq!(nc.get(p).normalized(Q), scalar::ntt::<Q>(&prod), "batch*elem q={Q} p={p}");
-    }
-}
-
-#[test]
-fn mul_3889() {
-    check_mul::<3889>();
-}
-#[test]
-fn mul_9721() {
-    check_mul::<9721>();
-}
-
-// ------------------------------------------------------------------ drivers
-
-fn check_drivers<const Q: u16>() {
-    let mut rng = Rng::new(2024 ^ Q as u64);
-    let nb = 5;
-    let polys: Vec<BinaryPoly> = (0..32 * nb).map(|_| BinaryPoly::random(&mut rng)).collect();
-    let mut want: Vec<Batch32> = Vec::new();
-    for b in 0..nb {
-        let chunk: [BinaryPoly; 32] = std::array::from_fn(|i| polys[32 * b + i]);
-        let mut o = Batch32::zero(Representation::Ntt);
-        // exercise the BinaryBatch32 -> BinaryIndex32 adapter on this path
-        let idx = BinaryIndex32::from_nibbles(&unsafe { transpose::slice_polys(&chunk) });
-        unsafe { vb::ntt_bin_batch32::<Q>(&idx, &mut o) };
-        want.push(o);
-    }
-    let mut got: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
-    vb::ntt_bin_polys::<Q>(&polys, &mut got);
-    for b in 0..nb {
-        assert!(got[b].v == want[b].v, "ntt_bin_polys batch {b}");
-        assert_eq!(got[b].representation, Representation::Ntt);
-    }
-    let mut seen = 0usize;
-    vb::ntt_bin_stream::<Q>(&polys, |i, batch| {
-        assert!(batch.v == want[i].v, "ntt_bin_stream batch {i}");
-        seen += 1;
-    });
-    assert_eq!(seen, nb);
-}
-
-#[test]
-fn drivers_3889() {
-    check_drivers::<3889>();
-}
-#[test]
-fn drivers_9721() {
-    check_drivers::<9721>();
-}
-
-// ------------------------------------------------------------------ bit-exact vs vertical_bin
-
-/// `vertical_bin` reduces the a0 input of levels 4, 5 and 6 with the two-multiply Barrett;
-/// `vertical_bin_asm` uses the lookup Barrett at level 4, nothing at level 5 and the
-/// two-multiply one at level 6. For q = 3889 neither kernel reduces anything and the outputs are
-/// bit-identical; for q = 9721 they are different representatives of the same residue, so the
-/// comparison is modulo q plus the declared bound.
-fn check_vs_reference_kernel<const Q: u16>() {
-    let bound = (vb::output_bound_milli_q(Q) as i64 * Q as i64 / 1000) as i32;
-    let cmp = |a: &Batch32, b: &Batch32, what: &str| {
-        for j in 0..N {
-            for p in 0..32 {
-                let (x, y) = (a.v[j][p] as i32, b.v[j][p] as i32);
-                if vb::needs_barrett(Q) {
-                    assert_eq!((x - y).rem_euclid(Q as i32), 0, "{what} q={Q} slot={j} lane={p}");
-                    assert!(y.abs() <= bound, "{what} q={Q} slot={j} lane={p}: {y} > {bound}");
-                } else {
-                    assert_eq!(x, y, "{what} q={Q} slot={j} lane={p}");
-                }
-            }
-        }
-    };
-    let mut rng = Rng::new(0x5EED ^ Q as u64);
-    let mut all: Vec<[BinaryPoly; 32]> = batches(64, 0x1234 ^ Q as u64);
-    for _ in 0..32 {
-        all.push(std::array::from_fn(|_| BinaryPoly::random(&mut rng)));
-    }
-    for polys in all {
-        let idx = unsafe { transpose::slice_polys_idx(&polys) };
-        let mut a = Batch32::zero(Representation::Coefficients);
-        let mut b = Batch32::zero(Representation::Coefficients);
-        let mut c = Batch32::zero(Representation::Coefficients);
-        unsafe {
-            vbref::ntt_bin_batch32::<Q>(&idx, &mut a);
-            vb::ntt_bin_batch32::<Q>(&idx, &mut b);
-            vb::ntt_bin_batch32_nt::<Q>(&idx, &mut c);
-        }
-        cmp(&a, &b, "vertical_bin_asm vs vertical_bin");
-        // the non-temporal variant is the same kernel and stays bit-identical
-        assert!(b.v == c.v, "ntt_bin_batch32_nt != ntt_bin_batch32 (q={Q})");
-    }
-}
-
-#[test]
-fn vs_vertical_bin_3889() {
-    check_vs_reference_kernel::<3889>();
-}
-#[test]
-fn vs_vertical_bin_9721() {
-    check_vs_reference_kernel::<9721>();
 }
 
 // ------------------------------------------------------------------ the lookup Barrett

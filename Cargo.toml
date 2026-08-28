@@ -2,8 +2,7 @@
 name = "bin-ntt"
 version = "0.1.0"
 edition = "2021"
-default-run = "bin-ntt"
-description = "AVX-512 NTT over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, q in {3889, 9721}"
+description = "AVX-512 Ajtai commitment, fold and verifier over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, over the limbs q in {2917, 3889, 4861, 9721, 12637}"
 
 [dependencies]
 # The F162 type exactly as used by binius64-f162 (pinned to the revision that repo resolves to).
@@ -18,9 +17,6 @@ codegen-units = 1
 debug = 1
 panic = "abort"
 overflow-checks = false
-
-[profile.bench]
-inherits = "release"
 
 [profile.dev]
 opt-level = 1

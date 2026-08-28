@@ -5,10 +5,6 @@ use crate::params::*;
 
 pub type Coeffs = [u32; N];
 
-pub fn lift(p: &crate::types::BinaryPoly) -> Coeffs {
-    p.to_coeffs()
-}
-
 /// a * b in Z_q[X]/(X^648 - X^324 + 1), using X^648 = X^324 - 1.
 pub fn mul_mod_phi(a: &Coeffs, b: &Coeffs, q: u16) -> Coeffs {
     let q = q as u64;
@@ -114,8 +110,7 @@ pub fn normalize_i16(v: &[i16; N], q: u16) -> Coeffs {
     out
 }
 
-/// Exact inverse of [`ntt`] in the same tree order, with `scale` applied to every coefficient of
-/// the result: `intt_scaled(&ntt(a), s)[i] = s * a[i] mod q`.
+/// Exact inverse of [`ntt`], in the same tree order.
 ///
 /// Every butterfly is inverted together with its own normalisation — 1/2 per radix-2 level
 /// (1, 2), 1/3 per radix-3 level (3..6) and 1/(2*zeta6 - 1) for the determinant of the Phi_6
@@ -124,9 +119,8 @@ pub fn normalize_i16(v: &[i16; N], q: u16) -> Coeffs {
 /// the Phi_6 determinant, which satisfies `(2*zeta6 - 1)^2 = -3`.
 ///
 /// This is the only inverse transform in the crate; it exists so that the round trip of the SIMD
-/// forward kernels is testable, and so that the `R^-1` a Montgomery-form transform leaves behind
-/// has somewhere to go ([`intt_mont`]).
-pub fn intt_scaled<const Q: u16>(v: &Coeffs, scale: u32) -> Coeffs {
+/// forward kernels is testable. `intt(&ntt(a)) == a` for any fully reduced `a`.
+pub fn intt<const Q: u16>(v: &Coeffs) -> Coeffs {
     let q = Q as u64;
     let psi = Params::<Q>::PSI as u64;
     let w = Params::<Q>::OMEGA as u64;
@@ -168,13 +162,12 @@ pub fn intt_scaled<const Q: u16>(v: &Coeffs, scale: u32) -> Coeffs {
     // a1 = (y0 - y1) / (2 zeta6 - 1) and a0 = y0 - zeta6 a1.
     let z6 = Params::<Q>::ZETA6 as u64;
     let det = inv_mod((2 * z6 + q - 1) % q, q);
-    let s = scale as u64 % q;
     for i in 0..324 {
         let (y0, y1) = (u[i], u[i + 324]);
         let a1 = (y0 + q - y1) % q * det % q;
         let a0 = (y0 + q - z6 * a1 % q) % q;
-        u[i] = a0 * s % q;
-        u[i + 324] = a1 * s % q;
+        u[i] = a0;
+        u[i + 324] = a1;
     }
     let mut out = [0u32; N];
     for i in 0..N {
@@ -182,28 +175,6 @@ pub fn intt_scaled<const Q: u16>(v: &Coeffs, scale: u32) -> Coeffs {
     }
     out
 }
-
-/// Exact inverse of [`ntt`]: `intt(&ntt(a)) == a` for any fully reduced `a`.
-pub fn intt<const Q: u16>(v: &Coeffs) -> Coeffs {
-    intt_scaled::<Q>(v, 1)
-}
-
-/// Inverse of a Montgomery-form transform (`v[j] = R * a(psi^SLOT_EXP[j])`, R = 2^16 mod q): the
-/// `R^-1` is folded into the same final scaling as the 1/648, so it is free for the caller.
-/// A slot-wise product of two such transforms is again Montgomery form (one factor R), so this is
-/// also the right inverse for `pointwise::mul_batch_batch_mont` output.
-pub fn intt_mont<const Q: u16>(v: &Coeffs) -> Coeffs {
-    intt_scaled::<Q>(v, Params::<Q>::RINV as u32)
-}
-
-/// Inverse of a transform carrying `k` Montgomery factors (`v[j] = R^k * a(psi^u_j)`).
-pub fn intt_mont_pow<const Q: u16>(v: &Coeffs, k: u32) -> Coeffs {
-    intt_scaled::<Q>(v, pow_mod(Params::<Q>::RINV as u64, k as u64, Q as u64) as u32)
-}
-
-// =============================================================================================
-// the quadratic-slot transform (q in QS_QUAD: q = 1 mod 972, not mod 1944)
-// =============================================================================================
 
 /// Forward NTT on the quadratic-slot tree (see `params`): the 324 leaves
 /// `Z_q[X]/(X^2 - psi'^QUAD_SLOT_EXP[j])` in tree order, leaf j in rows `2j` (constant term) and

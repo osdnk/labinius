@@ -5,42 +5,71 @@
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar::{self, Coeffs};
-use bin_ntt::simd::transpose::{self, BinaryIndex32};
+use bin_fields::scalar::F162;
+use bin_ntt::f162;
+use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_quad as vq;
 use bin_ntt::simd::vertical_gen_quad as vgq;
 use bin_ntt::types::*;
 
 // ------------------------------------------------------------------ inputs
 
-fn monomial(d: usize) -> BinaryPoly {
-    let mut p = BinaryPoly::default();
-    p.set(d, true);
-    p
+/// The 648 binary coefficients of one ring element.
+type Bin = [u32; N];
+
+fn monomial(d: usize) -> Bin {
+    let mut c = [0u32; N];
+    c[d] = 1;
+    c
+}
+
+fn random_bin(rng: &mut Rng) -> Bin {
+    let mut c = [0u32; N];
+    for w in 0..N.div_ceil(64) {
+        let x = rng.next_u64();
+        for b in 0..64 {
+            if 64 * w + b < N {
+                c[64 * w + b] = ((x >> b) & 1) as u32;
+            }
+        }
+    }
+    c
+}
+
+/// A batch as the 128 `F162` a commitment reads it from, and the index rows the front end slices.
+fn elems_of(polys: &[Bin; 32]) -> [F162; 128] {
+    let mut e = [F162([0; 3]); 128];
+    for p in 0..32 {
+        e[4 * p..4 * p + 4].copy_from_slice(&f162::pack4(&polys[p]));
+    }
+    e
+}
+
+fn idx_of(polys: &[Bin; 32]) -> BinaryIndex32 {
+    let mut out = BinaryIndex32::zero();
+    unsafe { tf::slice_f162_into(&elems_of(polys), &mut out) };
+    out
 }
 
 /// All-zero, all-ones, alternating patterns and single monomials at the block boundaries.
-fn adversarial() -> Vec<BinaryPoly> {
+fn adversarial() -> Vec<Bin> {
     let mut v = Vec::new();
-    v.push(BinaryPoly::default());
-    let mut ones = BinaryPoly::default();
-    for i in 0..N {
-        ones.set(i, true);
-    }
-    v.push(ones);
+    v.push([0u32; N]);
+    v.push([1u32; N]);
     for phase in 0..2 {
-        let mut alt = BinaryPoly::default();
-        let mut alt3 = BinaryPoly::default();
+        let mut alt = [0u32; N];
+        let mut alt3 = [0u32; N];
         for i in 0..N {
-            alt.set(i, i % 2 == phase);
-            alt3.set(i, i % 3 == phase);
+            alt[i] = (i % 2 == phase) as u32;
+            alt3[i] = (i % 3 == phase) as u32;
         }
         v.push(alt);
         v.push(alt3);
     }
     for b in 0..4 {
-        let mut p = BinaryPoly::default();
+        let mut p = [0u32; N];
         for i in 0..162 {
-            p.set(i + 162 * b, true);
+            p[i + 162 * b] = 1;
         }
         v.push(p);
     }
@@ -50,25 +79,25 @@ fn adversarial() -> Vec<BinaryPoly> {
     v
 }
 
-fn batches(count: usize, seed: u64) -> Vec<[BinaryPoly; 32]> {
+fn batches(count: usize, seed: u64) -> Vec<[Bin; 32]> {
     let mut rng = Rng::new(seed);
     let adv = adversarial();
     let mut out = Vec::new();
-    let mut b0: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::default());
+    let mut b0: [Bin; 32] = [[0u32; N]; 32];
     for (i, p) in adv.iter().take(32).enumerate() {
         b0[i] = *p;
     }
     out.push(b0);
-    let mut b1: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::default());
+    let mut b1: [Bin; 32] = [[0u32; N]; 32];
     for (i, p) in adv.iter().skip(32).enumerate() {
         b1[i] = *p;
     }
     for i in adv.len().saturating_sub(32)..32 {
-        b1[i] = BinaryPoly::random(&mut rng);
+        b1[i] = random_bin(&mut rng);
     }
     out.push(b1);
     for _ in 0..count {
-        out.push(std::array::from_fn(|_| BinaryPoly::random(&mut rng)));
+        out.push(std::array::from_fn(|_| random_bin(&mut rng)));
     }
     out
 }
@@ -261,7 +290,7 @@ impl<const Q: u16> Shadow<Q> {
         )
     }
     /// One polynomial through the binary kernel's schedule.
-    fn run(&mut self, poly: &BinaryPoly) -> [i16; N] {
+    fn run(&mut self, poly: &Bin) -> [i16; N] {
         let q = Q as u64;
         let z6 = ParamsQ::<Q>::ZETA6 as u64;
         let kappa = [z6, (1 + q - z6) % q];
@@ -273,7 +302,7 @@ impl<const Q: u16> Shadow<Q> {
             let z1 = ParamsQ::<Q>::ZETA_L1[s0] as u64;
             let z2 = ParamsQ::<Q>::ZETA_L2[k] as u64;
             for i in 0..162 {
-                let n = [i, i + 162, i + 324, i + 486].map(|c| poly.coeff(c) as u64);
+                let n = [i, i + 162, i + 324, i + 486].map(|c| poly[c] as u64);
                 let inner = z1 * ((n[1] + kappa[s0] * n[3]) % q) % q;
                 let t = if s1 == 0 { inner } else { (q - inner) % q };
                 let base = ((n[0] + kappa[s0] * n[2]) % q + t) % q;
@@ -328,10 +357,10 @@ fn bin_kernel<const Q: u16>() {
     let bound = vq::output_bound(Q);
     let mut out = Batch32::zero(Representation::Ntt);
     for polys in batches(24, 5 + Q as u64) {
-        let idx = unsafe { transpose::slice_polys_idx(&polys) };
+        let idx = idx_of(&polys);
         unsafe { vq::ntt_quad_bin_batch32::<Q>(&idx, &mut out) };
         for p in 0..32 {
-            let want = scalar::ntt_quad::<Q>(&scalar::lift(&polys[p]));
+            let want = scalar::ntt_quad::<Q>(&polys[p]);
             let shadow = sh.run(&polys[p]);
             for j in 0..N {
                 let got = out.v[j][p];
@@ -370,26 +399,26 @@ fn binary_kernel_matches_scalar() {
     bin_kernel::<12637>();
 }
 
-/// The `_nt` entry point and the `F162` driver agree with the plain one.
-fn bin_drivers<const Q: u16>() {
-    use bin_fields::scalar::F162;
-    let elems: Vec<F162> = bin_ntt::f162::random_elems(128 * 5, 99 + Q as u64);
-    let mut out: Vec<Batch32> = (0..5).map(|_| Batch32::zero(Representation::Ntt)).collect();
-    vq::ntt_quad_f162::<Q>(&elems, &mut out);
-    for b in 0..5 {
-        for p in 0..32 {
-            let a = bin_ntt::f162::lift_elem(&elems, 32 * b + p);
-            let want = scalar::ntt_quad::<Q>(&a);
-            for j in 0..N {
-                assert_eq!(
-                    (out[b].v[j][p] as i32).rem_euclid(Q as i32) as u32,
-                    want[j],
-                    "f162 driver q={Q} batch {b} row {j} lane {p}"
-                );
-            }
+/// The block sink the commitment consumes the transform through sees exactly the 648 rows the
+/// plain entry point writes, 18 at a time, in block order.
+fn bin_sink<const Q: u16>() {
+    let mut rng = Rng::new(99 + Q as u64);
+    let polys: [Bin; 32] = std::array::from_fn(|_| random_bin(&mut rng));
+    let e = elems_of(&polys);
+    let idx = idx_of(&polys);
+    let mut out = Batch32::zero(Representation::Ntt);
+    unsafe { vq::ntt_quad_bin_batch32::<Q>(&idx, &mut out) };
+    for p in 0..32 {
+        let want = scalar::ntt_quad::<Q>(&f162::lift_elem(&e, p));
+        for j in 0..N {
+            assert_eq!(
+                (out.v[j][p] as i32).rem_euclid(Q as i32) as u32,
+                want[j],
+                "q={Q} row {j} lane {p}"
+            );
         }
     }
-    // the block hook sees the same 648 rows, 18 at a time
+
     #[repr(C, align(64))]
     struct Blk18([i16; 18 * 32]);
     struct Collect {
@@ -404,30 +433,23 @@ fn bin_drivers<const Q: u16>() {
             self.seen.push(blk);
         }
     }
-    let mut idx = BinaryIndex32::zero();
-    unsafe {
-        bin_ntt::simd::transpose_f162::slice_f162_into(
-            &*(elems.as_ptr() as *const [F162; 128]),
-            &mut idx,
-        );
-    }
     let mut c = Collect { buf: (0..36).map(|_| Blk18([0i16; 18 * 32])).collect(), seen: Vec::new() };
     unsafe { vq::ntt_quad_bin_batch32_sink::<Q, _>(&idx, &mut c) };
     assert_eq!(c.seen, (0..36).collect::<Vec<_>>());
     for blk in 0..36 {
         for r in 0..18 {
             for p in 0..32 {
-                assert_eq!(c.buf[blk].0[32 * r + p], out[0].v[18 * blk + r][p], "block {blk} row {r}");
+                assert_eq!(c.buf[blk].0[32 * r + p], out.v[18 * blk + r][p], "block {blk} row {r}");
             }
         }
     }
 }
 
 #[test]
-fn binary_drivers_and_hook() {
-    bin_drivers::<2917>();
-    bin_drivers::<4861>();
-    bin_drivers::<12637>();
+fn binary_sink_matches_the_plain_kernel() {
+    bin_sink::<2917>();
+    bin_sink::<4861>();
+    bin_sink::<12637>();
 }
 
 // ------------------------------------------------------------------ the generic kernel
@@ -452,7 +474,13 @@ fn gen_inputs<const Q: u16>(count: usize, seed: u64) -> Vec<Batch32> {
     }
     out.push(b);
     for polys in batches(0, seed).into_iter().take(2) {
-        out.push(Batch32::from_binary(&polys));
+        let mut b = Batch32::zero(Representation::Coefficients);
+        for j in 0..N {
+            for p in 0..32 {
+                b.v[j][p] = polys[p][j] as i16;
+            }
+        }
+        out.push(b);
     }
     for _ in 0..count {
         let mut b = Batch32::zero(Representation::Coefficients);
@@ -498,51 +526,6 @@ fn gen_kernel<const Q: u16>() {
     );
 }
 
-/// The fusion variants and the prefetching driver produce exactly what the shipped kernel does.
-fn gen_variants<const Q: u16>() {
-    let inputs = gen_inputs::<Q>(2, 71 + Q as u64);
-    let mut want: Vec<Batch32> = inputs.clone();
-    for b in want.iter_mut() {
-        unsafe { vgq::ntt_quad_gen_batch32::<Q>(b) };
-    }
-    macro_rules! variant {
-        ($plan:literal) => {{
-            let mut got = inputs.clone();
-            for b in got.iter_mut() {
-                unsafe { vgq::ntt_quad_gen_batch32_plan::<Q, $plan>(b) };
-            }
-            for (g, w) in got.iter().zip(want.iter()) {
-                for j in 0..N {
-                    for p in 0..32 {
-                        assert_eq!(
-                            (g.v[j][p] as i32).rem_euclid(Q as i32),
-                            (w.v[j][p] as i32).rem_euclid(Q as i32),
-                            "plan {} q={Q} row {j} lane {p}",
-                            $plan
-                        );
-                    }
-                }
-            }
-        }};
-    }
-    variant!(0);
-    variant!(1);
-    variant!(2);
-    variant!(3);
-    let mut got = inputs.clone();
-    vgq::ntt_quad_gen_batches::<Q>(&mut got);
-    for (g, w) in got.iter().zip(want.iter()) {
-        assert!(g.v.iter().zip(w.v.iter()).all(|(a, b)| a == b), "prefetching driver q={Q}");
-    }
-}
-
-#[test]
-fn generic_variants_agree() {
-    gen_variants::<2917>();
-    gen_variants::<4861>();
-    gen_variants::<12637>();
-}
-
 #[test]
 fn generic_kernel_matches_scalar() {
     gen_kernel::<2917>();
@@ -556,8 +539,8 @@ fn generic_kernel_matches_scalar() {
 /// the SIMD kernels (the binary one for `a`, the generic one for `b`).
 fn simd_product<const Q: u16>() {
     let mut rng = Rng::new(41 + Q as u64);
-    let polys: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
-    let idx = unsafe { transpose::slice_polys_idx(&polys) };
+    let polys: [Bin; 32] = std::array::from_fn(|_| random_bin(&mut rng));
+    let idx = idx_of(&polys);
     let mut ta = Batch32::zero(Representation::Ntt);
     unsafe { vq::ntt_quad_bin_batch32::<Q>(&idx, &mut ta) };
 
@@ -572,7 +555,7 @@ fn simd_product<const Q: u16>() {
     unsafe { vgq::ntt_quad_gen_batch32::<Q>(&mut tb) };
 
     for p in [0usize, 1, 17, 31] {
-        let a: Coeffs = std::array::from_fn(|i| polys[p].coeff(i) as u32);
+        let a: Coeffs = polys[p];
         let b: Coeffs = std::array::from_fn(|j| coeffs_b.v[j][p] as u32);
         let na: Coeffs =
             std::array::from_fn(|j| (ta.v[j][p] as i32).rem_euclid(Q as i32) as u32);

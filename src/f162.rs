@@ -13,7 +13,7 @@
 //! bit-slicing front end ([`crate::simd::transpose_f162`]).
 use crate::params::N;
 use crate::rng::Rng;
-use crate::simd::transpose::BinaryIndex32;
+use crate::simd::transpose_f162::BinaryIndex32;
 use bin_fields::scalar::F162;
 
 /// Number of significant bits of an `F162` (limbs 0 and 1 full, limb 2 holds bits 128..161).

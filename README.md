@@ -24,13 +24,13 @@ The commitment `y[j] = sum_i A_i[j] * NTT_q(w_i)[j] mod q` (one row, j = 0..648)
 primes, with A uniformly random in the NTT domain, centered, living in memory
 (2^16 x 648 x 2 B = 85 MB per prime, cold), and the w_i lifted from a plain `&[F162]` (6 MB).
 Output: one ring element per prime in the NTT domain, fully reduced. Best of 3, pinned to one
-core, hardware counters via `perf_event_open`, machine otherwise idle:
+core, machine otherwise idle:
 
-| q    | `commit` (vertical, block-fused, prefetching) | total ms | cycles / ring element | of which: front end + transform | basemul | un-hidden A stream |
+| q    | the commitment (vertical, block-fused, prefetching) | total ms | cycles / ring element | of which: front end + transform | basemul | un-hidden A stream |
 |------|-----------------------------------------------|---------:|----------------------:|--------------------------------:|--------:|-------------------:|
 | 3889 |                                               | **7.6**  | **462**               | 311                             | 60      | 92                 |
 | 9721 |                                               | **8.0**  | **485**               | 335                             | 60      | 90                 |
-| both | `commit_2q` (one front end, two primes, 170 MB of A) | **15.7** | 477 per prime |                             |         |                    |
+| both | one front end, two limbs, 170 MB of A                 | **15.7** | 477 per prime |                             |         |                    |
 
 (milliseconds at the 4.0 GHz this run settled at; at 4.5 GHz the same cycle counts are
 6.7 / 7.1 / 14 ms.) Floors per prime: streaming A from DRAM at the measured 19.5 GB/s takes
@@ -40,36 +40,12 @@ max(DRAM, compute); the remainder is A arriving at ~11 GB/s instead of 19.5 beca
 prefetches can only be issued at the 24 block boundaries of each batch (see "Remaining
 optimisation strategies").
 
-The alternatives measured with the same inputs (cycles per ring element, q = 3889 / 9721):
-
-| how the products are formed                                           | 3889 | 9721 |
-|-----------------------------------------------------------------------|-----:|-----:|
-| transform materialised to memory, multiply-accumulate in a second pass (`commit_unfused`) | 872 | 904 |
-| multiply-accumulate right after each batch of 32, operands in L1/L2 (`commit_batch_fused`) | 623 | 654 |
-| multiply-accumulate on each 27-slot block as the kernel finishes it, no prefetch | 600 | 624 |
-| the same with A prefetched under the transform (`commit`) | **462** | **485** |
-| horizontal layout, groups of 4 elements fully L1-resident (`commit_h`, Gregor Seiler's layout) | 842 | 898 |
-
-The NTT alone (the same front end, transform materialised with non-temporal stores, 85 MB of
-output per prime):
-
-| q    | driver                                          | total ms | cycles / ring element | cycles / F162 | instructions / ring element |
-|------|-------------------------------------------------|---------:|----------------------:|--------------:|----------------------------:|
-| 3889 | `ntt_f162`                                      | **5.1**  | **353**               | 88            | 749                         |
-| 9721 | `ntt_f162`                                      | **5.7**  | **376**               | 94            | 804                         |
-| both | `ntt_f162_2q` (one front end, two primes)       | 10.2     | 353 per prime         | 88            | 750 per prime               |
-| 3889 | `ntt_f162_stream` (closure per batch, nothing written) | 4.5 | 313               | 78            | 749                         |
-
 Cycles are the robust number: this laptop's clock under AVX-512 load moves between 4.0 and
-4.6 GHz with temperature, so milliseconds vary by ~10 % between runs (this table at 4.55 GHz,
-the commitment tables above at 4.0 GHz). Components,
+4.6 GHz with temperature, so milliseconds vary by ~10 % between runs. Components,
 cache-resident: F162 bit-slicing 32 cycles per ring element (8 per F162, port-5 bound),
 transform 280 / 305 (q = 3889 / 9721), together 310 / 337. For scale, 650 cycles per
 polynomial (an expert estimate for a generic-input NTT of this size on this core) is ~9.4 ms
 for 2^16 elements.
-
-Reproduce: `cargo run --release --offline --bin bench_commit -- <cpu>` (the commitment, all
-variants), `bench_commit_h` (the horizontal one), `bench_f162` (the NTT alone).
 
 ## API
 
@@ -157,8 +133,7 @@ the same public output: four elements of `R_162`, 162 slots each, in the `POW3_S
 and the class order of the two maps is the same (a `const` assertion in `api.rs`).
 
 **Measured**, one limb of a commitment over 2^18 F162 = 2^16 ring elements against its own 85 MB
-of A, best of 3, ~4.2 GHz (`cargo run --release --offline --bin bench_limbs -- 2`); cheapest
-first:
+of A, best of 3, ~4.2 GHz; cheapest first:
 
 | q     | tree             | transform | commitment | cycles / element | of which basemul | fold-back |
 |-------|------------------|----------:|-----------:|-----------------:|-----------------:|----------:|
@@ -187,10 +162,9 @@ derives from its declared output bound (`2^15/q` is the head-room):
 | 9721  | 3.37   | lookup Barrett on the `a0` of level 4, multiply Barrett on level 6 | 2.29 q | 4 batches per fold-back |
 | 12637 | 2.59   | lookup Barrett on the `a0` of levels 3, 4, 5 | 1.94 q  | schoolbook `P_2`; 2 batches, 1 for `P_2` |
 
-`main.rs` takes `--limbs 2917,4861,9721,12637` (any subset) and prints, per configured limb, the
-commitment of that limb alone and the totals. With all five limbs the 2^18-F162 commitment is
-40.9 ms (530 cycles per ring element and limb, 425 MB of key), the fold 4.7 ms and the verifier
-2.1 ms.
+`DEFAULT_LIMBS` is the base prime and 9721; a key can be built over any subset of the four
+additional limbs. With all five limbs the 2^18-F162 commitment is 40.9 ms (530 cycles per ring
+element and limb, 425 MB of key), the fold 4.7 ms and the verifier 2.1 ms.
 
 ### Short challenges
 
@@ -437,13 +411,15 @@ F/BW/VL/VBMI/VBMI2/VNNI/GFNI and are tuned for Tiger Lake only. The `bin-fields`
 pinned to the git revision binius64-f162 resolves to and is vendored in the cargo git cache, so
 `--offline` works.
 
-    cargo test --release --offline     # ~130 tests: scalar reference, every kernel, driver and
+    cargo test --release --offline     # 85 tests: scalar reference, every kernel and the
                                        # commitment vs the reference, every limb and limb list,
                                        # bounds via i32/i64 shadow models, overflow proofs,
-                                       # bit-exact equivalences
-    cargo run --release --offline --bin bench_commit -- 2
-    cargo run --release --offline --bin bench_limbs -- 2
-    cargo run --release --offline -- 2 18 --limbs 2917,4861,9721,12637
+                                       # the API, the fold, the evaluation and the verifier
+    taskset -c 2 cargo run --release --offline   # the scheme end to end, wall clock per step
+
+There are no features, no flags and no command-line arguments: the configuration (the witness
+size, the number of chunks, the limb list, the core) is the set of constants at the top of
+`src/main.rs`.
 
 ## What is computed
 
@@ -457,15 +433,14 @@ mixed-radix Cooley-Tukey, no twisting, on the fixed tree
 
 with child s of a sub-ring stored at block offset s*n/p ("tree order"), so slot j of the output
 holds `a(psi^SLOT_EXP[j])` (`params::SLOT_EXP`, a permutation of the units mod 1944). The
-scalar reference `scalar::ntt` defines the order; `f162::lift4` defines the lift; every kernel,
-driver and commitment is tested against `scalar::ntt(lift4(..))`, and
+scalar reference `scalar::ntt` defines the order; `f162::lift4` defines the lift; every kernel
+and the commitment are tested against `scalar::ntt(lift4(..))`, and
 `scalar::ntt(a*b mod Phi) == NTT(a) o NTT(b)` is checked through the SIMD products.
 
 Transform values are lazily reduced signed residues stored as `i16`: |v| <= 7.5 q for q = 3889
-and <= 2.30 q for q = 9721 (`vertical_bin_asm`); `RingElement::normalized` maps to [0, q). The
-transforms can also be produced in Montgomery form (times 2^16 mod q, same cost), in which a
-slot-wise product of two transforms is one Montgomery multiplication; the commitment does not
-need that, since it accumulates raw products.
+and <= 2.30 q for q = 9721 (`vertical_bin_asm`); `RingElement::normalized` maps to [0, q). They
+are plain residues, not Montgomery-form ones: the commitment accumulates raw products, and
+`sum_i A_i[j] W_i[j]` is congruent mod q whatever representatives the transform leaves.
 
 ### The lift is a ring extension of degree 4
 
@@ -505,11 +480,6 @@ was kept and only the front end reads the interleaved layout.
 * `BinaryIndex32` — the kernel's input: 162 rows of 64 bytes, `row[i][2p] = n`,
   `row[i][2p+1] = 16 + n`, n = the 4-bit nibble (c_i, c_{i+162}, c_{i+324}, c_{i+486}) of ring
   element p, which is exactly the `vpermb` index the fused first two levels consume.
-* `BinaryPoly { bits: [u64; 11] }` — a plain 648-coefficient 0/1 polynomial (bit i = coefficient
-  i), the coefficient-domain form of a lifted ring element used by the tests and the comparison
-  kernels' benches; `transpose.rs` slices it into `BinaryIndex32` with the same GFNI machinery.
-* `HBatch4 { v: [[i16; 32]; 81] }` — the horizontal layout, 4 elements per batch, one per
-  128-bit lane; A for `commit_h` is stored in this layout too.
 
 ### Arithmetic
 
@@ -598,8 +568,7 @@ help.
 
 **Measured**, one core, `taskset -c 2`, cache-resident batch of 32 for the kernels, 2^18 F162 =
 2^16 ring elements materialised with non-temporal stores for the transform (85 MB of output),
-best of 5 / of 3, ~4.1-4.3 GHz (`cargo run --release --offline --bin bench_quad`). Cycles per ring
-element; fastest first:
+best of 5 / of 3, ~4.1-4.3 GHz. Cycles per ring element; fastest first:
 
 | q     | tree             | binary kernel | generic kernel | 2^18 F162 transform |
 |-------|------------------|--------------:|---------------:|--------------------:|
@@ -685,7 +654,8 @@ checks that against the scalar map.
   accumulator's residency and the prefetch schedule are what matter.
 * `commit_limbs` runs a whole limb list off one front end: the index rows depend on neither the
   prime nor the tree, so the witness is sliced once per batch and each limb then adds one kernel
-  pass, one accumulator and one A stream. `commit_2q` is the two-prime special case.
+  pass, one accumulator and one A stream. It is the only entry point: a single limb is a
+  one-element list.
 
 **The quadratic basemul: Karatsuba on the plain rows.** A quadratic limb's kernel hands its 648
 output rows out as 36 blocks of 18 — rows `2j`, `2j+1` being the two coefficients `a_0, a_1` of
@@ -712,26 +682,7 @@ another: 14 vectors per block, 32.3 KB in all, L1-resident), each with its own f
 from its own per-batch bound — `4 |W| |A|` for `P_0 | P_1` against `4 (2|W|) (q-1)` for a
 Karatsuba `P_2` — both `const`-asserted to fit i32 exactly as the splitting bound is.
 
-### The horizontal commitment (`simd/commit_h.rs`)
-
-Gregor Seiler's suggestion: transform only 4 elements at a time in the horizontal layout
-(`HBatch4`, 5 KB per group) so that the transform output, its A rows and the accumulator are
-all L1-resident and the basemul runs from L1 with no output store. Implemented in full: a
-front end that expands the interleaved F162 bits into the stride-81 lanes (per polynomial two
-`vpermi2b` + two `vpsrlvd` + two `vpermi2b` + two `vgf2p8affineqb` + two `vpermb`, then
-`vpunpck` interleaves and one `kmovd` + zero-masked `vmovdqu16` per register; 44 cycles per
-ring element), `ntt_gen_hbatch4` (546 / 593 cycles), and a basemul with `vpdpwssd` on lanes
-permuted to `4j + p` so that adjacent lanes are the same slot of two elements (A is stored
-pre-permuted, 46-56 cycles per element from L1), with an exact f32-rounded reduction every
-18 / 10 groups. Measured 842 / 898 cycles per ring element (12.3 / 13.1 ms): the locality
-claim holds — the basemul is ~12 cycles cheaper than the vertical one — but the transform
-costs ~270 more because the lookup trick does not survive the horizontal layout, and the A
-stream overlaps worse (35 % hidden vs 70 %) because A is consumed in an 81-line burst per
-group with the transform an opaque call in between, so there is no loop in which to spread
-prefetches. Groups of 8 or 16 elements per step change the total by at most 1 %; 2 MB pages
-for A buy 2 %.
-
-## Strategies taken in each kernel and driver
+## Strategies taken in each kernel
 
 ### `simd/transpose_f162.rs` — F162 stream -> index rows (32 cycles per ring element)
 
@@ -758,7 +709,7 @@ loads (35 cycles: a masked `vmovdqu64` costs ~1 extra ALU uop on this core), sof
 prefetch of the input (noise), slicing the next batch inside the previous batch's kernel (the
 shuffle chains at the head of the reorder buffer starve allocation; a wash).
 
-### `simd/vertical_bin.rs` / `simd/vertical_bin_asm.rs` — the binary kernel (280 / 305 cycles)
+### `simd/vertical_bin_asm.rs` — the binary kernel (280 / 305 cycles)
 
 * **Layout.** Vertical: one zmm = one slot of 32 ring elements, so no shuffle is ever needed
   for a butterfly and every twiddle is a broadcast constant. The batch (648 vectors, 41 KB) is
@@ -770,14 +721,14 @@ shuffle chains at the head of the reorder buffer starve allocation; a wash).
   (40 in all, 1280 bytes, memory operands). For pair positions i < 27 the level-2 butterfly is
   2 lookups + 2 adds; for 27 <= i < 81 the two children need different folds, 4 lookups + 2 adds.
   Level 3 keeps only the omega multiplication per triple.
-* **Levels 4-6** (`vertical_bin_asm`, the production kernel): one `asm!` block per 27-block keeps
+* **Levels 4-6.** One `asm!` block per 27-block keeps
   all 27 vectors in zmm0-26 across the three levels — loaded once, stored once instead of three
   times — with a `[9 multiplies + 4 subs of butterfly k][6 adds of butterfly k-1]` block
   schedule that lowers the share of flexible adds the allocator sends to the saturated port 0
   from ~27 % to ~23 %. Measured alternatives: natural order +8, 1-mul:1-add pipeline +3, all
   loads up front or all stores deferred +6. The kernel exposes a per-block hook (`BlockSink`)
   that the commitment uses to consume each block's 27 output vectors while they are in L1; the
-  plain entry points pass a no-op sink and compile to the same code. The block loop must not be
+  plain entry point passes a no-op sink and compiles to the same code. The block loop must not be
   specialised on the block index by the compiler (the 26 KB of code would become 100+ KB and
   i-cache misses cost 44 cycles per element).
 * **Reduction.** Table entries are centred (|T| <= q/2), so level-2 outputs are < q and level-3
@@ -792,10 +743,6 @@ shuffle chains at the head of the reorder buffer starve allocation; a wash).
   of 648, output <= 2.294 q (worst case proved over all i16), 318 -> 305 cycles. Lookup
   Barretts at all three levels measure 316: the reduction itself is not what costs, dropping
   level 5's is.
-* **Montgomery form.** `ntt_bin_batch32_mont` uses tables scaled by 2^16 mod q (re-centred):
-  same schedule, same uops, same bounds, outputs times R. A product of two such transforms is
-  one Montgomery multiplication and stays in the form; `scalar::intt_mont` absorbs R^-1 with
-  648^-1.
 * **Compiler workarounds.** stdarch's `_mm512_mulhi_epi16` lowers through a
   `vpmovsxwd / vpmovdw / vinserti64x4` round trip that LLVM rematerialises inside the hot loops;
   `vpmulhw` and the twiddle broadcasts are emitted with `asm!` (`pure`, `nomem/readonly`).
@@ -808,17 +755,6 @@ shuffle chains at the head of the reorder buffer starve allocation; a wash).
   retiring, ~49 % back-end bound (the two vector ALU ports), 1.6 % front-end, 1.2-1.6 %
   bad speculation — no branch, decode or microcode issue to fix.
 
-### `simd/ntt_f162.rs` — NTT drivers
-
-`ntt_f162` slices 128 F162 into index rows (two uninitialised 10 KB buffers used alternately),
-runs the kernel with non-temporal stores on the last level, repeats per batch. `ntt_f162_2q`
-runs both primes off one slicing (-21 cycles per transform). `ntt_f162_stream` hands each
-batch to a closure; `ntt_f162_mont` produces Montgomery-form outputs. Driver variants measured
-and rejected: huge pages for the output (TLB walks 0.31 -> 0 per element, time unchanged — they
-hide behind the NT stores), producer-supplied index rows (the extra 58 MB of DRAM reads cost
-more than the slicing saved), `sfence` per batch, batch grouping, cached stores (+200 cycles),
-input prefetching (noise to +45 with the NTA hint).
-
 ### `simd/vertical_gen.rs` — generic-input vertical kernel (423 / 467 forward, 541 / 601 inverse)
 
 Same layout and arithmetic, any i16 input with |x| <= q. Levels 0 and 1 fused into one radix-4
@@ -826,10 +762,9 @@ pass over the 648 vectors (41 KB streamed once from L2), levels 2 and 3 fused ov
 vectors, then one pass per 27-block for each of levels 4, 5, 6; zero shuffles; Barretts: one
 level for 3889 (a0 of level 5, output <= 3.40 q), for 9721 inside the first pass and on the a0
 of levels 3-6 (output <= 2.12 q). Radix-9 / radix-27 fusion measured and rejected (439-468 vs
-423: multiply-port bound, longer dependency chains); the variants stay behind
-`ntt_gen_batch32_plan`. Out of cache: one prefetch line per level-4/5/6 butterfly for the next
-batch is worth 23 %; 162 prefetches at once are 18 % slower than none. `ntt_gen_batch32_mont`
-gives Montgomery-form outputs for +1 % (one multiplication by R replaces the level-5 Barrett).
+423: multiply-port bound, longer dependency chains). Out of cache: one prefetch line per
+level-4/5/6 butterfly for the next
+batch is worth 23 %; 162 prefetches at once are 18 % slower than none.
 
 `intt_gen_batch32` is the inverse, the same five passes in the opposite order with
 Gentleman-Sande butterflies — `u = omega (y2 - y1)`, then `(y0+y1+y2, (y0-y1+u) zeta^-1,
@@ -848,43 +783,7 @@ it, chosen by exhaustive search over that flag set and replayed by a `const` rec
 proves every intermediate stays inside i16 (peak 8.09 q of a 8.43 q budget for 3889, 3.24 q of
 3.37 q for 9721); the tests replay the same schedule in i32.
 
-### `simd/horizontal_gen.rs` — Gregor's layout, generic input (540 / 587)
-
-`HBatch4`: `v[r][8p + j]` = coefficient r + 81 j of polynomial p — one polynomial per 128-bit
-lane, the 8 coefficients of stride 81 inside a lane, 81 registers for 4 polynomials (5 KB).
-Levels 0-2 are in-lane and fused per register (`vpshufd` 0xEE/0x44 and 0xF5/0xA0, `vpshufb`
-for level 2; `out = v + c * u` with a per-lane twiddle vector, both halves multiplied): 2
-shuffles + 3 multiplies + 2 add/sub per register per level, 225 of the 540 cycles. After level
-2 lane position `j = 4 s0 + 2 s1 + s2` carries the tree's 81-block k = j, so the slot order is
-`81 j + r` and `HBatch4::get` returns tree order. Levels 3-6 are register-to-register radix-3
-passes on r (strides 27, 9, 3, 1), one pass per level with three independent triples per
-iteration (fusing levels: 566 vs 542); the 40 per-lane (zeta, zeta^2) constant vectors are
-hoisted by hand. Reduction: none for 3889 (output <= 7.69 q), a Barrett on the a0 of every
-radix-3 level for 9721 (2.12 q). Out of cache: `prefetcht0` per register of the first pass,
-772 -> 633 cycles. Rejected: sharing the level-1 multiply across register pairs (548 vs 541),
-`black_box` on the table pointer.
-
-### Why there is no horizontal binary kernel
-
-The lookup trick needs, in every output lane, an index made of four bits of that lane's
-polynomial. In the vertical layout that index is the input row (one nibble per element per
-lane), so a lookup costs one `vpermb` and nothing else, and folding a twiddle is merely choosing
-a different table. In the horizontal layout the four bits sit at lane positions j, j+2, j+4, j+6
-of the same 128-bit lane, so every register first needs an in-lane bit gather (~4-6 uops) to
-build the index, the four sub-rings sharing a lane need four different tables (`vpermi2b`,
-2 uops, or two `vpermb` plus a blend), the level-3 folding would need one table per (lane, role)
-and double the gathers, and all of it lands on p5, the port the in-lane levels already fill
-with shuffles. Levels 0-2 would drop from ~21 to ~14 uops per register — 540 -> ~450-470 cycles,
-still ~60 % above the vertical binary kernel.
-
-### `simd/pointwise.rs` — products in the NTT domain
-
-General Montgomery product of two batches (4 multiplies per slot plus a second multiplication
-by 2^32 mod q for plain-form inputs; one multiplication for Montgomery-form inputs), and batch x
-fixed element (3 multiplies per slot; the element's Montgomery form and companion are stored as
-duplicated u32 so the broadcasts are pure loads).
-
-## Machine facts that drove the design (`tools/ubench`, `tools/membw`)
+## Machine facts that drove the design
 
 On this Tiger Lake core every 512-bit 16-bit multiply (`vpmullw / vpmulhw / vpmulhrsw /
 vpmaddwd / vpdpwssd`) issues only on port 0 at one per cycle (ymm: two per cycle on p0/p1);
@@ -894,14 +793,14 @@ uops; `vpminuw`, shifts and `vgf2p8affineqb` are p0; `vpbroadcastw` from memory 
 but `vpbroadcastd` is a pure load; `kmov k, m` is a p5 uop; a merge-masked load costs about one
 extra ALU uop. Loads two per cycle, stores one. So for this instruction mix cycles ~= max(p0
 uops, ALU uops / 2 + ~0.26 per zmm store), and the whole game is the multiply count.
-`tools/ubench/ports.c` shows that the ~17-28 % of flexible adds that land on the saturated
-port 0 is caused by the adds *depending* on 5-cycle multiplies (queue-occupancy feedback in the
-allocator), that a software-pipelined multiply/add order recovers at most ~2.4 %, and that ymm
-is 36 % slower. Single-core DRAM: 37 GB/s non-temporal stores, 14 GB/s regular stores,
-19.5 GB/s reads. Branches and the front end are not a factor: `perf stat` on the kernel-only
-loops (`src/bin/kernel_loop.rs`) shows 14-31 branches per polynomial with 0.1-0.3
-mispredictions, 99+ % of uops from the decoded-uop cache, ~49 % of slots back-end bound and
-~48 % retiring for all kernels.
+C microbenchmarks of the ports showed that the ~17-28 % of flexible adds that land on the
+saturated port 0 is caused by the adds *depending* on 5-cycle multiplies (queue-occupancy
+feedback in the allocator), that a software-pipelined multiply/add order recovers at most
+~2.4 %, and that ymm is 36 % slower. Single-core DRAM: 37 GB/s non-temporal stores, 14 GB/s
+regular stores, 19.5 GB/s reads. Branches and the front end are not a factor: `perf stat` on
+the kernel-only loops showed 14-31 branches per polynomial with 0.1-0.3 mispredictions, 99+ %
+of uops from the decoded-uop cache, ~49 % of slots back-end bound and ~48 % retiring for all
+kernels.
 
 ## Remaining optimisation strategies
 
@@ -931,32 +830,21 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/challenge.rs            short fixed-weight ternary challenges over R_162, blake3 transcript
     src/fold.rs                 the folding step: v = sum_j c_j W_j in the NTT domain, and A v
     src/eval.rs                 the left-expansion over F162 (Pi_translate), the binary fold, the verifier
-    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256, folds the r = 256 run and verifies it;
-                                --limbs 2917,4861,9721,12637 selects the limb list and times each limb
+    src/main.rs                 the scheme end to end, once, with the wall clock on every step
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
-    src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)
+    src/types.rs                Batch32, RingElement, Representation
+    src/rng.rs                  a deterministic RNG for the key, the witness and the tests
     src/scalar.rs               exact reference: product mod Phi_1944, NTT, inverse NTT, evaluation,
                                 and the quadratic-slot transform, its slot products and its R_162 decomposition
     src/simd/transpose_f162.rs  F162 x 128 -> BinaryIndex32 (GFNI + VBMI)
-    src/simd/transpose.rs       BinaryIndex32 and the GFNI bit-slicing of plain 648-bit polynomials
-    src/simd/vertical_bin_asm.rs the binary kernel (LUT + folding, asm levels 4-6, block hook) — production
-    src/simd/vertical_bin.rs    the same kernel in intrinsics (reference for the asm one)
-    src/simd/ntt_f162.rs        NTT drivers for the F162 input (single prime, both primes, streamed, Montgomery form)
+    src/simd/vertical_bin_asm.rs the binary kernel (LUT + folding, asm levels 4-6, block hook)
+    src/simd/vertical_bin_quad.rs the binary kernel for the quadratic-slot tree (q in QS_QUAD)
+    src/simd/vertical_gen.rs    generic-input vertical kernel, forward and inverse
+    src/simd/vertical_gen_quad.rs generic-input kernel for the quadratic-slot tree
     src/simd/commit.rs          the Ajtai commitment on the vertical kernels (block-fused, VNNI accumulation),
                                 over a list of limbs; the quadratic basemul and its accumulators
-    src/simd/commit_h.rs        the commitment in the horizontal layout (L1-resident groups of 4)
-    src/simd/vertical_bin_quad.rs the binary kernel for the quadratic-slot tree (q in QS_QUAD)
-    src/simd/vertical_gen_quad.rs generic-input kernel for the quadratic-slot tree
-    src/simd/vertical_gen.rs    generic-input vertical kernel, forward and inverse
-    src/simd/horizontal_gen.rs  generic-input horizontal kernel (HBatch4)
-    src/simd/pointwise.rs       slot-wise Montgomery products
-    src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)
-    src/bin/bench_commit.rs     the headline benchmark;  bench_commit_h.rs, bench_f162.rs, bench_*.rs
-    src/bin/bench_quad.rs       the quadratic-slot kernels next to the splitting ones (all five primes)
-    src/bin/bench_limbs.rs      one limb of a commitment, all five primes: transform, commitment, basemul
-    src/bin/kernel_loop.rs      one kernel in a tight loop, for perf stat / perf record
     tests/limbs.rs              every limb against the scalar reference, the four-limb pipelines, the
                                 default configuration bit for bit
-    tests/*.rs                  correctness;  tools/  C microbenchmarks (ports, instruction table, DRAM)
-    DESIGN.md                   design notes: tree, arithmetic, bounds, port facts, kernel APIs
+    tests/*.rs                  the scalar reference, each kernel against it with its bound and shadow
+                                models, the commitment, the API, the fold, the evaluation, the challenges

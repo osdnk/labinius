@@ -57,9 +57,9 @@
 //! each written out of registers by one `asm!` block. `Mac` is a [`BlockSink`] that hands the
 //! kernel a single 1728-byte scratch for every block and multiplies the block into the
 //! accumulator the moment it is stored, while it is still in L1. The alternatives cost, per ring
-//! element (q = 3889 / 9721): materialising the whole transform first ([`commit_unfused`])
-//! 874 / 908 cycles — it adds 85 MB of writes and 85 MB of reads and is DRAM-bound; one 41 KB
-//! buffer per batch ([`commit_batch_fused`]) 645 / 687; per block 630 / 664.
+//! element (q = 3889 / 9721): materialising the whole transform first 874 / 908 cycles — it adds
+//! 85 MB of writes and 85 MB of reads and is DRAM-bound; one 41 KB buffer per batch 645 / 687;
+//! per block, which is what this module does, 630 / 664.
 //!
 //! # Prefetching A
 //!
@@ -73,13 +73,13 @@
 //!
 //! # Measured (i7-11850H, one core, 2^18 F162 = 2^16 ring elements, 85 MB of A per prime)
 //!
-//! [`commit`] runs at 7.5 ms / 479 cycles per ring element for q = 3889 and 7.9 ms / 499 for
-//! q = 9721; [`commit_2q`] does both primes off one slicing pass at 483 cycles per ring element
+//! A single-prime commitment runs at 7.5 ms / 479 cycles per ring element for q = 3889 and
+//! 7.9 ms / 499 for q = 9721; two primes off one slicing pass cost 483 cycles per ring element
 //! and prime. Of the 479 cycles, 309 are the front end plus the transform (cache-resident) and 58
 //! the base multiplication, leaving 112 of A stream that does not hide behind them; the floor is
 //! max(DRAM 4.4 ms, compute 5.9 ms).
 use crate::params::*;
-use crate::simd::transpose::BinaryIndex32;
+use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::transpose_f162::slice_f162_into;
 use crate::simd::vertical_bin_asm::{self as vb, BlockSink};
 use crate::types::*;
@@ -305,14 +305,14 @@ struct Blk27([i16; 27 * 32]);
 /// The multiply-accumulate sink: the kernel writes every 27-slot block into the same L1-resident
 /// scratch, and this multiplies it into the accumulator against the batch's A rows (prefetching
 /// a later batch's) before the next `asm!` block starts.
-struct Mac<const PF: bool> {
+struct Mac {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
     acc: *mut i32,
 }
 
-impl<const PF: bool> BlockSink for Mac<PF> {
+impl BlockSink for Mac {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -320,7 +320,7 @@ impl<const PF: bool> BlockSink for Mac<PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac27::<PF>(
+        mac27::<true>(
             w,
             self.a.add(32 * 27 * blk),
             self.apf.add(64 * 27 * blk),
@@ -334,8 +334,8 @@ impl<const PF: bool> BlockSink for Mac<PF> {
 /// The kernel still writes its 27 vectors into the L1 scratch and [`mac27`] still reads them from
 /// there, so the accumulate is unchanged; the extra work is 27 `vmovntdq` per block, 41472 bytes
 /// per batch, which leave no cache footprint and are absorbed by the write-combining buffers
-/// while the transform of the next block runs. See [`commit_2q_keep`].
-struct MacKeep<const PF: bool> {
+/// while the transform of the next block runs.
+struct MacKeep {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
@@ -343,7 +343,7 @@ struct MacKeep<const PF: bool> {
     out: *mut i16,
 }
 
-impl<const PF: bool> BlockSink for MacKeep<PF> {
+impl BlockSink for MacKeep {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -351,7 +351,7 @@ impl<const PF: bool> BlockSink for MacKeep<PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac27::<PF>(
+        mac27::<true>(
             w,
             self.a.add(32 * 27 * blk),
             self.apf.add(64 * 27 * blk),
@@ -381,187 +381,8 @@ fn check(elems: &[F162], a: &[Batch32]) {
     assert_eq!(elems.len(), 128 * a.len(), "128 F162 (= 32 ring elements) per A batch");
 }
 
-/// A row pointer of batch `b`, and of batch `b + d` clamped to the last one (the prefetch target).
-#[inline(always)]
-fn rows_d(a: &[Batch32], b: usize, d: usize) -> (*const i16, *const i8) {
-    let cur = a[b].v.as_ptr() as *const i16;
-    let nxt = a[(b + d).min(a.len() - 1)].v.as_ptr() as *const i8;
-    (cur, nxt)
-}
-
-/// Distance, in batches, of the A prefetch that [`commit`] uses.
+/// Distance, in batches, of the A prefetch.
 pub const PF_DIST: usize = 1;
-
-/// The commitment: the transform consumed block by block, with the packed accumulator and the A
-/// prefetch.
-pub fn commit<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
-    commit_block_fused::<Q, true, PF_DIST>(elems, a, red_period(Q))
-}
-
-/// Both primes off one slicing pass of the input (the index rows do not depend on q).
-pub fn commit_2q(elems: &[F162], a3889: &[Batch32], a9721: &[Batch32]) -> ([u32; N], [u32; N]) {
-    check(elems, a3889);
-    assert_eq!(a3889.len(), a9721.len());
-    let mut acc_a = Acc::zero();
-    let mut acc_b = Acc::zero();
-    let mut idx = BinaryIndex32::zero();
-    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
-    let bp = buf.as_mut_ptr() as *mut i16;
-    let (pa, pb) = (acc_a.v.as_mut_ptr() as *mut i32, acc_b.v.as_mut_ptr() as *mut i32);
-    unsafe {
-        for b in 0..a3889.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            let (a, apf) = rows_d(a3889, b, PF_DIST);
-            vb::ntt_bin_batch32_sink::<3889, false, _>(
-                &idx,
-                &mut Mac::<true> { buf: bp, a, apf, acc: pa },
-            );
-            if (b + 1) % red_period(3889) == 0 {
-                reduce_acc::<3889>(pa);
-            }
-            let (a, apf) = rows_d(a9721, b, PF_DIST);
-            vb::ntt_bin_batch32_sink::<9721, false, _>(
-                &idx,
-                &mut Mac::<true> { buf: bp, a, apf, acc: pb },
-            );
-            if (b + 1) % red_period(9721) == 0 {
-                reduce_acc::<9721>(pb);
-            }
-        }
-    }
-    (finish::<3889>(&acc_a), finish::<9721>(&acc_b))
-}
-
-/// [`commit_2q`] with the small prime's transform kept: `w` receives `NTT_3889(w_i)` for every
-/// ring element, in the kernel's own vertical layout and with its own lazy reduction
-/// (`|v| <= 7.5 q`), written straight out of the block sink with non-temporal stores.
-///
-/// The 85 MB of output for 2^16 ring elements never enters a cache and is absorbed by the store
-/// buffers under the transform of the following block, so keeping the witness costs a few percent
-/// over [`commit_2q`] rather than the DRAM time of an extra stream.
-pub fn commit_2q_keep(
-    elems: &[F162],
-    a3889: &[Batch32],
-    a9721: &[Batch32],
-    w: &mut [Batch32],
-) -> ([u32; N], [u32; N]) {
-    check(elems, a3889);
-    assert_eq!(a3889.len(), a9721.len());
-    assert_eq!(w.len(), a3889.len(), "one output batch per A batch");
-    let mut acc_a = Acc::zero();
-    let mut acc_b = Acc::zero();
-    let mut idx = BinaryIndex32::zero();
-    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
-    let bp = buf.as_mut_ptr() as *mut i16;
-    let (pa, pb) = (acc_a.v.as_mut_ptr() as *mut i32, acc_b.v.as_mut_ptr() as *mut i32);
-    unsafe {
-        for b in 0..a3889.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            let out = w.get_unchecked_mut(b).v.as_mut_ptr() as *mut i16;
-            let (a, apf) = rows_d(a3889, b, PF_DIST);
-            vb::ntt_bin_batch32_sink::<3889, false, _>(
-                &idx,
-                &mut MacKeep::<true> { buf: bp, a, apf, acc: pa, out },
-            );
-            if (b + 1) % red_period(3889) == 0 {
-                reduce_acc::<3889>(pa);
-            }
-            let (a, apf) = rows_d(a9721, b, PF_DIST);
-            vb::ntt_bin_batch32_sink::<9721, false, _>(
-                &idx,
-                &mut Mac::<true> { buf: bp, a, apf, acc: pb },
-            );
-            if (b + 1) % red_period(9721) == 0 {
-                reduce_acc::<9721>(pb);
-            }
-        }
-        _mm_sfence();
-    }
-    for b in w.iter_mut() {
-        b.representation = Representation::Ntt;
-    }
-    (finish::<3889>(&acc_a), finish::<9721>(&acc_b))
-}
-
-/// The transform materialised into `w` first (85 MB for 2^16 elements, non-temporal stores), then
-/// read back by a separate multiply-accumulate pass.
-pub fn commit_unfused<const Q: u16, const PF: bool>(
-    elems: &[F162],
-    a: &[Batch32],
-    w: &mut [Batch32],
-    period: usize,
-) -> [u32; N] {
-    check(elems, a);
-    assert_eq!(w.len(), a.len());
-    crate::simd::ntt_f162::ntt_f162::<Q>(elems, w);
-    let mut acc = Acc::zero();
-    let ap = acc.v.as_mut_ptr() as *mut i32;
-    unsafe {
-        for b in 0..a.len() {
-            let (cur, nxt) = rows_d(a, b, 1);
-            mac_batch::<PF>(w[b].v.as_ptr() as *const i16, cur, nxt, ap);
-            if (b + 1) % period == 0 {
-                reduce_acc::<Q>(ap);
-            }
-        }
-    }
-    finish::<Q>(&acc)
-}
-
-/// Each batch's transform written to one 41 KB buffer that stays in L1/L2 and multiplied by the
-/// batch's A rows immediately after.
-pub fn commit_batch_fused<const Q: u16, const PF: bool>(
-    elems: &[F162],
-    a: &[Batch32],
-    period: usize,
-) -> [u32; N] {
-    check(elems, a);
-    let mut acc = Acc::zero();
-    let ap = acc.v.as_mut_ptr() as *mut i32;
-    let mut buf = Batch32::zero(Representation::Ntt);
-    let mut idx = BinaryIndex32::zero();
-    unsafe {
-        for b in 0..a.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            vb::ntt_bin_batch32::<Q>(&idx, &mut buf);
-            let (cur, nxt) = rows_d(a, b, 1);
-            mac_batch::<PF>(buf.v.as_ptr() as *const i16, cur, nxt, ap);
-            if (b + 1) % period == 0 {
-                reduce_acc::<Q>(ap);
-            }
-        }
-    }
-    finish::<Q>(&acc)
-}
-
-/// The accumulate inserted between the kernel's `asm!` blocks through [`Mac`], with the A prefetch
-/// aimed `DIST` batches ahead. `commit_block_fused::<Q, true, PF_DIST>` is [`commit`].
-pub fn commit_block_fused<const Q: u16, const PF: bool, const DIST: usize>(
-    elems: &[F162],
-    a: &[Batch32],
-    period: usize,
-) -> [u32; N] {
-    check(elems, a);
-    let mut acc = Acc::zero();
-    let ap = acc.v.as_mut_ptr() as *mut i32;
-    let mut idx = BinaryIndex32::zero();
-    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
-    let bp = buf.as_mut_ptr() as *mut i16;
-    unsafe {
-        for b in 0..a.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            let (cur, apf) = rows_d(a, b, DIST);
-            vb::ntt_bin_batch32_sink::<Q, false, _>(
-                &idx,
-                &mut Mac::<PF> { buf: bp, a: cur, apf, acc: ap },
-            );
-            if (b + 1) % period == 0 {
-                reduce_acc::<Q>(ap);
-            }
-        }
-    }
-    finish::<Q>(&acc)
-}
 
 // =============================================================================================
 // quadratic-slot limbs
@@ -814,14 +635,10 @@ pub fn finish_quad<const Q: u16>(acc: &QuadAcc) -> [u32; N] {
     y
 }
 
-/// The 1152-byte scratch every 18-row block of the quadratic transform is written into.
-#[repr(C, align(64))]
-struct Blk18([i16; 18 * 32]);
-
 /// The quadratic multiply-accumulate sink: the same L1 scratch for every block, multiplied into
 /// the three accumulators against the block's A rows (prefetching a later batch's) the moment the
 /// kernel has stored it.
-struct MacQ<const Q: u16, const PF: bool> {
+struct MacQ<const Q: u16> {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
@@ -829,7 +646,7 @@ struct MacQ<const Q: u16, const PF: bool> {
     acc2: *mut i32,
 }
 
-impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
+impl<const Q: u16> QBlockSink for MacQ<Q> {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -837,7 +654,7 @@ impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac_quad18::<Q, PF>(
+        mac_quad18::<Q, true>(
             w,
             self.a.add(32 * 18 * blk),
             self.apf.add(64 * 18 * blk),
@@ -865,7 +682,7 @@ unsafe fn quad_batch<const Q: u16>(
 ) {
     vq::ntt_quad_bin_batch32_sink::<Q, _>(
         idx,
-        &mut MacQ::<Q, true> { buf, a, apf, acc01: p01, acc2: p2 },
+        &mut MacQ::<Q> { buf, a, apf, acc01: p01, acc2: p2 },
     );
     if done % red_period_quad01(Q) == 0 {
         reduce_quad_part::<Q>(p01, QBLOCKS * QACC01_PER_BLK);
@@ -873,32 +690,6 @@ unsafe fn quad_batch<const Q: u16>(
     if done % red_period_quad2(Q) == 0 {
         reduce_quad_part::<Q>(p2, QBLOCKS * QACC2_PER_BLK);
     }
-}
-
-/// The commitment for one quadratic-slot limb: `y[2j] + y[2j+1] X = sum_i A_i W_i mod (X^2 - c_j)`
-/// for every leaf `j`, the 648 rows fully reduced.
-pub fn commit_quad<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
-    check(elems, a);
-    let mut acc = QuadAcc::zero();
-    let mut idx = BinaryIndex32::zero();
-    let mut buf: core::mem::MaybeUninit<Blk18> = core::mem::MaybeUninit::uninit();
-    let bp = buf.as_mut_ptr() as *mut i16;
-    unsafe {
-        for b in 0..a.len() {
-            slice_f162_into(chunk128(elems, b), &mut idx);
-            let (cur, apf) = rows_d(a, b, PF_DIST);
-            quad_batch::<Q>(
-                &idx,
-                cur,
-                apf,
-                bp,
-                acc.p01.as_mut_ptr() as *mut i32,
-                acc.p2.as_mut_ptr() as *mut i32,
-                b + 1,
-            );
-        }
-    }
-    finish_quad::<Q>(&acc)
 }
 
 // =============================================================================================
@@ -974,12 +765,12 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool>(
     done: usize,
 ) {
     if KEEP {
-        vb::ntt_bin_batch32_sink::<Q, false, _>(
+        vb::ntt_bin_batch32_sink::<Q, _>(
             idx,
-            &mut MacKeep::<true> { buf, a, apf, acc, out },
+            &mut MacKeep { buf, a, apf, acc, out },
         );
     } else {
-        vb::ntt_bin_batch32_sink::<Q, false, _>(idx, &mut Mac::<true> { buf, a, apf, acc });
+        vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac { buf, a, apf, acc });
     }
     if done % red_period(Q) == 0 {
         reduce_acc::<Q>(acc);

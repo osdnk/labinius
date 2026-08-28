@@ -19,14 +19,12 @@
 //! `t = zeta6*a1; y0 = a0 + t; y1 = a0 + a1 - t`, level 1 the two radix-2 halves): 162 iterations
 //! of 4 loads, 4 Montgomery multiplications, 4 stores.
 //!
-//! Deeper fusion was implemented and measured (`ntt_gen_batch32_plan`, `ntt_gen_batch32_r27`, and
-//! the bench): fusing levels 4+5 into a radix-9 pass over 9 registers costs 3.5% (438 vs 423
-//! cycles/poly at q = 3889), 5+6 costs 3.8%, and the full radix-27 tail costs 6.3%. They do cut L1
-//! traffic, but the kernel is port-0-throughput-bound, not load/store-bound, and the longer
-//! dependency chains inside a fused group only reduce the number of independent butterflies in
-//! flight. Splitting pass B into separate level-2 and level-3 passes also loses (427 vs 423), so
-//! B stays fused. The streaming driver `ntt_gen_batches` prefetches the next batch into L2 one
-//! cache line per butterfly of levels 4-6, which is worth 23% on the 2^18-polynomial case.
+//! Deeper fusion was implemented and measured: fusing levels 4+5 into a radix-9 pass over 9
+//! registers costs 3.5% (438 vs 423 cycles/poly at q = 3889), 5+6 costs 3.8%, and the full
+//! radix-27 tail costs 6.3%. They do cut L1 traffic, but the kernel is port-0-throughput-bound,
+//! not load/store-bound, and the longer dependency chains inside a fused group only reduce the
+//! number of independent butterflies in flight. Splitting pass B into separate level-2 and
+//! level-3 passes also loses (427 vs 423), so B stays fused.
 //!
 //! # Arithmetic and bounds
 //!
@@ -51,20 +49,6 @@
 //!
 //! Output bound: `|v| <= 3.4022 q = 13231` for q = 3889 and `|v| <= 2.1244 q = 20652` for q = 9721
 //! (`OUTPUT_BOUND`), verified against an exact i32 shadow model in `tests/vertical_gen.rs`.
-//!
-//! # Montgomery-form outputs (`ntt_gen_batch32_mont`)
-//!
-//! `R * a(psi^SLOT_EXP[j])` with R = 2^16 mod q, so that a slot product of two transforms costs
-//! one signed Montgomery multiplication instead of two. Unlike the binary kernel — whose lookup
-//! tables absorb the factor for free — a generic-input kernel has to pay for it somewhere: the
-//! all-`a0` path through the tree carries no twiddle, so no retwiddling alone can produce R.
-//! The cheapest place is the untwiddled `a0` input of a radix-3 level, of which there are only
-//! 216 per batch (against 324 for a radix-2 level and 648 for scaling the input), and among
-//! those level 5, because `BAR_L[5]` is true for both primes: `mont(a0, R)` *replaces* the
-//! `barrett` there, so the whole Montgomery form costs 216 extra multiply-port uops per batch
-//! (one per level-5 butterfly, +2 % statically, +1 % measured: 427.5 vs 423.3 cycles per
-//! polynomial at q = 3889, 470.4 vs 466.3 at 9721). `|mont(a0, R)| < 0.75 q` is tighter than the
-//! Barrett's `0.899 q / 0.809 q`, so all per-level bounds and `OUTPUT_BOUND` hold unchanged.
 //!
 //! # The inverse (`intt_gen_batch32`, 541 / 601)
 //!
@@ -186,16 +170,6 @@ impl<const Q: u16> Tw<Q> {
     pub const L4: [u32; 96] = Self::r3::<96>(4, 24);
     pub const L5: [u32; 288] = Self::r3::<288>(5, 72);
     pub const L6: [u32; 864] = Self::r3::<864>(6, 216);
-
-    /// `[R', R]`: `mont(a, R', R) = a * 2^16 mod q`. Applied to the untwiddled `a0` input of
-    /// level 5 by `ntt_gen_batch32_mont`, where it *replaces* the Barrett (`BAR_L[5]` is true for
-    /// both primes), so the whole Montgomery-form transform costs one extra multiply-port uop per
-    /// level-5 butterfly (216 per batch, +2 %) instead of the 3 a full extra multiplication costs.
-    pub const RM: [u32; 2] = Self::pair(Params::<Q>::R);
-    /// Level-5 twiddles scaled by R (`zeta -> R zeta`, `zeta^2 -> R zeta^2`), the other half of
-    /// the Montgomery-form output: with `a0 -> R a0` every level-5 output, and hence every output
-    /// of the transform, is scaled by R exactly.
-    pub const L5M: [u32; 288] = Self::r3_scaled::<288>(5, 72, Params::<Q>::R);
 
     /// Barrett the level-0 output `a0 + a1 - zeta6*a1` inside pass A (only 9721 needs it).
     pub const BAR_A: bool = Q == 9721;
@@ -340,47 +314,8 @@ unsafe fn pass_b<const Q: u16>(p: *mut __m512i, blk: usize) {
     }
 }
 
-/// Levels 4 and 5 for one 27-block (level-4 sub-ring `k4`): 3 groups of 9 vectors, 6 radix-3 each
-/// (3 "columns" for level 4, then 3 "rows" for level 5).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_c<const Q: u16>(p: *mut __m512i, k4: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
-    let omp = bc(Tw::<Q>::OM.as_ptr());
-    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
-    let t4 = Tw::<Q>::L4.as_ptr().add(4 * k4);
-    let t5 = Tw::<Q>::L5.as_ptr().add(12 * k4);
-    let base = k4 * 27;
-    for j in 0..3 {
-        let b = base + j;
-        let mut v = [_mm512_setzero_si512(); 9];
-        for a in 0..3 {
-            let (mut c0, c1, c2) = (ld(p, b + 3 * a), ld(p, b + 3 * a + 9), ld(p, b + 3 * a + 18));
-            if Tw::<Q>::BAR_L[4] {
-                c0 = barrett(c0, bv, q);
-            }
-            let (y0, y1, y2) = r3(c0, c1, c2, t4, omp, om, q);
-            v[a] = y0;
-            v[3 + a] = y1;
-            v[6 + a] = y2;
-        }
-        for bb in 0..3 {
-            let mut c0 = v[3 * bb];
-            if Tw::<Q>::BAR_L[5] {
-                c0 = barrett(c0, bv, q);
-            }
-            let (y0, y1, y2) = r3(c0, v[3 * bb + 1], v[3 * bb + 2], t5.add(4 * bb), omp, om, q);
-            st(p, b + 9 * bb, y0);
-            st(p, b + 9 * bb + 3, y1);
-            st(p, b + 9 * bb + 6, y2);
-        }
-    }
-}
-
-/// Level 6 for one 27-block: 3 groups of 9 vectors, 3 radix-3 butterflies each (m = 1, so the
-/// twiddles change per butterfly).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_d<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: *const i8) {
+unsafe fn pass_d<const Q: u16>(p: *mut __m512i, k4: usize) {
     let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
     let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
     let omp = bc(Tw::<Q>::OM.as_ptr());
@@ -388,9 +323,6 @@ unsafe fn pass_d<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: *
     let t6 = Tw::<Q>::L6.as_ptr().add(36 * k4);
     let base = k4 * 27;
     for g in 0..9 {
-        if PF {
-            _mm_prefetch(pf.add((base + 18 + g) * 64), _MM_HINT_T1);
-        }
         let b = base + 3 * g;
         let mut c0 = ld(p, b);
         if Tw::<Q>::BAR_L[6] {
@@ -403,9 +335,9 @@ unsafe fn pass_d<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: *
     }
 }
 
-/// Level 4 alone for one 27-block: 3 groups of 3 independent butterflies (unfused variant).
+/// Level 4 alone for one 27-block: 3 groups of 3 independent butterflies .
 #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_c4<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: *const i8) {
+unsafe fn pass_c4<const Q: u16>(p: *mut __m512i, k4: usize) {
     let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
     let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
     let omp = bc(Tw::<Q>::OM.as_ptr());
@@ -414,9 +346,6 @@ unsafe fn pass_c4<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: 
     let base = k4 * 27;
     for c in 0..3 {
         for i in 3 * c..3 * c + 3 {
-            if PF {
-                _mm_prefetch(pf.add((base + i) * 64), _MM_HINT_T1);
-            }
             let b = base + i;
             let mut c0 = ld(p, b);
             if Tw::<Q>::BAR_L[4] {
@@ -430,9 +359,9 @@ unsafe fn pass_c4<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: 
     }
 }
 
-/// Level 5 alone for one 27-block: 3 groups of 9 vectors, 3 butterflies each (unfused variant).
+/// Level 5 alone for one 27-block: 3 groups of 9 vectors, 3 butterflies each .
 #[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_c5<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: *const i8) {
+unsafe fn pass_c5<const Q: u16>(p: *mut __m512i, k4: usize) {
     let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
     let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
     let omp = bc(Tw::<Q>::OM.as_ptr());
@@ -441,9 +370,6 @@ unsafe fn pass_c5<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: 
     let base = k4 * 27;
     for bb in 0..3 {
         for j in 0..3 {
-            if PF {
-                _mm_prefetch(pf.add((base + 9 + 3 * bb + j) * 64), _MM_HINT_T1);
-            }
             let b = base + 9 * bb + j;
             let mut c0 = ld(p, b);
             if Tw::<Q>::BAR_L[5] {
@@ -455,210 +381,6 @@ unsafe fn pass_c5<const Q: u16, const PF: bool>(p: *mut __m512i, k4: usize, pf: 
             st(p, b + 6, y2);
         }
     }
-}
-
-/// Level 5 for one 27-block with the Montgomery scaling folded in: the `a0` input is multiplied
-/// by `R = 2^16 mod q` (which also reduces it to `|.| < 0.75 q`, so it replaces the `barrett` the
-/// plain path does here for both primes) and the twiddles come from the R-scaled `L5M`, so all
-/// three outputs — and, level 6 being linear, the whole transform — are scaled by R.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_c5_mont<const Q: u16>(p: *mut __m512i, k4: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let omp = bc(Tw::<Q>::OM.as_ptr());
-    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
-    let rmp = bc(Tw::<Q>::RM.as_ptr());
-    let rm = bc(Tw::<Q>::RM.as_ptr().add(1));
-    let t5 = Tw::<Q>::L5M.as_ptr().add(12 * k4);
-    let base = k4 * 27;
-    for bb in 0..3 {
-        for j in 0..3 {
-            let b = base + 9 * bb + j;
-            let c0 = mont(ld(p, b), rmp, rm, q);
-            let (y0, y1, y2) = r3(c0, ld(p, b + 3), ld(p, b + 6), t5.add(4 * bb), omp, om, q);
-            st(p, b, y0);
-            st(p, b + 3, y1);
-            st(p, b + 6, y2);
-        }
-    }
-}
-
-/// Level 2 alone for one 162-block (unfused variant): 3 independent butterflies per group.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_l2<const Q: u16>(p: *mut __m512i, blk: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let l2 = Tw::<Q>::L2.as_ptr().add(2 * blk);
-    let (zp, z) = (bc(l2), bc(l2.add(1)));
-    let base = blk * 162;
-    for c in 0..27 {
-        for i in 3 * c..3 * c + 3 {
-            let b = base + i;
-            let x = ld(p, b);
-            let t = mont(ld(p, b + 81), zp, z, q);
-            st(p, b, add(x, t));
-            st(p, b + 81, sub(x, t));
-        }
-    }
-}
-
-/// Level 3 alone for one 162-block (unfused variant).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_l3<const Q: u16>(p: *mut __m512i, blk: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
-    let omp = bc(Tw::<Q>::OM.as_ptr());
-    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
-    for h in 0..2 {
-        let tw = Tw::<Q>::L3.as_ptr().add(8 * blk + 4 * h);
-        let base = blk * 162 + 81 * h;
-        for c in 0..9 {
-            for j in 3 * c..3 * c + 3 {
-                let b = base + j;
-                let mut c0 = ld(p, b);
-                if Tw::<Q>::BAR_L[3] {
-                    c0 = barrett(c0, bv, q);
-                }
-                let (y0, y1, y2) = r3(c0, ld(p, b + 27), ld(p, b + 54), tw, omp, om, q);
-                st(p, b, y0);
-                st(p, b + 27, y1);
-                st(p, b + 54, y2);
-            }
-        }
-    }
-}
-
-/// Levels 5 and 6 fused over one 9-block (level-5 sub-ring `k5`).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_l56<const Q: u16>(p: *mut __m512i, k5: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
-    let omp = bc(Tw::<Q>::OM.as_ptr());
-    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
-    let t5 = Tw::<Q>::L5.as_ptr().add(4 * k5);
-    let t6 = Tw::<Q>::L6.as_ptr().add(12 * k5);
-    let base = 9 * k5;
-    let mut v = [_mm512_setzero_si512(); 9];
-    for j in 0..3 {
-        let mut c0 = ld(p, base + j);
-        if Tw::<Q>::BAR_L[5] {
-            c0 = barrett(c0, bv, q);
-        }
-        let (y0, y1, y2) = r3(c0, ld(p, base + j + 3), ld(p, base + j + 6), t5, omp, om, q);
-        v[j] = y0;
-        v[3 + j] = y1;
-        v[6 + j] = y2;
-    }
-    for g in 0..3 {
-        let mut c0 = v[3 * g];
-        if Tw::<Q>::BAR_L[6] {
-            c0 = barrett(c0, bv, q);
-        }
-        let (y0, y1, y2) = r3(c0, v[3 * g + 1], v[3 * g + 2], t6.add(4 * g), omp, om, q);
-        st(p, base + 3 * g, y0);
-        st(p, base + 3 * g + 1, y1);
-        st(p, base + 3 * g + 2, y2);
-    }
-}
-
-/// Levels 4, 5 and 6 in one radix-27 pass (27 vectors live).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-unsafe fn pass_l456<const Q: u16>(p: *mut __m512i, k4: usize) {
-    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
-    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
-    let omp = bc(Tw::<Q>::OM.as_ptr());
-    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
-    let t4 = Tw::<Q>::L4.as_ptr().add(4 * k4);
-    let t5 = Tw::<Q>::L5.as_ptr().add(12 * k4);
-    let t6 = Tw::<Q>::L6.as_ptr().add(36 * k4);
-    let base = k4 * 27;
-    let mut v = [_mm512_setzero_si512(); 27];
-    for i in 0..9 {
-        let mut c0 = ld(p, base + i);
-        if Tw::<Q>::BAR_L[4] {
-            c0 = barrett(c0, bv, q);
-        }
-        let (y0, y1, y2) = r3(c0, ld(p, base + i + 9), ld(p, base + i + 18), t4, omp, om, q);
-        v[i] = y0;
-        v[9 + i] = y1;
-        v[18 + i] = y2;
-    }
-    for bb in 0..3 {
-        for j in 0..3 {
-            let mut c0 = v[9 * bb + j];
-            if Tw::<Q>::BAR_L[5] {
-                c0 = barrett(c0, bv, q);
-            }
-            let (y0, y1, y2) =
-                r3(c0, v[9 * bb + j + 3], v[9 * bb + j + 6], t5.add(4 * bb), omp, om, q);
-            v[9 * bb + j] = y0;
-            v[9 * bb + j + 3] = y1;
-            v[9 * bb + j + 6] = y2;
-        }
-    }
-    for g in 0..9 {
-        let mut c0 = v[3 * g];
-        if Tw::<Q>::BAR_L[6] {
-            c0 = barrett(c0, bv, q);
-        }
-        let (y0, y1, y2) = r3(c0, v[3 * g + 1], v[3 * g + 2], t6.add(4 * g), omp, om, q);
-        st(p, base + 3 * g, y0);
-        st(p, base + 3 * g + 1, y1);
-        st(p, base + 3 * g + 2, y2);
-    }
-}
-
-/// Structural variants, measured by `bench_vertical_gen`; `PLAN` selects one.
-///
-/// # Safety
-/// See `ntt_gen_batch32`.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-pub unsafe fn ntt_gen_batch32_plan<const Q: u16, const PLAN: u32>(b: &mut Batch32) {
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    pass_a::<Q>(p);
-    for blk in 0..4 {
-        if PLAN >= 2 {
-            pass_l2::<Q>(p, blk);
-            pass_l3::<Q>(p, blk);
-        } else {
-            pass_b::<Q>(p, blk);
-        }
-        for k4 in 6 * blk..6 * blk + 6 {
-            match PLAN % 2 {
-                0 => {
-                    pass_c::<Q>(p, k4);
-                    pass_d::<Q, false>(p, k4, core::ptr::null());
-                }
-                _ => {
-                    pass_c4::<Q, false>(p, k4, core::ptr::null());
-                    if PLAN >= 4 {
-                        for k5 in 3 * k4..3 * k4 + 3 {
-                            pass_l56::<Q>(p, k5);
-                        }
-                    } else {
-                        pass_c5::<Q, false>(p, k4, core::ptr::null());
-                        pass_d::<Q, false>(p, k4, core::ptr::null());
-                    }
-                }
-            }
-        }
-    }
-    b.representation = Representation::Ntt;
-}
-
-/// Variant with the whole tail (levels 4-6) as one radix-27 pass.
-///
-/// # Safety
-/// See `ntt_gen_batch32`.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-pub unsafe fn ntt_gen_batch32_r27<const Q: u16>(b: &mut Batch32) {
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    pass_a::<Q>(p);
-    for blk in 0..4 {
-        pass_b::<Q>(p, blk);
-        for k4 in 6 * blk..6 * blk + 6 {
-            pass_l456::<Q>(p, k4);
-        }
-    }
-    b.representation = Representation::Ntt;
 }
 
 /// Forward NTT of a batch of 32 polynomials in place: `Coefficients -> Ntt` (tree order).
@@ -675,88 +397,12 @@ pub unsafe fn ntt_gen_batch32<const Q: u16>(b: &mut Batch32) {
     for blk in 0..4 {
         pass_b::<Q>(p, blk);
         for k4 in 6 * blk..6 * blk + 6 {
-            pass_c4::<Q, false>(p, k4, core::ptr::null());
-            pass_c5::<Q, false>(p, k4, core::ptr::null());
-            pass_d::<Q, false>(p, k4, core::ptr::null());
+            pass_c4::<Q>(p, k4);
+            pass_c5::<Q>(p, k4);
+            pass_d::<Q>(p, k4);
         }
     }
     b.representation = Representation::Ntt;
-}
-
-/// Montgomery-form forward NTT: `b.v[j][p] = R * a_p(psi^SLOT_EXP[j]) mod q`, R = 2^16 mod q.
-///
-/// Same passes as [`ntt_gen_batch32`] except that level 5 runs `pass_c5_mont`, which multiplies
-/// the untwiddled `a0` input by R and uses R-scaled twiddles. Level 5 is the cheapest place for
-/// it: a radix-3 level has only 216 untwiddled inputs per batch (the twiddled ones absorb R into
-/// a constant for free), and both primes already Barrett `a0` there, so the Montgomery
-/// multiplication *replaces* that Barrett — 216 extra multiply-port uops per batch (+2 %) rather
-/// than the 648 an independent scaling pass would cost, and 1944 for scaling the input.
-/// Bounds: `|mont(a0, R)| < 0.75 q` where the Barrett gave `<= 0.899 q / 0.809 q`, so every
-/// per-level bound of the module comment, and `OUTPUT_BOUND`, hold unchanged.
-///
-/// # Safety
-/// See [`ntt_gen_batch32`].
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-pub unsafe fn ntt_gen_batch32_mont<const Q: u16>(b: &mut Batch32) {
-    debug_assert_eq!(b.representation, Representation::Coefficients);
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    pass_a::<Q>(p);
-    for blk in 0..4 {
-        pass_b::<Q>(p, blk);
-        for k4 in 6 * blk..6 * blk + 6 {
-            pass_c4::<Q, false>(p, k4, core::ptr::null());
-            pass_c5_mont::<Q>(p, k4);
-            pass_d::<Q, false>(p, k4, core::ptr::null());
-        }
-    }
-    b.representation = Representation::Ntt;
-}
-
-/// Driver over many batches, Montgomery-form output.
-pub fn ntt_gen_batches_mont<const Q: u16>(bs: &mut [Batch32]) {
-    for b in bs.iter_mut() {
-        unsafe { ntt_gen_batch32_mont::<Q>(b) };
-    }
-}
-
-/// Same kernel with the next batch prefetched into L2, one cache line per butterfly of levels
-/// 4-6 (27 per 27-block, 648 per batch). Bursting the same prefetches (162 at the head of each
-/// 162-block) is 18% *slower* than not prefetching at all: they overrun the fill buffers.
-///
-/// # Safety
-/// See `ntt_gen_batch32`; `next` must be a valid `Batch32` or null.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-pub unsafe fn ntt_gen_batch32_pf<const Q: u16>(b: &mut Batch32, next: *const i8) {
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    pass_a::<Q>(p);
-    for blk in 0..4 {
-        pass_b::<Q>(p, blk);
-        for k4 in 6 * blk..6 * blk + 6 {
-            if next.is_null() {
-                pass_c4::<Q, false>(p, k4, next);
-                pass_c5::<Q, false>(p, k4, next);
-                pass_d::<Q, false>(p, k4, next);
-            } else {
-                pass_c4::<Q, true>(p, k4, next);
-                pass_c5::<Q, true>(p, k4, next);
-                pass_d::<Q, true>(p, k4, next);
-            }
-        }
-    }
-    b.representation = Representation::Ntt;
-}
-
-/// Driver: forward NTT of many batches, in place, prefetching one batch ahead (worth 23% on a
-/// 340 MB working set: 527 vs 693 cycles/poly at q = 3889).
-pub fn ntt_gen_batches<const Q: u16>(bs: &mut [Batch32]) {
-    let n = bs.len();
-    let base = bs.as_mut_ptr();
-    for i in 0..n {
-        unsafe {
-            let next = if i + 1 < n { base.add(i + 1) as *const i8 } else { core::ptr::null() };
-            ntt_gen_batch32_pf::<Q>(&mut *base.add(i), next);
-        }
-    }
 }
 
 // =============================================================================================

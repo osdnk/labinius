@@ -110,7 +110,6 @@ pub struct Params<const Q: u16>;
 
 impl<const Q: u16> Params<Q> {
     pub const Q: u16 = Q;
-    pub const Q64: u64 = Q as u64;
     /// q^-1 mod 2^16.
     pub const QINV: u16 = qinv16(Q);
     /// Smallest primitive 1944-th root of unity.
@@ -119,15 +118,8 @@ impl<const Q: u16> Params<Q> {
     pub const OMEGA: u16 = pow_mod(Self::PSI as u64, 648, Q as u64) as u16;
     /// Primitive sixth root of unity, zeta6 = psi^324 (level-0 twiddle); zeta6^-1 = 1 - zeta6.
     pub const ZETA6: u16 = pow_mod(Self::PSI as u64, 324, Q as u64) as u16;
-    /// 2^16 mod q and 2^32 mod q (Montgomery constants).
+    /// 2^16 mod q, the Montgomery constant the twiddle tables are built in.
     pub const R: u16 = (65536u64 % Q as u64) as u16;
-    pub const R2: u16 = (65536u64 * 65536u64 % Q as u64) as u16;
-    /// 2^-16 mod q: the factor that has to be undone once per Montgomery power carried by a
-    /// value (`R * RINV = 1 mod q`). A transform whose outputs are in Montgomery form leaves it
-    /// to whoever leaves the NTT domain (`scalar::intt_mont`).
-    pub const RINV: u16 = inv_mod(Self::R as u64, Q as u64) as u16;
-    /// 648^-1 mod q, the degree part of an inverse NTT's normalisation.
-    pub const N_INV: u16 = inv_mod(N as u64, Q as u64) as u16;
 
     /// psi^e mod q.
     pub const fn psi_pow(e: u32) -> u16 {
@@ -389,8 +381,6 @@ impl<const Q: u16> ParamsQ<Q> {
     pub const OMEGA: u16 = pow_mod(Self::PSI972 as u64, 324, Q as u64) as u16;
     /// Primitive sixth root of unity, zeta6 = psi'^162 (zeta6^-1 = 1 - zeta6).
     pub const ZETA6: u16 = pow_mod(Self::PSI972 as u64, 162, Q as u64) as u16;
-    /// theta = psi'^2, the primitive 486-th root of unity an `R_162` slot evaluates at.
-    pub const THETA: u16 = pow_mod(Self::PSI972 as u64, 2, Q as u64) as u16;
 
     /// psi'^e mod q.
     pub const fn psi_pow(e: u32) -> u16 {

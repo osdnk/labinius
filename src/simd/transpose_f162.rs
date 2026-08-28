@@ -1,6 +1,6 @@
 //! Bit-slicing 128 `F162` (= 32 ring elements) straight into the `BinaryIndex32` rows the binary
-//! NTT kernel consumes. Same machinery as [`crate::simd::transpose`] (GFNI 8x8 bit transposes,
-//! a coefficient-major mask array, the GFNI index-row trick), re-planned for the interleaved
+//! NTT kernel consumes. GFNI 8x8 bit transposes, a coefficient-major mask array and a
+//! GFNI index-row trick, planned for the interleaved
 //! input: coefficient c of ring element p is bit `c / 4` of `F162` element `4p + (c mod 4)`.
 //!
 //! Write `M[k][m]` for the 32-bit mask `{ bit m of element 4p + k : p = 0..32 }`, `i = 4t + s`
@@ -15,7 +15,7 @@
 //! so the rows 4t and 4t+1 are exactly the low and high halves of `U[t], V[t+40], U[t+81],
 //! V[t+121]`, and the rows 4t+2, 4t+3 those of `V[t], U[t+41], V[t+81], U[t+122]`. Phase 2 emits
 //! the (k, k+1)-interleaved u64 planes directly, so phase 3 is the same 4 x 8 qword transpose as
-//! in `transpose`, and phase 4 reads one plain 32-byte group per two rows.
+//! the earlier phase, and phase 4 reads one plain 32-byte group per two rows.
 //!
 //! 1. **qword transpose.** A phase-1 row is a *pair* of ring elements (j, j+8) — 24 qwords,
 //!    exactly three 8x8 transposes with no wasted column (a single ring element is 12 qwords and
@@ -29,12 +29,26 @@
 //!    in qwords 4..7; the single affine therefore emits both rows' nibbles, `[n^A_0..n^A_31 |
 //!    n^B_0..n^B_31]`. Per row one `vpermb` duplicates each byte and one `vpternlogd` masks the
 //!    nibble and sets the +16 of the odd byte — three port-5 uops per two rows where the
-//!    one-row-at-a-time form of `transpose` needs four, and no masked load (a merge-masked
+//!    one-row-at-a-time form would need four, and no masked load (a merge-masked
 //!    `vmovdqu64` costs a p0/p5 uop on top of the load on this core).
-use crate::simd::transpose::BinaryIndex32;
 use bin_fields::scalar::F162;
 use core::arch::x86_64::*;
 use core::mem::MaybeUninit;
+
+/// The `vpermb` byte-index rows the binary NTT kernel consumes: `rows[i][2p] = n(i, p)`,
+/// `rows[i][2p+1] = 16 + n(i, p)` where `n(i, p)` is the 4-bit nibble
+/// b_i | b_{i+162}<<1 | b_{i+324}<<2 | b_{i+486}<<3 of ring element p.
+#[repr(C, align(64))]
+#[derive(Clone)]
+pub struct BinaryIndex32 {
+    pub rows: [[u8; 64]; 162],
+}
+
+impl BinaryIndex32 {
+    pub fn zero() -> Self {
+        BinaryIndex32 { rows: [[0u8; 64]; 162] }
+    }
+}
 
 #[repr(C, align(64))]
 struct A64<T>(T);

@@ -17,9 +17,8 @@
 //! `(i, i+54, i+108)` at `i = i0, i0+18, i0+36` deliver exactly one level-3 butterfly to each of
 //! the three 54-blocks.
 //!
-//! Levels 4 and 5 are *not* fused, although an 18-block does fit in registers:
-//! `ntt_quad_gen_batch32_plan` measures all four combinations, and keeping the 18 values live
-//! across both levels costs 14 % (436 against 382 cycles per ring element at q = 2917, 521
+//! Levels 4 and 5 are *not* fused, although an 18-block does fit in registers: keeping the 18
+//! values live across both levels costs 14 % (436 against 382 cycles per ring element at q = 2917, 521
 //! against 481 at 12637) — the register allocator spends the saved loads and stores on moves,
 //! and this kernel has no port-0 slack to hide them in. Splitting pass B the same way gains
 //! nothing (379 against 382, at 80 more instructions), so B stays fused.
@@ -483,92 +482,11 @@ unsafe fn pass_b<const Q: u16>(p: *mut __m512i, c: &C, blk: usize) {
 
 /// Levels 4 and 5 for one 18-block, register-resident.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-unsafe fn pass_c<const Q: u16, const PF: bool>(p: *mut __m512i, c: &C, k4: usize, pf: *const i8) {
-    let t4 = TwQ::<Q>::L4.as_ptr().add(4 * k4);
-    let base = 18 * k4;
-    let mut v = [_mm512_setzero_si512(); 18];
-    for i in 0..18 {
-        if PF {
-            _mm_prefetch(pf.add((base + i) * 64), _MM_HINT_T1);
-        }
-        v[i] = ld(p, base + i);
-    }
-    for i in 0..6 {
-        let (o0, o1, o2) = if TwQ::<Q>::BAR_L[2] {
-            r3::<true>(c, v[i], v[i + 6], v[i + 12], t4)
-        } else {
-            r3::<false>(c, v[i], v[i + 6], v[i + 12], t4)
-        };
-        v[i] = o0;
-        v[i + 6] = o1;
-        v[i + 12] = o2;
-    }
-    for g in 0..3 {
-        let t5 = TwQ::<Q>::L5.as_ptr().add(4 * (3 * k4 + g));
-        let b = 6 * g;
-        for i in 0..2 {
-            let (o0, o1, o2) = if TwQ::<Q>::BAR_L[3] {
-                r3::<true>(c, v[b + i], v[b + i + 2], v[b + i + 4], t5)
-            } else {
-                r3::<false>(c, v[b + i], v[b + i + 2], v[b + i + 4], t5)
-            };
-            st(p, base + b + i, o0);
-            st(p, base + b + i + 2, o1);
-            st(p, base + b + i + 4, o2);
-        }
-    }
-}
-
-/// Level 2 alone for one 162-block (unfused variant).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-unsafe fn pass_l2<const Q: u16>(p: *mut __m512i, c: &C, blk: usize) {
-    let t2 = TwQ::<Q>::L2.as_ptr().add(4 * blk);
-    let base = 162 * blk;
-    for i in 0..54 {
-        let b = base + i;
-        let (y0, y1, y2) = if TwQ::<Q>::BAR_L[0] {
-            r3::<true>(c, ld(p, b), ld(p, b + 54), ld(p, b + 108), t2)
-        } else {
-            r3::<false>(c, ld(p, b), ld(p, b + 54), ld(p, b + 108), t2)
-        };
-        st(p, b, y0);
-        st(p, b + 54, y1);
-        st(p, b + 108, y2);
-    }
-}
-
-/// Level 3 alone for one 162-block (unfused variant).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-unsafe fn pass_l3<const Q: u16>(p: *mut __m512i, c: &C, blk: usize) {
-    for s in 0..3 {
-        let tw = TwQ::<Q>::L3.as_ptr().add(4 * (3 * blk + s));
-        let base = 162 * blk + 54 * s;
-        for i in 0..18 {
-            let b = base + i;
-            let (y0, y1, y2) = if TwQ::<Q>::BAR_L[1] {
-                r3::<true>(c, ld(p, b), ld(p, b + 18), ld(p, b + 36), tw)
-            } else {
-                r3::<false>(c, ld(p, b), ld(p, b + 18), ld(p, b + 36), tw)
-            };
-            st(p, b, y0);
-            st(p, b + 18, y1);
-            st(p, b + 36, y2);
-        }
-    }
-}
-
-/// Level 4 alone for one 18-block (unfused variant).
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-unsafe fn pass_l4<const Q: u16, const PF: bool>(p: *mut __m512i, c: &C, k4: usize, pf: *const i8) {
+unsafe fn pass_l4<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
     let t4 = TwQ::<Q>::L4.as_ptr().add(4 * k4);
     let base = 18 * k4;
     for i in 0..6 {
         let b = base + i;
-        if PF {
-            _mm_prefetch(pf.add((base + 3 * i) * 64), _MM_HINT_T1);
-            _mm_prefetch(pf.add((base + 3 * i + 1) * 64), _MM_HINT_T1);
-            _mm_prefetch(pf.add((base + 3 * i + 2) * 64), _MM_HINT_T1);
-        }
         let (y0, y1, y2) = if TwQ::<Q>::BAR_L[2] {
             r3::<true>(c, ld(p, b), ld(p, b + 6), ld(p, b + 12), t4)
         } else {
@@ -600,36 +518,6 @@ unsafe fn pass_l5<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
     }
 }
 
-/// Structural variants, measured by `bench_quad`; `PLAN` selects one (bit 0: split pass B into
-/// separate level-2 and level-3 passes, bit 1: split pass C into separate level-4 and level-5
-/// passes). `PLAN = 0` is what [`ntt_quad_gen_batch32`] ships.
-///
-/// # Safety
-/// See [`ntt_quad_gen_batch32`].
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-pub unsafe fn ntt_quad_gen_batch32_plan<const Q: u16, const PLAN: u32>(b: &mut Batch32) {
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    let c = C::new::<Q>();
-    pass_a::<Q>(p, &c);
-    for blk in 0..4 {
-        if PLAN & 1 != 0 {
-            pass_l2::<Q>(p, &c, blk);
-            pass_l3::<Q>(p, &c, blk);
-        } else {
-            pass_b::<Q>(p, &c, blk);
-        }
-        for k4 in 9 * blk..9 * blk + 9 {
-            if PLAN & 2 != 0 {
-                pass_l4::<Q, false>(p, &c, k4, core::ptr::null());
-                pass_l5::<Q>(p, &c, k4);
-            } else {
-                pass_c::<Q, false>(p, &c, k4, core::ptr::null());
-            }
-        }
-    }
-    b.representation = Representation::Ntt;
-}
-
 // ---------------------------------------------------------------------------------------------
 // entry points
 // ---------------------------------------------------------------------------------------------
@@ -650,44 +538,9 @@ pub unsafe fn ntt_quad_gen_batch32<const Q: u16>(b: &mut Batch32) {
     for blk in 0..4 {
         pass_b::<Q>(p, &c, blk);
         for k4 in 9 * blk..9 * blk + 9 {
-            pass_l4::<Q, false>(p, &c, k4, core::ptr::null());
+            pass_l4::<Q>(p, &c, k4);
             pass_l5::<Q>(p, &c, k4);
         }
     }
     b.representation = Representation::Ntt;
-}
-
-/// The same kernel with the next batch prefetched into L2, one cache line per level-4/5 group.
-///
-/// # Safety
-/// See [`ntt_quad_gen_batch32`]; `next` must point at a valid `Batch32` or be null.
-#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
-pub unsafe fn ntt_quad_gen_batch32_pf<const Q: u16>(b: &mut Batch32, next: *const i8) {
-    let p = b.v.as_mut_ptr() as *mut __m512i;
-    let c = C::new::<Q>();
-    pass_a::<Q>(p, &c);
-    for blk in 0..4 {
-        pass_b::<Q>(p, &c, blk);
-        for k4 in 9 * blk..9 * blk + 9 {
-            if next.is_null() {
-                pass_l4::<Q, false>(p, &c, k4, next);
-            } else {
-                pass_l4::<Q, true>(p, &c, k4, next);
-            }
-            pass_l5::<Q>(p, &c, k4);
-        }
-    }
-    b.representation = Representation::Ntt;
-}
-
-/// Driver over many batches, prefetching one batch ahead.
-pub fn ntt_quad_gen_batches<const Q: u16>(bs: &mut [Batch32]) {
-    let n = bs.len();
-    let base = bs.as_mut_ptr();
-    for i in 0..n {
-        unsafe {
-            let next = if i + 1 < n { base.add(i + 1) as *const i8 } else { core::ptr::null() };
-            ntt_quad_gen_batch32_pf::<Q>(&mut *base.add(i), next);
-        }
-    }
 }

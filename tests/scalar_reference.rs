@@ -1,7 +1,21 @@
+//! The ring constants and the exact scalar reference the SIMD kernels are tested against.
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
-use bin_ntt::types::*;
+
+/// A random binary polynomial as its 648 coefficients (the form the kernels' inputs lift to).
+fn random_bin(rng: &mut Rng) -> [u32; N] {
+    let mut c = [0u32; N];
+    for w in 0..N.div_ceil(64) {
+        let x = rng.next_u64();
+        for b in 0..64 {
+            if 64 * w + b < N {
+                c[64 * w + b] = ((x >> b) & 1) as u32;
+            }
+        }
+    }
+    c
+}
 
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
@@ -48,10 +62,8 @@ fn check_prime<const Q: u16>() {
         assert!(b >= 0 && b <= Q as i16, "red16 r={} a={a}", b);
     }
     // NTT = direct evaluation at psi^SLOT_EXP[j], and it is a ring homomorphism.
-    let pa = BinaryPoly::random(&mut rng);
-    let pb = BinaryPoly::random(&mut rng);
-    let a = scalar::lift(&pa);
-    let b = scalar::lift(&pb);
+    let a = random_bin(&mut rng);
+    let b = random_bin(&mut rng);
     let na = scalar::ntt::<Q>(&a);
     for j in (0..N).step_by(37) {
         assert_eq!(na[j], scalar::eval_at::<Q>(&a, SLOT_EXP[j] as u32), "slot {j}");
@@ -83,20 +95,7 @@ fn prime_9721() {
     check_prime::<9721>();
 }
 
-#[test]
-fn binary_batch_roundtrip() {
-    let mut rng = Rng::new(3);
-    let polys: [BinaryPoly; 32] = std::array::from_fn(|_| BinaryPoly::random(&mut rng));
-    let b = BinaryBatch32::from_polys_scalar(&polys);
-    for p in 0..32 {
-        assert_eq!(b.poly(p), polys[p]);
-    }
-    let batch = Batch32::from_binary(&polys);
-    assert_eq!(batch.get(5), RingElement::from_binary(&polys[5]));
-}
-
-/// `scalar::intt` is the exact inverse of `scalar::ntt`, and `intt_mont` additionally undoes the
-/// Montgomery factor the `*_mont` kernels leave on their output.
+/// `scalar::intt` is the exact inverse of `scalar::ntt`.
 fn check_intt<const Q: u16>() {
     let mut rng = Rng::new(0x1177 ^ Q as u64);
     let mut cases: Vec<[u32; N]> = Vec::new();
@@ -109,33 +108,20 @@ fn check_intt<const Q: u16>() {
         cases.push(std::array::from_fn(|_| rng.below(Q as u32)));
     }
     for _ in 0..4 {
-        let p = BinaryPoly::random(&mut rng);
-        cases.push(scalar::lift(&p));
+        cases.push(random_bin(&mut rng));
     }
-    let r = Params::<Q>::R as u64;
     for a in &cases {
         let n = scalar::ntt::<Q>(a);
         assert_eq!(&scalar::intt::<Q>(&n), a, "q={Q}: intt(ntt(a)) != a");
-        // Montgomery-form transform: R * ntt(a).
-        let nm: [u32; N] =
-            std::array::from_fn(|j| (n[j] as u64 * r % Q as u64) as u32);
-        assert_eq!(&scalar::intt_mont::<Q>(&nm), a, "q={Q}: intt_mont(R ntt(a)) != a");
-        assert_eq!(&scalar::intt_mont_pow::<Q>(&nm, 1), a, "q={Q}: intt_mont_pow k=1");
-        let nm2: [u32; N] =
-            std::array::from_fn(|j| (nm[j] as u64 * r % Q as u64) as u32);
-        assert_eq!(&scalar::intt_mont_pow::<Q>(&nm2, 2), a, "q={Q}: intt_mont_pow k=2");
     }
-    // the round trip through a product: intt_mont of the Montgomery-form slot product is a*b.
-    let pa = BinaryPoly::random(&mut rng);
-    let pb = BinaryPoly::random(&mut rng);
-    let (a, b) = (scalar::lift(&pa), scalar::lift(&pb));
-    let na: [u32; N] = std::array::from_fn(|j| (scalar::ntt::<Q>(&a)[j] as u64 * r % Q as u64) as u32);
-    let nb: [u32; N] = std::array::from_fn(|j| (scalar::ntt::<Q>(&b)[j] as u64 * r % Q as u64) as u32);
-    // mont(R a, R b) = R a b
-    let rinv = Params::<Q>::RINV as u64;
-    let prod: [u32; N] =
-        std::array::from_fn(|j| (na[j] as u64 * nb[j] as u64 % Q as u64 * rinv % Q as u64) as u32);
-    assert_eq!(scalar::intt_mont::<Q>(&prod), scalar::mul_mod_phi(&a, &b, Q), "q={Q}: product");
+    // the round trip through a product: intt of the slot product is a*b.
+    let (a, b) = (random_bin(&mut rng), random_bin(&mut rng));
+    let (na, nb) = (scalar::ntt::<Q>(&a), scalar::ntt::<Q>(&b));
+    assert_eq!(
+        scalar::intt::<Q>(&scalar::pointwise_mul(&na, &nb, Q)),
+        scalar::mul_mod_phi(&a, &b, Q),
+        "q={Q}: product"
+    );
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! `scalar::mul_quad_slots(scalar::ntt_quad(..), A)` for a quadratic one), the four-way `R_162`
 //! decomposition per limb, the whole prover/verifier pipeline over four limb lists, corrupted
 //! witnesses rejected per limb, and — the one thing that must not change — the default
-//! configuration's commitment bit for bit against `simd::commit::commit_2q`.
+//! configuration's commitment bit for bit against two single-limb kernel runs.
 use bin_fields::scalar::F162;
 use bin_ntt::api::{decompose_648_to_4x162, AdditionalLimb, N162};
 use bin_ntt::challenge::{sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
@@ -17,6 +17,14 @@ use bin_ntt::rng::Rng;
 use bin_ntt::simd::commit as cm;
 use bin_ntt::types::Batch32;
 use bin_ntt::{fold, scalar, CommitmentKey, PowerOfThreeRingElementWithLimbs};
+
+/// The production commitment over one limb, straight through the kernel driver.
+fn commit_one(q: u16, quad: bool, elems: &[F162], a: &[Batch32]) -> [u32; N] {
+    cm::commit_limbs(elems, &[cm::Limb { q, quad, a }], None)
+        .into_iter()
+        .next()
+        .unwrap()
+}
 
 use AdditionalLimb::*;
 
@@ -81,11 +89,11 @@ fn quad_limb<const Q: u16>(limb: AdditionalLimb, len_f162: usize, r: usize) {
         let want = reference_quad::<Q>(chunk, ck.row(1));
 
         // the kernel alone
-        assert_eq!(cm::commit_quad::<Q>(chunk, ck.row(1)), want, "q = {Q}, chunk {col}");
+        assert_eq!(commit_one(Q, true, chunk, ck.row(1)), want, "q = {Q}, chunk {col}");
 
         // the base limb of the same key is the splitting reference
         assert_eq!(
-            cm::commit::<3889>(chunk, ck.row(0)),
+            commit_one(3889, false, chunk, ck.row(0)),
             reference_split::<3889>(chunk, ck.row(0))
         );
 
@@ -157,13 +165,13 @@ fn adversarial<const Q: u16>(limb: AdditionalLimb) {
     let ck = CommitmentKey::random(128 * nb, 0xAD ^ Q as u64, &[limb]);
     let elems = vec![FULL; 128 * nb];
     assert_eq!(
-        cm::commit_quad::<Q>(&elems, ck.row(1)),
+        commit_one(Q, true, &elems, ck.row(1)),
         reference_quad::<Q>(&elems, ck.row(1)),
         "q = {Q}: all-ones over {nb} batches"
     );
     let mixed = witness(128 * nb, 0xAE ^ Q as u64);
     assert_eq!(
-        cm::commit_quad::<Q>(&mixed, ck.row(1)),
+        commit_one(Q, true, &mixed, ck.row(1)),
         reference_quad::<Q>(&mixed, ck.row(1))
     );
 }
@@ -183,7 +191,7 @@ fn adversarial_12637() {
     adversarial::<12637>(Q12637);
 }
 
-/// The default configuration is bit for bit what `simd::commit::commit_2q` produces, key
+/// The default configuration is bit for bit what two single-limb kernel runs produce, key
 /// included: the multi-limb driver must not have moved the existing commitment by one bit.
 #[test]
 fn default_configuration_unchanged() {
@@ -195,7 +203,8 @@ fn default_configuration_unchanged() {
         let c = ck.commit(&w, r);
         for col in 0..r {
             let chunk = &w[col * len_f162..(col + 1) * len_f162];
-            let (y3, y9) = cm::commit_2q(chunk, ck.row(0), ck.row(1));
+            let y3 = commit_one(3889, false, chunk, ck.row(0));
+            let y9 = commit_one(9721, false, chunk, ck.row(1));
             let want = [
                 decompose_648_to_4x162::<3889>(&y3),
                 decompose_648_to_4x162::<9721>(&y9),
@@ -377,7 +386,7 @@ fn base_only() {
     let w = witness(256, 0xBA5F);
     let c = ck.commit(&w, 1);
     assert_eq!(c.get(0, 0).len(), 1);
-    let want = decompose_648_to_4x162::<3889>(&cm::commit::<3889>(&w, ck.row(0)));
+    let want = decompose_648_to_4x162::<3889>(&commit_one(3889, false, &w, ck.row(0)));
     for k in 0..4 {
         for s in 0..N162 {
             assert_eq!(
