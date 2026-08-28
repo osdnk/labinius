@@ -119,7 +119,7 @@ fn main() {
         "witness: 2^{log_e} F162 = {nring} ring elements of R_648 = {:.1} MB",
         (nf162 * 24) as f64 / 1e6
     );
-    println!("output:  a 4 x r matrix of R_162 elements, 162 slots per prime, in [0, q)\n");
+    println!("output:  a 4 x r matrix of R_162 elements, 162 centered slots per prime\n");
 
     let (kern, basemul) = components(pg.as_ref());
     if pg.is_some() {

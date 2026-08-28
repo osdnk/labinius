@@ -73,9 +73,9 @@ variants), `bench_commit_h` (the horizontal one), `bench_f162` (the NTT alone).
 
 Four types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
 
-* `PowerOfThreeRingElement { v: [u16; 162] }` — one element of the 3^5-th cyclotomic ring
-  `R_162 = Z_q[Z] / Phi_243(Z)` for one prime, in its NTT domain: 162 slots, fully reduced in
-  `[0, q)`.
+* `PowerOfThreeRingElement { v: [i16; 162] }` — one element of the 3^5-th cyclotomic ring
+  `R_162 = Z_q[Z] / Phi_243(Z)` for one prime, in its NTT domain: 162 slots, centered signed
+  residues in `[-(q-1)/2, (q-1)/2]` (`normalized(q)` gives `[0, q)`).
 * `PowerOfThreeRingElementWithTwoLimbs { limb: [PowerOfThreeRingElement; 2] }` — limb k is the
   residue modulo `PRIMES[k]`, `PRIMES = [3889, 9721]`.
 * `CommitmentKey` — the matrix A for both primes, uniform in the NTT domain, centered, in the
@@ -87,7 +87,7 @@ Four types in `src/api.rs`, re-exported at the crate root, are the whole public 
 ```rust
 let ck = CommitmentKey::random(1 << 18, seed);
 let c = ck.commit(&witness, 1);
-let slots = &c.get(0, 0).limb[0].v[..];   // component 0 mod 3889: 162 slots in [0, q)
+let slots = &c.get(0, 0).limb[0].v[..];   // component 0 mod 3889: 162 centered slots
 ```
 
 `ck.commit(&witness, r)` takes `r` a power of two and `witness.len() == r * ck.len_f162()`. It

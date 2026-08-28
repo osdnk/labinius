@@ -164,8 +164,11 @@ fn check_commit(len_f162: usize, r: usize) {
         for k in 0..4 {
             for l in 0..2 {
                 for s in 0..N162 {
+                    let q = PRIMES[l] as i32;
+                    let v = c.get(k, col).limb[l].v[s] as i32;
+                    assert!(v.abs() <= (q - 1) / 2, "centered: r = {r}, limb {l}, slot {s}, v = {v}");
                     assert_eq!(
-                        c.get(k, col).limb[l].v[s] as u32,
+                        v.rem_euclid(q) as u32,
                         want[l][k][s],
                         "r = {r}, column {col}, component {k}, limb {l}, slot {s}"
                     );

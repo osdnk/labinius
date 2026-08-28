@@ -9,7 +9,7 @@
 //!   of `R_648 = Z_q[X]/(X^648 - X^324 + 1)` four `F162` at a time — to a
 //!   [`VerticallyAlignedMatrix`] of [`PowerOfThreeRingElementWithTwoLimbs`].
 //! * [`PowerOfThreeRingElement`] is one element of `R_162 = Z_q[Z]/Phi_243(Z)` in its NTT domain:
-//!   162 slots, fully reduced in `[0, q)`, slot `s` holding the evaluation at the primitive
+//!   162 slots, centered signed residues in `[-(q-1)/2, (q-1)/2]`, slot `s` holding the evaluation at the primitive
 //!   243-rd root of unity named by [`POW3_SLOT_EXP`]`[s]`.
 //!
 //! ```no_run
@@ -18,7 +18,7 @@
 //! # let witness: Vec<F162> = Vec::new();
 //! let ck = CommitmentKey::random(1 << 18, 0xC0FFEE);
 //! let c = ck.commit(&witness, 1);
-//! let slots = &c.get(0, 0).limb[0].v[..]; // component 0 mod PRIMES[0], 162 slots in [0, q)
+//! let slots = &c.get(0, 0).limb[0].v[..]; // component 0 mod PRIMES[0], 162 centered slots
 //! ```
 //!
 //! # Why the output is a matrix of height 4
@@ -64,7 +64,7 @@
 //! `SLOT_EXP[j] mod 486` while `j` runs over the 648 slots of `R_648` — the tree order of the
 //! big ring, restricted. Slot `s` of a component holds `y_k(theta^{v_s})`, equivalently the
 //! component read as a polynomial in `Z = -Y` evaluated at `Z = -theta^{v_s}`, which is a
-//! primitive 243-rd root of unity. Outputs are fully reduced into `[0, q)`; note the `4^-1`
+//! primitive 243-rd root of unity. Outputs are centered into `[-(q-1)/2, (q-1)/2]`; note the `4^-1`
 //! factor above, which is already applied.
 use crate::params::{inv_mod, pow_mod, Params, CONDUCTOR, N, QS, SLOT_EXP};
 use crate::rng::Rng;
@@ -244,6 +244,9 @@ unsafe fn recombine<const Q: u16>(y: &[u32; N], out: &mut [PowerOfThreeRingEleme
                 tw[kk].as_ptr().add(16 * b) as *const __m256i
             ));
             let r = barrett29::<Q>(_mm512_mullo_epi32(m[kk], t));
+            // centre: r in [0, q) -> r - q where r > (q-1)/2, i.e. (-(q-1)/2 ..= (q-1)/2)
+            let hi = _mm512_cmpgt_epi32_mask(r, _mm512_set1_epi32((Q as i32 - 1) / 2));
+            let r = _mm512_mask_sub_epi32(r, hi, r, q);
             _mm512_mask_cvtepi32_storeu_epi16(out[kk].v.as_mut_ptr().add(16 * b) as *mut _, k, r);
         }
     }
@@ -267,7 +270,7 @@ pub fn decompose_648_to_4x162<const Q: u16>(y: &[u32; N]) -> [[u32; N162]; 4] {
     let mut out = [[0u32; N162]; 4];
     for k in 0..4 {
         for s in 0..N162 {
-            out[k][s] = c[k].v[s] as u32;
+            out[k][s] = (c[k].v[s] as i32).rem_euclid(Q as i32) as u32;
         }
     }
     out
@@ -278,16 +281,24 @@ pub fn decompose_648_to_4x162<const Q: u16>(y: &[u32; N]) -> [[u32; N162]; 4] {
 // =============================================================================================
 
 /// One element of `R_162 = Z_q[Z]/Phi_243(Z)` for a single prime, in the NTT domain: 162 slots,
-/// fully reduced in `[0, q)`, slot `s` holding the evaluation at the primitive 243-rd root of
-/// unity indexed by [`POW3_SLOT_EXP`]`[s]` (see the module documentation).
+/// centered signed residues in `[-(q-1)/2, (q-1)/2]`, slot `s` holding the evaluation at the
+/// primitive 243-rd root of unity indexed by [`POW3_SLOT_EXP`]`[s]` (see the module documentation).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PowerOfThreeRingElement {
-    pub v: [u16; N162],
+    pub v: [i16; N162],
 }
 
 impl PowerOfThreeRingElement {
     pub fn zero() -> Self {
-        PowerOfThreeRingElement { v: [0u16; N162] }
+        PowerOfThreeRingElement { v: [0i16; N162] }
+    }
+    /// The canonical non-negative representatives in `[0, q)`.
+    pub fn normalized(&self, q: u16) -> [u32; N162] {
+        let mut out = [0u32; N162];
+        for s in 0..N162 {
+            out[s] = (self.v[s] as i32).rem_euclid(q as i32) as u32;
+        }
+        out
     }
 }
 
