@@ -231,6 +231,13 @@ multiplies (queue-occupancy feedback in the allocator), that a software-pipeline
 1-multiply : 1-add order recovers at most 2.4 %, and that ymm is 36 % slower. Single-core
 DRAM: 37 GB/s non-temporal stores, 14 GB/s regular stores, 19.5 GB/s reads.
 
+**Branches and front end are not a factor.** `perf stat` on the kernel-only loops
+(`src/bin/kernel_loop.rs`, the tool for `perf stat` / `perf record`): 14-31 branches per
+polynomial with 0.1-0.3 mispredictions (fixed trip counts; bad-speculation 1.2-1.6 % of slots),
+99+ % of uops delivered from the decoded-uop cache, front-end bound 1.6 %, machine clears and
+microcode switches in the noise; top-down puts ~48 % of issue slots at "retiring" and ~49 % at
+"back-end bound" for all three kernels, i.e. the two-vector-ALU-port limit and nothing else.
+
 ## Remaining optimisation strategies
 
 Measured or modelled on this core, roughly in order of value:
@@ -263,5 +270,6 @@ Measured or modelled on this core, roughly in order of value:
     src/simd/pointwise.rs       slot-wise Montgomery products
     src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)
     src/bin/bench_all.rs        the headline benchmark;  src/bin/bench_*.rs  per-kernel benchmarks
+    src/bin/kernel_loop.rs      one kernel in a tight loop, for perf stat / perf record
     tests/*.rs                  correctness;  tools/  C microbenchmarks (ports, instruction table, DRAM)
     DESIGN.md                   design notes: tree, arithmetic, bounds, port facts, kernel APIs
