@@ -69,6 +69,66 @@ for 2^16 elements.
 Reproduce: `cargo run --release --offline --bin bench_commit -- <cpu>` (the commitment, all
 variants), `bench_commit_h` (the horizontal one), `bench_f162` (the NTT alone).
 
+## API
+
+Four types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
+
+* `PowerOfThreeRingElement { v: [u16; 162] }` — one element of the 3^5-th cyclotomic ring
+  `R_162 = Z_q[Z] / Phi_243(Z)` for one prime, in its NTT domain: 162 slots, fully reduced in
+  `[0, q)`.
+* `PowerOfThreeRingElementWithTwoLimbs { limb: [PowerOfThreeRingElement; 2] }` — limb k is the
+  residue modulo `PRIMES[k]`, `PRIMES = [3889, 9721]`.
+* `CommitmentKey` — the matrix A for both primes, uniform in the NTT domain, centered, in the
+  vertical layout `commit` streams. `CommitmentKey::random(len_f162, seed)` (length in F162
+  elements, a multiple of 128 = 32 ring elements), `len_f162()`, `bytes()`.
+* `VerticallyAlignedMatrix<T>` — `rows()` x `cols()`, stored column by column, with `get(row, col)`,
+  `column(col)`, `columns()`. One column is one commitment.
+
+```rust
+let ck = CommitmentKey::random(1 << 18, seed);
+let c = ck.commit(&witness, 1);
+let slots = &c.get(0, 0).limb[0].v[..];   // component 0 mod 3889: 162 slots in [0, q)
+```
+
+`ck.commit(&witness, r)` takes `r` a power of two and `witness.len() == r * ck.len_f162()`. It
+splits the witness into r consecutive chunks, commits each under the same key, and returns a
+**4 x r** matrix of `PowerOfThreeRingElementWithTwoLimbs`: column c is the commitment of chunk c.
+
+**The four rows.** One commitment is a single element y of `R_648`; the four rows are its four
+components in the basis 1, X, X^2, X^3 over `S = Z_q[Y]/(Y^162 - Y^81 + 1) = R_162`, Y = X^4,
+Z = -Y — the height-4 view of "The lift is a ring extension of degree 4" below. Read that way the
+commitment is a rank-4 module-SIS commitment over `R_162` whose 4 x 4 blocks are the Y-twisted
+circulants of multiplication by the uniform A_i; any `R_162`-linear operation acts on the four rows
+independently.
+
+**The slot order.** With psi the primitive 1944-th root of unity that fixes `SLOT_EXP`,
+theta = psi^4 is a primitive 486-th root of unity and the 648 units mod 1944 fall into 162 classes
+of four modulo 486. `POW3_SLOT_EXP[s]` is the class v of the s-th slot, in the order in which the
+classes first appear in `SLOT_EXP` (the tree order of `R_648`), and slot s of a component holds
+y_k(theta^v) — equivalently the component read as a polynomial in Z evaluated at the primitive
+243-rd root of unity `-theta^v`. The four slots u = v + 486 t of the big ring satisfy
+`E_t = sum_k psi^{vk} i^{tk} Y_k(v)` with i = psi^486, inverted per class by
+`Y_k(v) = 4^-1 psi^{-vk} sum_t i^{-tk} E_t`; `decompose_648_to_4x162::<Q>` is that map. It is a
+radix-4 butterfly (i^2 = -1, so one product per class) over 16 slots at a time, 0.18 ms even when
+it runs 512 times.
+
+**Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 F162 = 2^16 ring elements,
+both primes, best of 3, ~4.2 GHz):
+
+| r   | key, both primes | total ms | cycles / ring element and prime | of which decomposition |
+|-----|-----------------:|---------:|--------------------------------:|-----------------------:|
+| 1   |          170 MB  | **15.3** | **488**                         | 1 us                   |
+| 4   |         42.5 MB  | 14.5     | 456                             | 5 us                   |
+| 16  |         10.6 MB  | **13.5** | **417**                         | 13 us                  |
+| 256 |         0.66 MB  | 13.9     | 433                             | 177 us                 |
+
+The same 170 MB of A is read whatever r is; splitting the witness only changes where it is read
+from. At r = 16 the key is 10.6 MB and L3-resident, which is worth 15 % over the cold r = 1 run; at
+r = 256 it is 0.66 MB and L2-resident, and the gain is given back to the 256 output elements'
+decomposition and to the per-chunk fixed cost of the kernel. Front end plus transform,
+cache-resident, is 316 / 340 cycles per ring element (q = 3889 / 9721) and the base multiplication
+59, so 375 / 399 of the r = 1 cost is compute and the rest is A that does not hide.
+
 ## Building and testing
 
 `.cargo/config.toml` sets `-C target-cpu=native`; the kernels need AVX-512
@@ -406,6 +466,8 @@ Measured or modelled on this core, roughly in order of value for the commitment:
 
 ## Layout of the crate
 
+    src/api.rs                  the public API: CommitmentKey, PowerOfThreeRingElement(WithTwoLimbs), VerticallyAlignedMatrix
+    src/main.rs                 the demo: builds a key, commits 2^18 F162 for r = 1, 4, 16, 256, prints timings
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
     src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)

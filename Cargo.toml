@@ -2,6 +2,7 @@
 name = "bin-ntt"
 version = "0.1.0"
 edition = "2021"
+default-run = "bin-ntt"
 description = "AVX-512 NTT over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, q in {3889, 9721}"
 
 [dependencies]

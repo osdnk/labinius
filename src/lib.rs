@@ -9,8 +9,10 @@
 //! - `rng`     : tiny deterministic RNG for tests/benches (no external crates).
 //! - `perf`    : perf_event_open wrapper (cycles, instructions, uops per port) for the bench.
 //! - `simd`    : the AVX-512 kernels (one module per variant).
+//! - `api`     : the public API (`CommitmentKey`, `PowerOfThreeRingElement`, the height-4 view).
 #![allow(clippy::needless_range_loop)]
 
+pub mod api;
 pub mod f162;
 pub mod params;
 pub mod perf;
@@ -19,5 +21,6 @@ pub mod scalar;
 pub mod simd;
 pub mod types;
 
+pub use api::*;
 pub use params::{N, QS};
 pub use types::*;
