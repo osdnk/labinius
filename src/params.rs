@@ -1,0 +1,211 @@
+//! Ring parameters for R_q = Z_q[X] / Phi_1944(X), Phi_1944(X) = X^648 - X^324 + 1.
+//!
+//! Everything here is `const`-evaluated. The NTT tree is fixed once and for all so that every
+//! implementation (scalar reference and all SIMD variants) produces the same slot order:
+//!
+//! level 0: the Phi_6 split   X^648 - X^324 + 1 = (X^324 - psi^324)(X^324 - psi^1620)
+//! level 1: radix 2           X^324 - psi^e = (X^162 - psi^{e/2})(X^162 - psi^{(e+1944)/2})
+//! level 2: radix 2           X^162 -> X^81
+//! level 3..6: radix 3        X^81 -> X^27 -> X^9 -> X^3 -> X^1
+//!
+//! A sub-ring is Z_q[X]/(X^n - psi^e) with n | e; radix-p split into children
+//! X^{n/p} - psi^{(e + 1944 s)/p}, s = 0..p-1, child s stored at block offset s*n/p. The leaf in
+//! slot j is therefore Z_q[X]/(X - psi^SLOT_EXP[j]) and NTT(a)[j] = a(psi^SLOT_EXP[j]).
+//!
+//! psi is the smallest primitive 1944-th root of unity mod q; omega = psi^648 (cube root of 1),
+//! zeta6 = psi^324 (sixth root of 1, zeta6^-1 = 1 - zeta6).
+
+/// Degree of the ring.
+pub const N: usize = 648;
+/// Conductor.
+pub const CONDUCTOR: u32 = 1944;
+/// The supported primes.
+pub const QS: [u16; 2] = [3889, 9721];
+/// Radix of the split that turns level `l` into level `l+1` (level 0 is the whole ring).
+pub const RADIX: [usize; 7] = [2, 2, 2, 3, 3, 3, 3];
+/// Number of sub-rings at level `l` (level 7 = the 648 leaves).
+pub const SUBRINGS: [usize; 8] = [1, 2, 4, 8, 24, 72, 216, 648];
+/// Degree of one sub-ring at level `l`.
+pub const DEGREE: [usize; 8] = [648, 324, 162, 81, 27, 9, 3, 1];
+
+pub const fn pow_mod(mut b: u64, mut e: u64, q: u64) -> u64 {
+    let mut r = 1u64;
+    b %= q;
+    while e > 0 {
+        if e & 1 == 1 {
+            r = r * b % q;
+        }
+        b = b * b % q;
+        e >>= 1;
+    }
+    r
+}
+
+pub const fn inv_mod(a: u64, q: u64) -> u64 {
+    pow_mod(a, q - 2, q)
+}
+
+/// Smallest x in [2, q) whose multiplicative order is exactly 1944.
+pub const fn find_psi(q: u64) -> u64 {
+    let mut x = 2u64;
+    loop {
+        if pow_mod(x, 1944, q) == 1 && pow_mod(x, 972, q) != 1 && pow_mod(x, 648, q) != 1 {
+            return x;
+        }
+        x += 1;
+    }
+}
+
+/// Exponent e of the sub-ring k at level `level` (1..=7): that sub-ring is Z_q[X]/(X^n - psi^e).
+pub const fn subring_exp(level: usize, k: usize) -> u32 {
+    if level == 1 {
+        return if k == 0 { 324 } else { 1620 };
+    }
+    let p = RADIX[level - 1] as u32;
+    (subring_exp(level - 1, k / p as usize) + CONDUCTOR * (k as u32 % p)) / p
+}
+
+/// psi-exponent of the twiddle used when splitting sub-ring k of level `level` (1..=6):
+/// zeta = psi^(e/p); the p children are X^{n/p} - zeta * rho_p^s.
+pub const fn twiddle_exp(level: usize, k: usize) -> u32 {
+    subring_exp(level, k) / RADIX[level] as u32
+}
+
+const fn slot_exp_table() -> [u16; N] {
+    let mut t = [0u16; N];
+    let mut j = 0;
+    while j < N {
+        t[j] = subring_exp(7, j) as u16;
+        j += 1;
+    }
+    t
+}
+
+/// `SLOT_EXP[j]` = u such that slot j of the NTT holds a(psi^u).
+pub const SLOT_EXP: [u16; N] = slot_exp_table();
+
+/// q^-1 mod 2^16 (Newton iteration; q odd).
+pub const fn qinv16(q: u16) -> u16 {
+    let mut x = q;
+    let mut i = 0;
+    while i < 5 {
+        x = x.wrapping_mul(2u16.wrapping_sub(q.wrapping_mul(x)));
+        i += 1;
+    }
+    x
+}
+
+/// Centered representative in (-q/2, q/2].
+pub const fn center(x: u64, q: u64) -> i16 {
+    let x = x % q;
+    if x > q / 2 {
+        (x as i64 - q as i64) as i16
+    } else {
+        x as i16
+    }
+}
+
+/// Per-prime constants. `Params::<3889>::PSI` etc.
+pub struct Params<const Q: u16>;
+
+impl<const Q: u16> Params<Q> {
+    pub const Q: u16 = Q;
+    pub const Q64: u64 = Q as u64;
+    /// q^-1 mod 2^16.
+    pub const QINV: u16 = qinv16(Q);
+    /// Smallest primitive 1944-th root of unity.
+    pub const PSI: u16 = find_psi(Q as u64) as u16;
+    /// Primitive cube root of unity, omega = psi^648.
+    pub const OMEGA: u16 = pow_mod(Self::PSI as u64, 648, Q as u64) as u16;
+    /// Primitive sixth root of unity, zeta6 = psi^324 (level-0 twiddle); zeta6^-1 = 1 - zeta6.
+    pub const ZETA6: u16 = pow_mod(Self::PSI as u64, 324, Q as u64) as u16;
+    /// 2^16 mod q and 2^32 mod q (Montgomery constants).
+    pub const R: u16 = (65536u64 % Q as u64) as u16;
+    pub const R2: u16 = (65536u64 * 65536u64 % Q as u64) as u16;
+
+    /// psi^e mod q.
+    pub const fn psi_pow(e: u32) -> u16 {
+        pow_mod(Self::PSI as u64, e as u64, Q as u64) as u16
+    }
+    /// Plain twiddle zeta for sub-ring k at level `level` (1..=6).
+    pub const fn zeta(level: usize, k: usize) -> u16 {
+        Self::psi_pow(twiddle_exp(level, k))
+    }
+    /// x * 2^16 mod q, centered: the Montgomery form used by the SIMD kernels.
+    pub const fn to_mont(x: u16) -> i16 {
+        center(x as u64 * 65536u64, Q as u64)
+    }
+    /// For a Montgomery-form constant w, the precomputed w * q^-1 mod 2^16 (signed), so that
+    /// mont_mul(a, w, w') = a * x mod q needs only mullo/mulhi/mulhi.
+    pub const fn mont_pre(w: i16) -> i16 {
+        w.wrapping_mul(Self::QINV as i16)
+    }
+    /// Table of plain twiddles for a whole level (K = SUBRINGS[level]).
+    pub const fn zetas<const K: usize>(level: usize) -> [u16; K] {
+        let mut t = [0u16; K];
+        let mut k = 0;
+        while k < K {
+            t[k] = Self::zeta(level, k);
+            k += 1;
+        }
+        t
+    }
+    pub const ZETA_L1: [u16; 2] = Self::zetas::<2>(1);
+    pub const ZETA_L2: [u16; 4] = Self::zetas::<4>(2);
+    pub const ZETA_L3: [u16; 8] = Self::zetas::<8>(3);
+    pub const ZETA_L4: [u16; 24] = Self::zetas::<24>(4);
+    pub const ZETA_L5: [u16; 72] = Self::zetas::<72>(5);
+    pub const ZETA_L6: [u16; 216] = Self::zetas::<216>(6);
+}
+
+/// Signed Montgomery multiplication on 16-bit values, exactly what the SIMD kernels do lane-wise:
+/// returns a * x mod q in (-q, q) where w = to_mont(x), w_pre = mont_pre(w). Requires only that
+/// `a` is any i16.
+#[inline]
+pub fn mont_mul_i16(a: i16, w: i16, w_pre: i16, q: u16) -> i16 {
+    let m = a.wrapping_mul(w_pre);
+    let hi = ((a as i32 * w as i32) >> 16) as i16;
+    let t = ((m as i32 * q as i16 as i32) >> 16) as i16;
+    hi.wrapping_sub(t)
+}
+
+/// Cheap partial reduction with `vpmulhrsw` semantics (2 multiply uops):
+/// t = round(a * BARRETT_V / 2^15), r = a - t*q. Because BARRETT_V = round(2^15/q) has only a few
+/// significant bits the quotient estimate is off by a few percent, so the guarantee is only
+/// |r| < q: exhaustively over all i16 inputs, max |r| = 3497 = 0.899q for q = 3889 and
+/// 7864 = 0.809q for q = 9721.
+#[inline]
+pub fn barrett_i16(a: i16, q: u16) -> i16 {
+    let v = barrett_v(q) as i32;
+    let t = (((a as i32) * v * 2 + (1 << 15)) >> 16) as i16;
+    a.wrapping_sub(t.wrapping_mul(q as i16))
+}
+
+/// round(2^15 / q), the `vpmulhrsw` constant of `barrett_i16`.
+pub const fn barrett_v(q: u16) -> i16 {
+    (((1u32 << 15) + (q as u32) / 2) / q as u32) as i16
+}
+
+/// Shift s used by `red16_i16`: the largest s with round(2^(16+s)/q) < 2^15.
+pub const fn red16_shift(q: u16) -> u32 {
+    let mut s = 0;
+    while ((1u64 << (17 + s)) + (q as u64) / 2) / (q as u64) < (1 << 15) {
+        s += 1;
+    }
+    s
+}
+
+/// round(2^(16+s) / q), the `vpmulhw` constant of `red16_i16`.
+pub const fn red16_v(q: u16) -> i16 {
+    (((1u64 << (16 + red16_shift(q))) + (q as u64) / 2) / (q as u64)) as i16
+}
+
+/// Kyber-style floor reduction (vpmulhw, vpsraw, vpmullw, vpsubw: 3 multiply-port uops):
+/// t = floor(a * V / 2^16) >> s = floor(a / q) (error at most 1 downwards), r = a - t*q in [0, q].
+/// Costs one more p0 uop than `barrett_i16` for the same |r| <= q guarantee, so the kernels
+/// prefer `barrett_i16`; kept for completeness / non-negative outputs.
+#[inline]
+pub fn red16_i16(a: i16, q: u16) -> i16 {
+    let t = ((((a as i32) * red16_v(q) as i32) >> 16) >> red16_shift(q)) as i16;
+    a.wrapping_sub(t.wrapping_mul(q as i16))
+}
