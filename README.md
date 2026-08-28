@@ -249,28 +249,29 @@ batches, not of the witness.
 
 | stage                                        | ms       | note                                            |
 |----------------------------------------------|---------:|-------------------------------------------------|
-| `commit`                                     | 13.9     | the commitment alone                            |
-| `commit_into_aux`                            | **14.9** | +7 %: 85 MB of transform kept, non-temporally   |
+| `commit`                                     | 13.7     | the commitment alone                            |
+| `commit_into_aux`                            | **14.8** | +8 %: 85 MB of transform kept, non-temporally   |
 | 256 challenges from a transcript over `C`    | 2.3      | 5.8 attempts each (`bound = 9`)                 |
-| `fold`                                       | **11.0** |                                                 |
-| — challenge NTTs                             | 0.11     | 8 batches of `c(-X^4)`, `vertical_gen`          |
-| — accumulation                               | 4.25     | 85 MB read at 20 GB/s: the DRAM floor           |
-| — inverse NTT, `q1`                          | 6.45     | 256 x `scalar::intt`                            |
-| — forward NTT, `q2`                          | 0.12     | 8 batches, `vertical_gen`                       |
+| `fold`                                       | **4.51** |                                                 |
+| — challenge NTTs                             | 0.10     | 8 batches of `c(-X^4)`, `vertical_gen`          |
+| — accumulation                               | 4.27     | 85 MB read at 20 GB/s: the DRAM floor           |
+| — inverse NTT, `q1`                          | 0.07     | 8 batches, `vertical_gen::intt_gen_batch32`, plus reading `v` out of the vertical layout |
+| — forward NTT, `q2`                          | 0.03     | 8 batches, `vertical_gen`                       |
 | — `y = A v`                                  | 0.04     | 8 batches per prime on the commitment's `vpdpwssd` accumulator |
-| prover total                                 | **25.9** | `commit_into_aux` + `fold`                      |
+| prover total                                 | **19.3** | `commit_into_aux` + `fold`                      |
 
 The 85 MB an `AuxData` holds is one `mmap`: `commit_with_aux` measures 37 ms because 22 of them
 are the kernel's first touch of 20 736 fresh pages. `commit_into_aux` writes into a buffer the
 caller already owns (`AuxData::new`), which is what a prover that folds more than once does.
 
-Two numbers set the shape of the step. The accumulation is at the machine's read bandwidth — the
-two witness rows and the accumulator are plain forward streams, and adding one `prefetcht1` per
-slot a step ahead (what `commit` does for `A`) costs 4.96 ms against 4.25 with none, since this
-loop has no compute to hide the extra fill-buffer pressure behind. The inverse transform is the
-untuned `u64` reference: the same 256 elements cost 5.0 ms through `scalar::ntt` where the vector
-kernel costs 0.03, so a vectorised inverse in the shape of `vertical_gen` takes the fold from 11.0
-to ~4.6 ms and is the one thing worth writing next.
+One number now sets the shape of the step: the accumulation is at the machine's read bandwidth —
+the two witness rows and the accumulator are plain forward streams, and adding one `prefetcht1`
+per slot a step ahead (what `commit` does for `A`) costs 4.96 ms against 4.27 with none, since
+this loop has no compute to hide the extra fill-buffer pressure behind. Everything else together
+is 0.24 ms. The inverse used to be the untuned `u64` reference — 256 x `scalar::intt`, 6.45 ms,
+more than the 85 MB stream — and is now `vertical_gen::intt_gen_batch32` on the 8 batches at 541
+cycles per polynomial: 0.07 ms including reading the 256 elements back out of the vertical
+layout, which takes the fold from 11.0 to 4.51 ms and the prover from 25.9 to 19.3.
 
 ## Building and testing
 
@@ -518,7 +519,7 @@ hide behind the NT stores), producer-supplied index rows (the extra 58 MB of DRA
 more than the slicing saved), `sfence` per batch, batch grouping, cached stores (+200 cycles),
 input prefetching (noise to +45 with the NTA hint).
 
-### `simd/vertical_gen.rs` — generic-input vertical kernel (423 / 467)
+### `simd/vertical_gen.rs` — generic-input vertical kernel (423 / 467 forward, 541 / 601 inverse)
 
 Same layout and arithmetic, any i16 input with |x| <= q. Levels 0 and 1 fused into one radix-4
 pass over the 648 vectors (41 KB streamed once from L2), levels 2 and 3 fused over groups of 6
@@ -529,6 +530,23 @@ of levels 3-6 (output <= 2.12 q). Radix-9 / radix-27 fusion measured and rejecte
 `ntt_gen_batch32_plan`. Out of cache: one prefetch line per level-4/5/6 butterfly for the next
 batch is worth 23 %; 162 prefetches at once are 18 % slower than none. `ntt_gen_batch32_mont`
 gives Montgomery-form outputs for +1 % (one multiplication by R replaces the level-5 Barrett).
+
+`intt_gen_batch32` is the inverse, the same five passes in the opposite order with
+Gentleman-Sande butterflies — `u = omega (y2 - y1)`, then `(y0+y1+y2, (y0-y1+u) zeta^-1,
+(y0-y2-u) zeta^-2)`, which costs exactly what the forward radix-3 costs. The per-level 1/3 and
+1/2 are not applied, so every value reaching level 0 is 324 times the true one and the whole
+1/648 corrected by the Phi_6 determinant (`scalar::intt`'s `inv2 / inv3 / det` chain, multiplied
+out) sits in the three constants of the level-0 recombination `a1 = KA (Y0-Y1)`,
+`a0 = KB (Y0+Y1) + KC (Y0-Y1)`; no scaling pass. Input: any lazily reduced transform this crate
+produces (7.5 q / 2.3 q); output: coefficients, fully reduced and centered, which is what the
+fold needs. The extra 118 / 134 cycles over the forward are three equal thirds — the Phi_6
+inverse is a general 2x2 matrix (3 Montgomery products per level-0 butterfly against 1), the
+untwiddled output `y0+y1+y2` triples what it is given instead of being a reduced Montgomery
+product, so it needs 984 / 1836 Barretts against the forward's 216 / 1026, and the 648 outputs
+are centered. Barrett placement is per position class, indexed by the loop variable that names
+it, chosen by exhaustive search over that flag set and replayed by a `const` recursion that
+proves every intermediate stays inside i16 (peak 8.09 q of a 8.43 q budget for 3889, 3.24 q of
+3.37 q for 9721); the tests replay the same schedule in i32.
 
 ### `simd/horizontal_gen.rs` — Gregor's layout, generic input (540 / 587)
 
@@ -624,7 +642,7 @@ Measured or modelled on this core, roughly in order of value for the commitment:
     src/simd/ntt_f162.rs        NTT drivers for the F162 input (single prime, both primes, streamed, Montgomery form)
     src/simd/commit.rs          the Ajtai commitment on the vertical kernel (block-fused, VNNI accumulation)
     src/simd/commit_h.rs        the commitment in the horizontal layout (L1-resident groups of 4)
-    src/simd/vertical_gen.rs    generic-input vertical kernel
+    src/simd/vertical_gen.rs    generic-input vertical kernel, forward and inverse
     src/simd/horizontal_gen.rs  generic-input horizontal kernel (HBatch4)
     src/simd/pointwise.rs       slot-wise Montgomery products
     src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)

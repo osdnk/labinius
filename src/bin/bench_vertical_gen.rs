@@ -2,7 +2,8 @@
 use bin_ntt::perf::{Counts, PerfGroup};
 use bin_ntt::rng::Rng;
 use bin_ntt::simd::vertical_gen::{
-    ntt_gen_batch32, ntt_gen_batch32_plan, ntt_gen_batch32_r27, ntt_gen_batches, Tw,
+    intt_gen_batch32, ntt_gen_batch32, ntt_gen_batch32_plan, ntt_gen_batch32_r27, ntt_gen_batches,
+    Tw, TwI,
 };
 use bin_ntt::types::{Batch32, Representation};
 use std::time::Instant;
@@ -85,6 +86,37 @@ fn run_one<const Q: u16>(v: u32, b: &mut Batch32) {
             _ => ntt_gen_batch32::<Q>(b),
         }
     }
+}
+
+/// The inverse transform, cache-resident, against the forward one it undoes. The input is a real
+/// forward transform (`|v| <= OUTPUT_BOUND`), which is what the fold feeds it.
+fn survey_inv<const Q: u16>() {
+    let mut rng = Rng::new(3);
+    let mut set = make::<Q>(8, &mut rng);
+    for b in set.iter_mut() {
+        unsafe { ntt_gen_batch32::<Q>(b) };
+    }
+    let reps = 400;
+    for _ in 0..30 {
+        for b in set.iter_mut() {
+            unsafe {
+                intt_gen_batch32::<Q>(b);
+                b.representation = Representation::Ntt;
+            }
+        }
+    }
+    let g = PerfGroup::new().expect("perf_event_open (perf_event_paranoid <= 1?)");
+    g.start();
+    for _ in 0..reps {
+        for b in set.iter_mut() {
+            unsafe {
+                intt_gen_batch32::<Q>(b);
+                b.representation = Representation::Ntt;
+            }
+        }
+    }
+    let c = g.stop();
+    report(&format!("q={Q} L2 intt_gen_batch32"), c, (reps * 8 * 32) as f64);
 }
 
 fn dram<const Q: u16>() {
@@ -199,6 +231,13 @@ fn main() {
     statics::<9721>();
     survey::<3889>();
     survey::<9721>();
+    println!(
+        "inverse: input bound q=3889 |v| <= {}, q=9721 |v| <= {}; output centered, |v| <= (q-1)/2",
+        TwI::<3889>::IN_BOUND,
+        TwI::<9721>::IN_BOUND
+    );
+    survey_inv::<3889>();
+    survey_inv::<9721>();
     dram::<3889>();
     dram::<9721>();
 }

@@ -55,9 +55,8 @@ use crate::api::{
 };
 use crate::challenge::ShortChallenge;
 use crate::params::N;
-use crate::scalar;
 use crate::simd::commit as cm;
-use crate::simd::vertical_gen::ntt_gen_batch32;
+use crate::simd::vertical_gen::{intt_gen_batch32, ntt_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
 use std::time::Instant;
@@ -144,6 +143,19 @@ unsafe fn center_epi16<const Q: u16>(x: __m512i) -> __m512i {
     }
     let hi = _mm512_cmpgt_epu16_mask(v, _mm512_set1_epi16(((q - 1) / 2) as i16));
     _mm512_mask_sub_epi16(v, hi, v, _mm512_set1_epi16(q as i16))
+}
+
+/// `max_j max_p |b.v[j][p]|`, 32 lanes at a time.
+#[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn max_abs_batch(b: &Batch32) -> i32 {
+    let mut m = _mm512_setzero_si512();
+    for j in 0..N {
+        let x = _mm512_load_si512(b.v[j].as_ptr() as *const __m512i);
+        m = _mm512_max_epi16(m, _mm512_abs_epi16(x));
+    }
+    let mut out = [0i16; 32];
+    _mm512_storeu_si512(out.as_mut_ptr() as *mut __m512i, m);
+    out.iter().map(|x| *x as i32).max().unwrap()
 }
 
 /// Every slot of a batch fully reduced and centered (`|v| <= (q-1)/2`); the input must satisfy
@@ -377,7 +389,8 @@ pub struct FoldTimings {
     pub challenge_ntt_ms: f64,
     /// The `r`-term slot-wise accumulation over the kept witness — the 85 MB stream.
     pub accumulate_ms: f64,
-    /// `scalar::intt::<3889>` on the `len_ring` folded elements.
+    /// `vertical_gen::intt_gen_batch32::<3889>` on the `len_ring/32` batches, and reading the
+    /// centered coefficients out of the vertical layout.
     pub inverse_ntt_ms: f64,
     /// The forward transform of `v` modulo `q2`.
     pub forward_q2_ms: f64,
@@ -483,38 +496,29 @@ pub fn fold_with(
     let v1 = accumulate(aux, &ch1, bpc);
     t.accumulate_ms = ms(t0);
 
-    // (c) back to coefficients modulo q1, where v is a small integer vector.
+    // (c) back to coefficients modulo q1, where v is a small integer vector: one batch kernel
+    //     per batch position, whose output is already fully reduced and centered.
     let t0 = Instant::now();
-    let mut v = Vec::with_capacity(32 * bpc);
-    let mut max_abs = 0i32;
+    let mut vb = v1.clone();
     let half = (Q1 as i32 - 1) / 2;
-    for i in 0..32 * bpc {
-        let e = v1[i / 32].get(i % 32);
-        let c = scalar::intt::<Q1>(&scalar::normalize_i16(&e.v, Q1));
-        let mut out = RingElement::zero(Representation::Coefficients);
-        for k in 0..N {
-            let x = c[k] as i32;
-            let x = if x > half { x - Q1 as i32 } else { x };
-            max_abs = max_abs.max(x.abs());
-            out.v[k] = x as i16;
+    let mut max_abs = 0i32;
+    unsafe {
+        for b in vb.iter_mut() {
+            intt_gen_batch32::<Q1>(b);
+            max_abs = max_abs.max(max_abs_batch(b));
         }
-        v.push(out);
     }
     assert!(
         max_abs <= half,
         "the folded witness does not fit the centered range of q1"
     );
+    let v: Vec<RingElement> = (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect();
     t.inverse_ntt_ms = ms(t0);
 
     // (d) forward again modulo q2 (|coefficient| <= (q1-1)/2 < q2, so the kernel's input bound
     //     holds); modulo q1 the accumulator's own output already is NTT(v), so it is kept.
     let t0 = Instant::now();
-    let mut v2: Vec<Batch32> = (0..bpc)
-        .map(|_| Batch32::zero(Representation::Coefficients))
-        .collect();
-    for i in 0..32 * bpc {
-        v2[i / 32].set(i % 32, &v[i]);
-    }
+    let mut v2 = vb;
     unsafe {
         for b in v2.iter_mut() {
             ntt_gen_batch32::<Q2>(b);

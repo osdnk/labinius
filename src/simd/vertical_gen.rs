@@ -1,7 +1,8 @@
-//! Generic-input forward NTT on the vertical `Batch32` layout (32 polynomials, one 512-bit vector
-//! per coefficient index), in place, `Coefficients -> Ntt`, input lanes `|x| <= q`.
+//! Generic-input NTT on the vertical `Batch32` layout (32 polynomials, one 512-bit vector per
+//! coefficient index), in place: forward, `Coefficients -> Ntt`, input lanes `|x| <= q`, and its
+//! inverse, `Ntt -> Coefficients` with fully reduced centered output (see "The inverse" below).
 //!
-//! # Structure
+//! # Structure (forward)
 //!
 //! The 7 levels of the tree (see `params`) run as five passes; after the first one everything is
 //! depth-first inside a 162-block (10 KB) so the working set stays in L1.
@@ -64,7 +65,65 @@
 //! (one per level-5 butterfly, +2 % statically, +1 % measured: 427.5 vs 423.3 cycles per
 //! polynomial at q = 3889, 470.4 vs 466.3 at 9721). `|mont(a0, R)| < 0.75 q` is tighter than the
 //! Barrett's `0.899 q / 0.809 q`, so all per-level bounds and `OUTPUT_BOUND` hold unchanged.
-use crate::params::{barrett_v, Params};
+//!
+//! # The inverse (`intt_gen_batch32`, 541 / 601)
+//!
+//! `Ntt -> Coefficients`, the same five passes in the opposite order — levels 6, 5, 4 per
+//! 27-block, then levels 3+2 per 162-block, then levels 1+0 over the whole batch — with
+//! Gentleman-Sande butterflies, the transposes of the forward ones, which cost exactly what the
+//! forward ones cost: `u = omega (y2 - y1)`, then `(y0+y1+y2, (y0-y1+u) zeta^-1,
+//! (y0-y2-u) zeta^-2)`, 3 Montgomery products and 7 add/sub for radix 3, and
+//! `(y0+y1, (y0-y1) zeta^-1)` for radix 2. The per-level `1/3` and `1/2` are *not* applied:
+//! every value reaching level 0 is the true one times `2 * 2 * 3^4 = 324`, and the whole
+//! `1/648` corrected by the Phi_6 determinant — `scalar::intt`'s `inv2 / inv3 / det` chain,
+//! multiplied out — sits in the three level-0 constants [`TwI::KA`], `KB`, `KC`. The output is
+//! fully reduced and centered in `[-(q-1)/2, (q-1)/2]`.
+//!
+//! What the inverse pays over the forward is entirely what a *sum* costs. Forward, every output
+//! is either a Montgomery product (`< 0.75 q`, reduced for free) or `a0 +- t` with an occasional
+//! Barrett on `a0`; inverse, the untwiddled output is `y0+y1+y2`, which triples whatever it is
+//! given and cannot absorb a constant, so the position classes whose whole ancestry is
+//! untwiddled have to be Barretted level after level. Three roughly equal thirds, in ALU uops
+//! per polynomial against the forward kernel's 736:
+//!
+//! ```text
+//!   the Phi_6 inverse is a general 2x2 matrix — 3 Montgomery products per level-0
+//!     butterfly against pass A's 1 (a1 = KA (Y0-Y1), a0 = KB (Y0+Y1) + KC (Y0-Y1))     +81
+//!   Barretts: 984 per batch (3889) / 1836 (9721), against 216 / 1026 forward           +72
+//!   centering the 648 outputs (2 mask compares + 2 masked adds each)                   +81
+//! ```
+//!
+//! Placement (`BAR_IN`, `BAR_S6 .. BAR_S1`, each indexed by exactly the loop variable that names
+//! the position class) is the cheapest member of that flag set that keeps every intermediate
+//! inside i16, found by exhaustive search and replayed by the `const` recursion `inv_bounds`,
+//! which also produces `TwI::BOUND` and `TwI::PEAK`; `tests/vertical_gen.rs` replays the same
+//! schedule in i32 against the kernel. Declared input bound: the binary kernel's 7.5 q / 2.3 q,
+//! i.e. every lazily reduced transform this crate produces. Per level, max |lane| afterwards:
+//!
+//! ```text
+//!                          q = 3889 (budget 8.4256 q)     q = 9721 (budget 3.3707 q)
+//!   input                     7.5000                         2.3000
+//!   level 6  (pass D)         2.6976  (barrett the 3 inputs) 0.8090  (3 inputs and the sum)
+//!   level 5  (pass C5)        1.7094  (sum of j = 0)         0.8090  (all sums)
+//!   level 4  (pass C4)        2.6976  (sums of i = 1, 2)     0.8090  (all sums)
+//!   level 3  (pass B)         0.8992  (all sums)             0.8090  (all sums)
+//!   level 2  (pass B)         1.7984                         1.6179
+//!   level 1  (pass A)         3.5968                         0.8090  (all sums)
+//!   level 0  (pass A)         1.4271  -> centered            1.2400  -> centered
+//!   peak intermediate         8.0928                         3.2359
+//! ```
+//!
+//! The three inputs of a level-6 butterfly are Barretted as they are loaded — at 7.5 q even
+//! `y1 - y2` leaves i16 — which is 648 of the 984; at the fold's centered input (`|v| <= q/2`)
+//! the same search returns 220, worth ~8 %. That would need a second flag set and a second bound
+//! recursion for one caller, and the fold's inverse is 0.07 ms either way, so the kernel has one
+//! declared input bound. Port balance is 515 p0 against 464 p5 per polynomial (3889), so the
+//! shuffle-port lookup Barrett of `vertical_bin_asm` (5 uops, none of them p0, against 3 with 2
+//! on p0) would pay for about 270 of the 984 before p0 stops being the constraint — not taken,
+//! nor the level-0 form `a0 = KB (Y0+Y1) - a1/2`, which replaces one Montgomery product by a
+//! conditional-add-and-shift halving (2 port-0 uops per butterfly) at the price of a serial
+//! dependency and an output bound that then depends on level 1's.
+use crate::params::{barrett_v, inv_mod, Params};
 use crate::types::{Batch32, Representation};
 use core::arch::x86_64::*;
 
@@ -699,3 +758,539 @@ pub fn ntt_gen_batches<const Q: u16>(bs: &mut [Batch32]) {
         }
     }
 }
+
+// =============================================================================================
+// the inverse transform
+// =============================================================================================
+
+/// Compile-time inverse-twiddle tables, level-0 recombination constants, Barrett placement and
+/// the bound recursion of [`intt_gen_batch32`].
+///
+/// The twiddles are the plain ones inverted (`zeta^-1`, `zeta^-2`), in the same duplicated-u32
+/// broadcast form and the same per-level layout as [`Tw`], so a Gentleman-Sande butterfly reads
+/// its constants exactly where the forward one does.
+pub struct TwI<const Q: u16>;
+
+impl<const Q: u16> TwI<Q> {
+    const fn inv(x: u16) -> u16 {
+        inv_mod(x as u64, Q as u64) as u16
+    }
+    const fn r2i<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+        let mut t = [0u32; M];
+        let mut k = 0;
+        while k < nk {
+            let p = Tw::<Q>::pair(Self::inv(Params::<Q>::zeta(level, k)));
+            t[2 * k] = p[0];
+            t[2 * k + 1] = p[1];
+            k += 1;
+        }
+        t
+    }
+    const fn r3i<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+        let mut t = [0u32; M];
+        let mut k = 0;
+        while k < nk {
+            let z = Self::inv(Params::<Q>::zeta(level, k));
+            let z2 = (z as u64 * z as u64 % Q as u64) as u16;
+            let a = Tw::<Q>::pair(z);
+            let b = Tw::<Q>::pair(z2);
+            t[4 * k] = a[0];
+            t[4 * k + 1] = a[1];
+            t[4 * k + 2] = b[0];
+            t[4 * k + 3] = b[1];
+            k += 1;
+        }
+        t
+    }
+    pub const IL1: [u32; 4] = Self::r2i::<4>(1, 2);
+    pub const IL2: [u32; 8] = Self::r2i::<8>(2, 4);
+    pub const IL3: [u32; 32] = Self::r3i::<32>(3, 8);
+    pub const IL4: [u32; 96] = Self::r3i::<96>(4, 24);
+    pub const IL5: [u32; 288] = Self::r3i::<288>(5, 72);
+    pub const IL6: [u32; 864] = Self::r3i::<864>(6, 216);
+
+    /// `d = (2 zeta6 - 1)^-1`, the determinant of the Phi_6 split.
+    const DET: u16 = Self::inv((2 * Params::<Q>::ZETA6 as u32 % Q as u32 + Q as u32 - 1) as u16 % Q);
+    /// The whole normalisation, folded into the three level-0 constants.
+    ///
+    /// Levels 6..1 run un-normalised (`y0+y1+y2` instead of `(y0+y1+y2)/3`, `(y0-y1+u) zeta^-1`
+    /// instead of `.../3`), so every value reaching level 0 carries the factor
+    /// `2 * 2 * 3^4 = 324` — the 1/648 of `scalar::intt_scaled` bar one factor 2, which the
+    /// Phi_6 inverse below produces itself. With `Y = 324 y`, `a1 = d (y0 - y1)` and
+    /// `a0 = y0 - zeta6 a1 = (y0+y1)/2 - a1/2` (using `zeta6 + zeta6^-1 = 1`) become
+    ///
+    /// ```text
+    ///     a1 = KA (Y0 - Y1),   a0 = KB (Y0 + Y1) + KC (Y0 - Y1)
+    ///     KA = d / 324,        KB = 1 / 648,      KC = -d / 648 = -KA / 2,
+    /// ```
+    /// i.e. the familiar `1/648` corrected by the Phi_6 determinant, exactly as
+    /// `scalar::intt`'s `inv2 / inv3 / det` chain multiplies out. Three Montgomery products per
+    /// butterfly against the forward pass's one — the price of an inverse whose other 1512
+    /// butterflies cost exactly what the forward ones do.
+    pub const KA: [u32; 2] =
+        Tw::<Q>::pair((Self::DET as u64 * inv_mod(324, Q as u64) % Q as u64) as u16);
+    pub const KB: [u32; 2] = Tw::<Q>::pair(inv_mod(648, Q as u64) as u16);
+    pub const KC: [u32; 2] = Tw::<Q>::pair(
+        (Q as u64 - Self::DET as u64 * inv_mod(648, Q as u64) % Q as u64) as u16 % Q,
+    );
+    /// `(q-1)/2` and `-(q-1)/2`, the centering constants of the output.
+    pub const HALF: u32 = dup(((Q - 1) / 2) as i16);
+    pub const NHALF: u32 = dup(-(((Q - 1) / 2) as i16));
+
+    /// Declared input bound: the largest lazily reduced transform this crate produces, i.e.
+    /// `vertical_bin_asm`'s 7.5 q (3889) / 2.3 q (9721). Everything smaller — the forward
+    /// kernels' 3.40 q / 2.13 q, the fold's centered `(q-1)/2` — is covered.
+    pub const IN_BOUND: i32 = if Q == 9721 { 22359 } else { 29167 };
+
+    /// Barrett the three loaded inputs of a level-6 butterfly. Unavoidable at the declared input
+    /// bound: `y1 - y2` alone is 15 q (3889) / 4.6 q (9721) and already leaves i16.
+    pub const BAR_IN: bool = true;
+    /// Barrett the untwiddled `y0+y1+y2` output of level 6 / of butterfly `j` of level 5 /
+    /// of butterfly `i` of level 4 / of level 3, and `y0+y1` of pair `a` of level 2 / of level 1.
+    ///
+    /// The untwiddled output is the only one that grows: a Montgomery product is always inside
+    /// 0.75 q, so a butterfly's other two outputs are reduced for free, while the sum triples
+    /// (radix 3) or doubles (radix 2) whatever it is given. The growth therefore lives on the
+    /// position classes whose whole ancestry is untwiddled, and the flags are indexed by exactly
+    /// the loop variable that names the class. The placement below is the cheapest one that
+    /// keeps every intermediate inside i16 (984 Barretts per batch for 3889, 1836 for 9721,
+    /// found by exhaustive search over this flag set); `BOUND` replays it.
+    pub const BAR_S6: bool = Q == 9721;
+    pub const BAR_S5: [bool; 3] = if Q == 9721 { [true; 3] } else { [true, false, false] };
+    pub const BAR_S4: [bool; 9] = if Q == 9721 {
+        [true; 9]
+    } else {
+        [false, true, true, false, false, false, false, false, false]
+    };
+    pub const BAR_S3: bool = true;
+    pub const BAR_S2: [bool; 3] = [false; 3];
+    pub const BAR_S1: bool = Q == 9721;
+
+    /// `[after level 6, .., after level 1, after level 0 before centering]`, and the largest
+    /// intermediate the pass ever forms (`PEAK`, which is what has to stay inside i16).
+    const B: ([i32; 7], i32) = inv_bounds::<Q>();
+    /// Per-level bound `BOUND[l]` = max |lane| after inverse level `l`; see the module comment.
+    pub const BOUND: [i32; 7] = Self::B.0;
+    /// The largest value formed anywhere in the pass. Must stay inside i16.
+    pub const PEAK: i32 = Self::B.1;
+    /// Output bound: fully reduced and centered.
+    pub const OUT_BOUND: i32 = ((Q - 1) / 2) as i32;
+}
+
+const _: () = assert!(TwI::<3889>::PEAK <= 32767);
+const _: () = assert!(TwI::<9721>::PEAK <= 32767);
+
+/// `|mont(a, w)| <= |a| q / 2^17 + q/2` (`params::mont_mul_i16`).
+const fn mont_bound(b: i32, q: u16) -> i32 {
+    ((b as i64 * q as i64) >> 17) as i32 + (q as i32 + 1) / 2
+}
+
+/// `|barrett(x)|` for any i16 `x`, exhaustively verified in `params::barrett_i16`.
+const fn bar_bound(q: u16) -> i32 {
+    if q == 3889 {
+        3497
+    } else {
+        7864
+    }
+}
+
+/// The inverse pass replayed on bounds, position by position, with exactly the kernel's Barrett
+/// placement: the per-level maxima and the largest intermediate ever formed.
+const fn inv_bounds<const Q: u16>() -> ([i32; 7], i32) {
+    let mut v = [TwI::<Q>::IN_BOUND; 648];
+    let mut lm = [0i32; 7];
+    let mut peak = 0i32;
+    let r = bar_bound(Q);
+    // one radix-3 Gentleman-Sande butterfly on bounds; `bar` = Barrett the untwiddled output.
+    macro_rules! r3 {
+        ($i0:expr, $i1:expr, $i2:expr, $bar:expr, $inb:expr) => {{
+            let (mut y0, mut y1, mut y2) = (v[$i0], v[$i1], v[$i2]);
+            if $inb {
+                y0 = r;
+                y1 = r;
+                y2 = r;
+            }
+            let u = mont_bound(y1 + y2, Q);
+            let s = y0 + y1 + y2;
+            let x1 = y0 + y1 + u;
+            let x2 = y0 + y2 + u;
+            if y1 + y2 > peak {
+                peak = y1 + y2;
+            }
+            if s > peak {
+                peak = s;
+            }
+            if x1 > peak {
+                peak = x1;
+            }
+            if x2 > peak {
+                peak = x2;
+            }
+            v[$i0] = if $bar { r } else { s };
+            v[$i1] = mont_bound(x1, Q);
+            v[$i2] = mont_bound(x2, Q);
+        }};
+    }
+    macro_rules! r2 {
+        ($i0:expr, $i1:expr, $bar:expr) => {{
+            let s = v[$i0] + v[$i1];
+            if s > peak {
+                peak = s;
+            }
+            v[$i0] = if $bar { r } else { s };
+            v[$i1] = mont_bound(s, Q);
+        }};
+    }
+    macro_rules! level_max {
+        ($l:expr) => {{
+            let mut i = 0;
+            while i < 648 {
+                if v[i] > lm[$l] {
+                    lm[$l] = v[i];
+                }
+                i += 1;
+            }
+        }};
+    }
+    let mut k4 = 0;
+    while k4 < 24 {
+        let base = 27 * k4;
+        let mut g = 0;
+        while g < 9 {
+            let b = base + 3 * g;
+            r3!(b, b + 1, b + 2, TwI::<Q>::BAR_S6, TwI::<Q>::BAR_IN);
+            g += 1;
+        }
+        k4 += 1;
+    }
+    level_max!(6);
+    let mut k4 = 0;
+    while k4 < 24 {
+        let base = 27 * k4;
+        let mut bb = 0;
+        while bb < 3 {
+            let mut j = 0;
+            while j < 3 {
+                let b = base + 9 * bb + j;
+                r3!(b, b + 3, b + 6, TwI::<Q>::BAR_S5[j], false);
+                j += 1;
+            }
+            bb += 1;
+        }
+        k4 += 1;
+    }
+    level_max!(5);
+    let mut k4 = 0;
+    while k4 < 24 {
+        let base = 27 * k4;
+        let mut i = 0;
+        while i < 9 {
+            let b = base + i;
+            r3!(b, b + 9, b + 18, TwI::<Q>::BAR_S4[i], false);
+            i += 1;
+        }
+        k4 += 1;
+    }
+    level_max!(4);
+    let mut k = 0;
+    while k < 8 {
+        let mut j = 0;
+        while j < 27 {
+            let b = 81 * k + j;
+            r3!(b, b + 27, b + 54, TwI::<Q>::BAR_S3, false);
+            j += 1;
+        }
+        k += 1;
+    }
+    level_max!(3);
+    let mut blk = 0;
+    while blk < 4 {
+        let mut a = 0;
+        while a < 3 {
+            let mut j = 0;
+            while j < 27 {
+                let b = 162 * blk + 27 * a + j;
+                r2!(b, b + 81, TwI::<Q>::BAR_S2[a]);
+                j += 1;
+            }
+            a += 1;
+        }
+        blk += 1;
+    }
+    level_max!(2);
+    let mut c = 0;
+    while c < 2 {
+        let mut i = 0;
+        while i < 162 {
+            let b = 324 * c + i;
+            r2!(b, b + 162, TwI::<Q>::BAR_S1);
+            i += 1;
+        }
+        c += 1;
+    }
+    level_max!(1);
+    // level 0: a1 = mont(Y0-Y1), a0 = mont(Y0+Y1) + mont(Y0-Y1); then centered.
+    let mut i = 0;
+    while i < 324 {
+        let s = v[i] + v[i + 324];
+        if s > peak {
+            peak = s;
+        }
+        let m = mont_bound(s, Q);
+        if 2 * m > lm[0] {
+            lm[0] = 2 * m;
+        }
+        i += 1;
+    }
+    (lm, peak)
+}
+
+/// Inverse radix-3 (Gentleman-Sande) butterfly, the exact transpose of [`r3`] with the level's
+/// normalisation deferred: `u = omega (y2 - y1)`, `(y0+y1+y2, (y0-y1+u) zeta^-1,
+/// (y0-y2-u) zeta^-2)` = `3 * (a0, a1, a2)`. 9 multiply uops + 7 adds, like the forward one; the
+/// caller Barretts the first output when the bound recursion says so.
+#[inline(always)]
+unsafe fn ir3(
+    y0: __m512i,
+    y1: __m512i,
+    y2: __m512i,
+    tw: *const u32,
+    omp: __m512i,
+    om: __m512i,
+    q: __m512i,
+) -> (__m512i, __m512i, __m512i) {
+    let u = mont(sub(y2, y1), omp, om, q);
+    let s = add(y0, add(y1, y2));
+    let a1 = mont(add(sub(y0, y1), u), bc(tw), bc(tw.add(1)), q);
+    let a2 = mont(sub(sub(y0, y2), u), bc(tw.add(2)), bc(tw.add(3)), q);
+    (s, a1, a2)
+}
+
+/// Inverse radix-2 butterfly, normalisation deferred: `(y0+y1, (y0-y1) zeta^-1)` = `2 (a0, a1)`.
+#[inline(always)]
+unsafe fn ir2(
+    y0: __m512i,
+    y1: __m512i,
+    zp: __m512i,
+    z: __m512i,
+    q: __m512i,
+) -> (__m512i, __m512i) {
+    (add(y0, y1), mont(sub(y0, y1), zp, z, q))
+}
+
+/// Exact centered representative for `|x| <= 3q/2`: one conditional subtract and one conditional
+/// add of q (2 mask uops + 2 flexible), which is all the output needs — the Montgomery products
+/// of level 0 already leave `|a1| < 0.75 q` and `|a0| < 1.5 q`.
+#[inline(always)]
+unsafe fn center(x: __m512i, q: __m512i, half: __m512i, nhalf: __m512i) -> __m512i {
+    let hi = _mm512_cmpgt_epi16_mask(x, half);
+    let x = _mm512_mask_sub_epi16(x, hi, x, q);
+    let lo = _mm512_cmplt_epi16_mask(x, nhalf);
+    _mm512_mask_add_epi16(x, lo, x, q)
+}
+
+/// Level 6 (the first inverse level) for one 27-block. The three loaded values are Barretted
+/// here: at the declared input bound even `y1 - y2` leaves i16, and this is the only place the
+/// input is touched, so no separate reduction pass is needed.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn ipass_d<const Q: u16>(p: *mut __m512i, k4: usize) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
+    let omp = bc(Tw::<Q>::OM.as_ptr());
+    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
+    let t6 = TwI::<Q>::IL6.as_ptr().add(36 * k4);
+    let base = k4 * 27;
+    for g in 0..9 {
+        let b = base + 3 * g;
+        let (mut y0, mut y1, mut y2) = (ld(p, b), ld(p, b + 1), ld(p, b + 2));
+        if TwI::<Q>::BAR_IN {
+            y0 = barrett(y0, bv, q);
+            y1 = barrett(y1, bv, q);
+            y2 = barrett(y2, bv, q);
+        }
+        let (mut s, a1, a2) = ir3(y0, y1, y2, t6.add(4 * g), omp, om, q);
+        if TwI::<Q>::BAR_S6 {
+            s = barrett(s, bv, q);
+        }
+        st(p, b, s);
+        st(p, b + 1, a1);
+        st(p, b + 2, a2);
+    }
+}
+
+/// Level 5 for one 27-block: 3 groups of 9 vectors, 3 butterflies each. The Barrett flag is
+/// indexed by `j`, the position class inside the 9-block: only `j = 0` inherits an untwiddled
+/// level-6 output in all three inputs.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn ipass_c5<const Q: u16>(p: *mut __m512i, k4: usize) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
+    let omp = bc(Tw::<Q>::OM.as_ptr());
+    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
+    let t5 = TwI::<Q>::IL5.as_ptr().add(12 * k4);
+    let base = k4 * 27;
+    for bb in 0..3 {
+        macro_rules! bf {
+            ($j:literal) => {{
+                let b = base + 9 * bb + $j;
+                let (mut s, a1, a2) =
+                    ir3(ld(p, b), ld(p, b + 3), ld(p, b + 6), t5.add(4 * bb), omp, om, q);
+                if TwI::<Q>::BAR_S5[$j] {
+                    s = barrett(s, bv, q);
+                }
+                st(p, b, s);
+                st(p, b + 3, a1);
+                st(p, b + 6, a2);
+            }};
+        }
+        bf!(0);
+        bf!(1);
+        bf!(2);
+    }
+}
+
+/// Level 4 for one 27-block: 9 butterflies, one per position class `i` of the 9-block.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn ipass_c4<const Q: u16>(p: *mut __m512i, k4: usize) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
+    let omp = bc(Tw::<Q>::OM.as_ptr());
+    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
+    let t4 = TwI::<Q>::IL4.as_ptr().add(4 * k4);
+    let base = k4 * 27;
+    // written out so that `BAR_S4[i]` is a compile-time constant: LLVM leaves a 9-trip loop
+    // rolled, and a per-iteration load-and-branch on the flag costs more than the Barrett.
+    macro_rules! bf {
+        ($i:literal) => {{
+            let b = base + $i;
+            let (mut s, a1, a2) = ir3(ld(p, b), ld(p, b + 9), ld(p, b + 18), t4, omp, om, q);
+            if TwI::<Q>::BAR_S4[$i] {
+                s = barrett(s, bv, q);
+            }
+            st(p, b, s);
+            st(p, b + 9, a1);
+            st(p, b + 18, a2);
+        }};
+    }
+    bf!(0);
+    bf!(1);
+    bf!(2);
+    bf!(3);
+    bf!(4);
+    bf!(5);
+    bf!(6);
+    bf!(7);
+    bf!(8);
+}
+
+/// Levels 3 and 2 for one 162-block, the mirror of [`pass_b`]: 27 groups of 6 vectors, 2 inverse
+/// radix-3 butterflies (level 3) followed by 3 inverse radix-2 ones (level 2).
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn ipass_b<const Q: u16>(p: *mut __m512i, blk: usize) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
+    let omp = bc(Tw::<Q>::OM.as_ptr());
+    let om = bc(Tw::<Q>::OM.as_ptr().add(1));
+    let l2 = TwI::<Q>::IL2.as_ptr().add(2 * blk);
+    let (zp, z) = (bc(l2), bc(l2.add(1)));
+    let ta = TwI::<Q>::IL3.as_ptr().add(8 * blk);
+    let tb = ta.add(4);
+    let base = blk * 162;
+    for j in 0..27 {
+        let b = base + j;
+        let (mut n0, n1, n2) = ir3(ld(p, b), ld(p, b + 27), ld(p, b + 54), ta, omp, om, q);
+        let (mut m0, m1, m2) =
+            ir3(ld(p, b + 81), ld(p, b + 108), ld(p, b + 135), tb, omp, om, q);
+        if TwI::<Q>::BAR_S3 {
+            n0 = barrett(n0, bv, q);
+            m0 = barrett(m0, bv, q);
+        }
+        let (mut s0, t0) = ir2(n0, m0, zp, z, q);
+        let (mut s1, t1) = ir2(n1, m1, zp, z, q);
+        let (mut s2, t2) = ir2(n2, m2, zp, z, q);
+        if TwI::<Q>::BAR_S2[0] {
+            s0 = barrett(s0, bv, q);
+        }
+        if TwI::<Q>::BAR_S2[1] {
+            s1 = barrett(s1, bv, q);
+        }
+        if TwI::<Q>::BAR_S2[2] {
+            s2 = barrett(s2, bv, q);
+        }
+        st(p, b, s0);
+        st(p, b + 27, s1);
+        st(p, b + 54, s2);
+        st(p, b + 81, t0);
+        st(p, b + 108, t1);
+        st(p, b + 135, t2);
+    }
+}
+
+/// Levels 1 and 0 fused into one radix-4 pass over the 648 vectors, the mirror of [`pass_a`]:
+/// the two inverse radix-2 butterflies of level 1, then the two Phi_6 recombinations, which
+/// carry the whole normalisation ([`TwI::KA`]) and center their four outputs.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+unsafe fn ipass_a<const Q: u16>(p: *mut __m512i) {
+    let q = _mm512_set1_epi32(Tw::<Q>::QD as i32);
+    let bv = _mm512_set1_epi32(Tw::<Q>::BV as i32);
+    let half = _mm512_set1_epi32(TwI::<Q>::HALF as i32);
+    let nhalf = _mm512_set1_epi32(TwI::<Q>::NHALF as i32);
+    let l1 = TwI::<Q>::IL1.as_ptr();
+    let (zap, za) = (bc(l1), bc(l1.add(1)));
+    let (zbp, zb) = (bc(l1.add(2)), bc(l1.add(3)));
+    let ka = TwI::<Q>::KA.as_ptr();
+    let kb = TwI::<Q>::KB.as_ptr();
+    let kc = TwI::<Q>::KC.as_ptr();
+    for i in 0..162 {
+        let (mut c0, c1) = ir2(ld(p, i), ld(p, i + 162), zap, za, q);
+        let (mut c2, c3) = ir2(ld(p, i + 324), ld(p, i + 486), zbp, zb, q);
+        if TwI::<Q>::BAR_S1 {
+            c0 = barrett(c0, bv, q);
+            c2 = barrett(c2, bv, q);
+        }
+        let d0 = sub(c0, c2);
+        let s0 = add(c0, c2);
+        let a1 = mont(d0, bc(ka), bc(ka.add(1)), q);
+        let a0 = add(
+            mont(s0, bc(kb), bc(kb.add(1)), q),
+            mont(d0, bc(kc), bc(kc.add(1)), q),
+        );
+        let d1 = sub(c1, c3);
+        let s1 = add(c1, c3);
+        let b1 = mont(d1, bc(ka), bc(ka.add(1)), q);
+        let b0 = add(
+            mont(s1, bc(kb), bc(kb.add(1)), q),
+            mont(d1, bc(kc), bc(kc.add(1)), q),
+        );
+        st(p, i, center(a0, q, half, nhalf));
+        st(p, i + 162, center(b0, q, half, nhalf));
+        st(p, i + 324, center(a1, q, half, nhalf));
+        st(p, i + 486, center(b1, q, half, nhalf));
+    }
+}
+
+/// Inverse NTT of a batch of 32 polynomials in place: `Ntt -> Coefficients` (tree order), the
+/// exact inverse of [`ntt_gen_batch32`].
+///
+/// Requires `|b.v[j][p]| <= TwI::<Q>::IN_BOUND` (7.5 q for 3889, 2.3 q for 9721 — every lazily
+/// reduced transform this crate produces). The output is **fully reduced and centered**,
+/// `|b.v[j][p]| <= (q-1)/2`.
+///
+/// # Safety
+/// The host must have AVX-512 F/BW/VL; `b` must be 64-byte aligned (`Batch32` is).
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+pub unsafe fn intt_gen_batch32<const Q: u16>(b: &mut Batch32) {
+    debug_assert_eq!(b.representation, Representation::Ntt);
+    let p = b.v.as_mut_ptr() as *mut __m512i;
+    for blk in 0..4 {
+        for k4 in 6 * blk..6 * blk + 6 {
+            ipass_d::<Q>(p, k4);
+            ipass_c5::<Q>(p, k4);
+            ipass_c4::<Q>(p, k4);
+        }
+        ipass_b::<Q>(p, blk);
+    }
+    ipass_a::<Q>(p);
+    b.representation = Representation::Coefficients;
+}
+
