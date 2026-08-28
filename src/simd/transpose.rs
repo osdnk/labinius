@@ -6,7 +6,7 @@
 //! * `slice_polys_idx` -> [`BinaryIndex32`], the form the NTT kernel actually consumes:
 //!   `rows[i][2p] = n`, `rows[i][2p+1] = 16 + n`, i.e. the `vpermb` byte-index pair that reads the
 //!   low and high half of entry n of a byte-split 16-entry i16 table. Producing this directly
-//!   saves the kernel a 162-row expansion pass (~490 uops per batch).
+//!   means the kernel needs no index-expansion pass (which would cost ~490 uops per batch).
 //!
 //! Pipeline (all AVX-512), for a batch of 32 polynomials:
 //!
@@ -26,8 +26,8 @@
 //!    of a second `vgf2p8affineqb` (rows 4..7 of the affine matrix are the four planes, row 3 is
 //!    0x00/0xFF and adds the +16), which emits `[n_0..n_31 | n_0+16..n_31+16]`; a final `vpermb`
 //!    interleaves that into the index row. Two output rows per 32-byte load, four `vpermb` and
-//!    two `vgf2p8affineqb` - the previous version needed four `kmovq` (port 5!) plus six port-0/5
-//!    uops per two rows.
+//!    two `vgf2p8affineqb`, and no `kmov` at all: `kmov k, m` costs a port-5 uop, and port 5 is
+//!    the transpose's bottleneck.
 use crate::types::{BinaryBatch32, BinaryPoly};
 use core::arch::x86_64::*;
 

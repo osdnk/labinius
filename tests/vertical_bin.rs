@@ -15,7 +15,8 @@ fn monomial(d: usize) -> BinaryPoly {
     p
 }
 
-/// The adversarial set required by DESIGN.md section 7 plus a few more.
+/// Adversarial inputs: all-zero, all-ones, alternating patterns and single monomials at the
+/// block boundaries of the tree.
 fn adversarial() -> Vec<BinaryPoly> {
     let mut v = Vec::new();
     v.push(BinaryPoly::default()); // all zero

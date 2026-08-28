@@ -121,8 +121,8 @@ same radix-3 machinery as the generic kernel. Details below.
   where n is the nibble (b_i, b_{i+162}, b_{i+324}, b_{i+486}) of polynomial p. This is the
   index operand of `vpermb`, so the fused levels 0+1 are one `vpermb` per output vector with no
   index building at all. The tables are byte-split (low halves at index n, high halves at
-  16 + n) because `vpermw` on this core is two uops (p0 + p5) while `vpermb` is one (p5);
-  switching to `vpermb` was worth ~30 cycles per polynomial.
+  16 + n) because `vpermw` on this core is two uops (p0 + p5) while `vpermb` is one (p5),
+  worth ~30 cycles per polynomial.
 * **Folding.** 10 tables per 162-block (40 in all, 1280 bytes, used as memory operands): T,
   T zeta' (level-2 twiddle for positions >= 81), and the eight versions multiplied by the
   level-3 twiddle powers zeta''^r for both level-2 children. For pair positions i < 27 the
@@ -264,4 +264,4 @@ Measured or modelled on this core, roughly in order of value:
     src/perf.rs                 perf_event_open counters (cycles, instructions, uops, ports 0/1/5)
     src/bin/bench_all.rs        the headline benchmark;  src/bin/bench_*.rs  per-kernel benchmarks
     tests/*.rs                  correctness;  tools/  C microbenchmarks (ports, instruction table, DRAM)
-    DESIGN.md                   the design contract the kernels were written against
+    DESIGN.md                   design notes: tree, arithmetic, bounds, port facts, kernel APIs

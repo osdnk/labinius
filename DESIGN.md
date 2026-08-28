@@ -1,9 +1,11 @@
-# bin-ntt — design contract for the AVX-512 kernels
+# bin-ntt — design notes for the AVX-512 kernels
 
 Target machine only: Intel i7-11850H (Tiger Lake), single thread. Goal: forward NTT of binary
 polynomials over R_q = Z_q[X]/(X^648 - X^324 + 1), q in {3889, 9721}, as fast as possible; the
 yardstick is Gregor Seiler's estimate of ~650 cycles per polynomial for a generic-input NTT on this
-core. We report cycles AND instruction/uop counts per polynomial (see `src/perf.rs`).
+core. Cycles and instruction/uop counts per polynomial are measured with `src/perf.rs`. The
+measured results and the per-kernel strategies are in README.md; this file holds the shared
+definitions every kernel follows.
 
 ## 1. Ring, tree, slot order (fixed — see `src/params.rs`)
 
@@ -52,10 +54,12 @@ core. We report cycles AND instruction/uop counts per polynomial (see `src/perf.
 | kmovd/kmovq k, m (1 uop on p5)                      | 1 / cycle  | p5 |
 | zmm load 2/cycle, zmm store 1/cycle                  |            | — |
 
-Consequences: cycles ~= max(p0 uops, (all ALU uops)/2); in practice ~15-20% of the adds are
-dispatched to p0 even when it is saturated (measured on vertical_gen), so p0 = multiplies + ~0.17*adds. Twiddle broadcast trick: store each i16
-constant duplicated as a u32 (w | w << 16) and use `_mm512_set1_epi32` from memory (vpbroadcastd) —
-free. Latencies: vpmullw/vpmulhw 5, vpermw 3, vpaddw 1: keep >= 6 independent butterflies in flight.
+Consequences: cycles ~= max(p0 uops, (all ALU uops)/2); in practice 15-28% of the adds are
+dispatched to p0 even when it is saturated (they depend on 5-cycle multiplies, see
+`tools/ubench/ports.c`), so p0 = multiplies + ~0.2 * adds. Twiddle broadcast trick: store each
+i16 constant duplicated as a u32 (w | w << 16) and use `_mm512_set1_epi32` from memory
+(vpbroadcastd) — free. Latencies: vpmullw/vpmulhw 5, vpermb 3, vpaddw 1: keep >= 6 independent
+butterflies in flight.
 
 ## 4. Data types (`src/types.rs`)
 
@@ -72,9 +76,10 @@ After levels 0 and 1 the value at position i (0 <= i < 162) of block k = 2*s0 + 
     val = b_i + kappa_{s0} * b_{i+324} + sigma_{s1} * zeta1_{s0} * (b_{i+162} + kappa_{s0} * b_{i+486})
     kappa_0 = zeta6, kappa_1 = 1 - zeta6, sigma_0 = +1, sigma_1 = -1, zeta1_{s0} = ZETA_L1[s0],
 
-a linear function of the 4-bit nibble n_i = idx[i], i.e. a table T_k[n] of 16 centered i16 values,
-looked up with one `vpermb` on a byte-split table (low bytes at index n, high bytes at 16+n; index
-row = (n, 16+n) pairs) — `vpermw` would cost an extra p0 uop per lookup.
+a linear function of the 4-bit nibble n_i = (b_i, b_{i+162}, b_{i+324}, b_{i+486}), i.e. a table
+T_k[n] of 16 centered i16 values, looked up with one `vpermb` on a byte-split table (low bytes at
+index n, high bytes at 16+n; the input rows of `BinaryIndex32` are the (n, 16+n) index pairs) —
+`vpermw` would cost an extra p0 uop per lookup.
 Since each intermediate is consumed in exactly one role, later twiddles can be folded into tables:
 
 * Level 2 (radix-2 on block k, pairs (i, i+81), zeta' = ZETA_L2[k]): positions i >= 81 use T_k*zeta'.
@@ -86,52 +91,45 @@ Since each intermediate is consumed in exactly one role, later twiddles can be f
   y0 = a0 + t1 + t2, u = mont(t1 - t2, omega), y1 = a0 - t2 + u, y2 = a0 - t1 - u.
   Table entries are centered (|T| <= q/2) so level-2 outputs are < q, level-3 outputs < 3q
   (< 2^15 for both primes), then levels 4-6 as in section 1 with Barretts where the bounds require
-  (9721: the untwiddled a0 inputs of levels 4, 5, 6 need `barrett` — check; 3889: none needed).
+  (9721: the untwiddled a0 inputs of levels 4, 5, 6 get a `barrett`; 3889: none needed).
   Number of tables: per block k, 10 (T, T zeta', and the 8 folded ones) x 16 entries; 40 tables,
-  1280 bytes; use them as memory operands of vpermw.
-* Expected cost per batch of 32: ~1080 vpermw + ~650 adds (levels 0-2) + 216 x (3 p0 + 8 adds)
-  (level 3) + 3 x 216 x (9 p0 + 10 adds) (levels 4-6) ~= 16.5k uops, ~6.5k multiplies on p0
-  => floor ~255 cycles/poly (total/2), realistically ~280-300 (measured vertical_gen: 423/467).
+  1280 bytes; they are used as memory operands of vpermb.
+* Measured static cost per batch of 32 (q = 3889, from the disassembly): 23 363 instructions,
+  6 480 multiply-port uops, 1 080 `vpermb`, ~8 900 add/sub; port floor 256 cycles per polynomial,
+  measured 297 (330 for 9721, whose Barretts add 1 296 multiply-port uops).
 
-## 6. Variants and their APIs (each in its own file under `src/simd/`)
+## 6. Kernel APIs (one module per variant under `src/simd/`)
 
-All kernels: `#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]`
-unsafe fns with `core::arch::x86_64` intrinsics; const generic `<const Q: u16>` (Q in QS). Tables
-should be `const`-evaluated (see `Params`) or built once in a `LazyLock`. Depth-first over
-sub-rings so the working set stays in L1 (a 162-block is 10 KB). Inline asm is allowed if the
-compiler spills or mis-schedules.
+All kernels are `#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]`
+unsafe fns over `core::arch::x86_64` intrinsics, const generic in `<const Q: u16>` (Q in QS), with
+tables `const`-evaluated through `Params` or built once. They work depth-first over sub-rings so
+the working set stays in L1 (a 162-block is 10 KB). Inline `asm!` is used only where LLVM's
+code generation for an intrinsic is poor (`vpmulhw`, twiddle broadcasts).
 
-* `vertical_bin.rs`  — `pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryBatch32, out: &mut Batch32)`
-  plus a driver `pub fn ntt_bin_polys<const Q: u16>(polys: &[BinaryPoly], out: &mut [Batch32])`
-  (polys.len() == 32 * out.len(); transposes with `transpose::slice_polys` then runs the kernel;
-  materialised output, consider non-temporal stores for the final level) and a streaming form
-  `pub fn ntt_bin_stream<const Q: u16>(polys: &[BinaryPoly], f: impl FnMut(usize, &Batch32))`.
-* `transpose.rs` — `pub unsafe fn slice_polys(polys: &[BinaryPoly; 32]) -> BinaryBatch32` (AVX-512;
-  scalar reference is `BinaryBatch32::from_polys_scalar`). Report its cost separately.
-* `vertical_gen.rs` — generic-input `pub unsafe fn ntt_gen_batch32<const Q: u16>(b: &mut Batch32)`
-  in place, Coefficients -> Ntt, input lanes |x| <= q. Fuse levels 0+1 into one radix-4 pass over
-  the 648 vectors (L2-resident), then depth-first per 162-block.
-* `horizontal_gen.rs` — Gregor's layout: `pub struct HBatch4 { v: [[i16; 32]; 81] }` with
-  v[r][8p + j] = coefficient r + 81*j of polynomial p (p in 0..4, j in 0..8), i.e. one polynomial per
-  128-bit lane, 8 coefficients of stride 81 per lane, 81 registers per 4 polynomials. The three
-  radix-2-type levels (0, 1, 2) are in-lane (vpshufd/vpshufb/vpermq-style duplication + per-lane
-  twiddle vectors); the four radix-3 levels are register-to-register on r. Define and document the
-  resulting slot order, and provide `HBatch4::get(p) -> RingElement` that returns TREE order so the
-  common test applies. `pub unsafe fn ntt_gen_hbatch4<const Q: u16>(b: &mut HBatch4)`.
+* `vertical_bin` — `ntt_bin_batch32::<Q>(&BinaryIndex32, &mut Batch32)`; drivers
+  `ntt_bin_polys::<Q>(&[BinaryPoly], &mut [Batch32])` (materialised, non-temporal stores for the
+  last level) and `ntt_bin_stream::<Q>(&[BinaryPoly], impl FnMut(usize, &Batch32))`.
+* `transpose` — `slice_polys(&[BinaryPoly; 32]) -> BinaryBatch32` (nibble form, equal to
+  `BinaryBatch32::from_polys_scalar`) and `slice_polys_idx(..) -> BinaryIndex32` (the `vpermb`
+  index rows the kernel consumes).
+* `vertical_gen` — `ntt_gen_batch32::<Q>(&mut Batch32)` in place, Coefficients -> Ntt, input lanes
+  |x| <= q; `ntt_gen_batches` over a slice with prefetching.
+* `horizontal_gen` — `HBatch4 { v: [[i16; 32]; 81] }` with v[r][8p + j] = coefficient r + 81 j of
+  polynomial p (one polynomial per 128-bit lane, 8 coefficients of stride 81 per lane);
+  `ntt_gen_hbatch4::<Q>(&mut HBatch4)`; output slot 81 j + r; `HBatch4::get(p)` returns tree order.
+* `pointwise` — `mul_batch_batch`, `mul_batch_element` (Montgomery, exact results).
 
-## 7. Tests and benches every variant must ship
+## 7. Tests and benchmarks
 
-* `tests/<variant>.rs`: for both primes, >= 64 batches of random binary polys plus adversarial
-  ones: normalized SIMD output == `scalar::ntt::<Q>(&scalar::lift(&poly))` slot-for-slot; declared
-  output bound holds (max |v|); and the multiplication test: `pointwise::mul_batch_batch` of
-  NTT(a), NTT(b) normalized == `scalar::ntt(scalar::mul_mod_phi(a, b))`, and `mul_batch_element`
-  against a single random element. Generic kernels also test random i16 inputs in [-q, q].
-* `src/bin/bench_<variant>.rs`: pin to one core (sched_setaffinity via libc syscall or `taskset`
-  externally), warm up, then measure with `perf::PerfGroup` (cycles, instructions, uops, p0, p1, p5)
-  over (a) an L2-resident working set (e.g. 512 polys repeated) and (b) 2^18 polys materialised
-  (340 MB output; DRAM floor measured: NT stores 37 GB/s = 9.1 ms, regular stores 14 GB/s = 24 ms)
-  and (c) streaming with a trivial consumer. Print per-polynomial numbers. Build with
-  `CARGO_TARGET_DIR=target/<variant>` to avoid fighting over the cargo lock with other agents.
-* Do not edit files outside your own module/test/bench files except to add `pub mod` lines already
-  present; `params.rs`, `types.rs`, `scalar.rs`, `pointwise.rs` are shared — propose changes in your
-  report instead of editing them (unless they are bugs, then fix and say so).
+* `tests/<variant>.rs`: for both primes, >= 64 batches of random binary polynomials plus
+  adversarial ones (all zero, all ones, alternating, monomials at block boundaries): normalized
+  SIMD output == `scalar::ntt::<Q>(&scalar::lift(&poly))` slot for slot; the declared output
+  bound holds; an i32 shadow model replays the kernel's operation sequence and asserts every
+  intermediate is < 2^15; and the multiplication tests through `pointwise` against
+  `scalar::ntt(scalar::mul_mod_phi(a, b))`. Generic kernels also test random i16 inputs in [-q, q].
+* `src/bin/bench_all.rs`: the headline (2^18 polynomials -> preallocated output, both primes, every
+  kernel, plus the NTT-domain products), pinned to one core, `perf::PerfGroup` counters (cycles,
+  instructions, uops, ports 0/1/5). `src/bin/bench_<variant>.rs`: per-kernel breakdowns,
+  cache-resident and out-of-cache cases, static instruction counts from the disassembly.
+  DRAM floors measured with `tools/membw`: non-temporal stores 37 GB/s, regular stores 14 GB/s,
+  reads 19.5 GB/s.

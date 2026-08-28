@@ -1,3 +1,17 @@
+// Port-allocation microbenchmark for the radix-3 NTT butterfly on Tiger Lake.
+//
+// One butterfly, matching src/simd/vertical_gen.rs::r3:
+//     t1 = mont(a1,w1) = mulhi(a1,w1) - mulhi(mullo(a1,w1'),q)
+//     t2 = mont(a2,w2)
+//     d  = t1 - t2 ;  u = mont(d,om)
+//     y0 = a0 + (t1+t2) ; y1 = (a0-t2) + u ; y2 = (a0-t1) - u
+// = 3 loads + 9 multiply uops (p0 only, 512-bit) + 10 add/sub uops (p0 or p5) + 3 stores.
+//
+// Ideal cycles/butterfly = max(9 + x, 10 - x) minimised at x = 0.5 -> 9.5.
+// Measured p0/p5 split tells how many of the 10 adds the allocator leaked onto p0.
+//
+// Data: 27 zmm (1728 B, L1-resident), 9 independent butterflies (i, i+9, i+18) per pass.
+//
 // Results (i7-11850H, taskset -c 6, gcc -O2 -march=native, best of 9, +-0.005 cyc):
 //
 //   variant           cyc/bf   p0/bf   p5/bf   note
@@ -26,21 +40,8 @@
 // Model that fits every row within 0.1 cycle:  cycles = max(p0_uops, ~10.5).
 // The 10.5 floor is 9.5 (ALU) + ~0.8 for the three 512-bit stores.  Ordering only
 // buys the 0.26 cyc/butterfly (2.4%) by which the natural order's p0 leak exceeds
-// that floor; see the report at the bottom of this file.
+// that floor.
 //
-// Port-allocation microbenchmark for the radix-3 NTT butterfly on Tiger Lake.
-//
-// One butterfly, matching src/simd/vertical_gen.rs::r3:
-//     t1 = mont(a1,w1) = mulhi(a1,w1) - mulhi(mullo(a1,w1'),q)
-//     t2 = mont(a2,w2)
-//     d  = t1 - t2 ;  u = mont(d,om)
-//     y0 = a0 + (t1+t2) ; y1 = (a0-t2) + u ; y2 = (a0-t1) - u
-// = 3 loads + 9 multiply uops (p0 only, 512-bit) + 10 add/sub uops (p0 or p5) + 3 stores.
-//
-// Ideal cycles/butterfly = max(9 + x, 10 - x) minimised at x = 0.5 -> 9.5.
-// Measured p0/p5 split tells how many of the 10 adds the allocator leaked onto p0.
-//
-// Data: 27 zmm (1728 B, L1-resident), 9 independent butterflies (i, i+9, i+18) per pass.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>

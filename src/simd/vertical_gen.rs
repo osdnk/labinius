@@ -14,7 +14,7 @@
 //! | C5   | 5      | `i, i+3, i+6`, per 9-block                          | 3   | 1 x radix-3 |
 //! | D    | 6      | `3g, 3g+1, 3g+2`, per 3-block                       | 3   | 1 x radix-3 |
 //!
-//! Pass A is the fused radix-4 pass of DESIGN.md section 6 (level 0 is the Phi_6 split
+//! Pass A fuses levels 0 and 1 into one radix-4 pass (level 0 is the Phi_6 split
 //! `t = zeta6*a1; y0 = a0 + t; y1 = a0 + a1 - t`, level 1 the two radix-2 halves): 162 iterations
 //! of 4 loads, 4 Montgomery multiplications, 4 stores.
 //!
@@ -27,7 +27,7 @@
 //! B stays fused. The streaming driver `ntt_gen_batches` prefetches the next batch into L2 one
 //! cache line per butterfly of levels 4-6, which is worth 23% on the 2^18-polynomial case.
 //!
-//! # Arithmetic and bounds (DESIGN.md section 2)
+//! # Arithmetic and bounds
 //!
 //! Twiddle multiplication is the 3-uop signed Montgomery form `mullo(a,w') / mulhi(a,w) /
 //! mulhi(m,q) / sub` with `|mont(a,w)| <= |a| q/2^17 + q/2`; twiddle constants live in memory as

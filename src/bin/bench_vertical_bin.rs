@@ -1,15 +1,15 @@
 //! Benchmarks for the binary vertical NTT. Pin with `taskset -c 2`.
 //!
 //! The static tables at the bottom were produced from
-//! `objdump -d --no-show-raw-insn target/vbin/release/bench_vertical_bin`, by summing the
-//! instructions of each loop body of `ntt_bin_batch32` / `slice_polys_idx_into` weighted by its
-//! trip count and classifying by port from the measured tables in DESIGN.md section 3 plus three
-//! corrections measured with `tools/ubench` and perf on this core:
-//!   * `vpermw` zmm is **2 uops (p0 + p5)**, not 1 uop p5 - hence the kernel uses `vpermb`
-//!     (1 uop, p5) on byte-split tables;
-//!   * `kmovq k, m64` is 1 uop on **p5**, so it competes with the shuffles - the transpose's last
+//! `objdump -d --no-show-raw-insn target/release/bench_vertical_bin`, by summing the instructions
+//! of each loop body of `ntt_bin_batch32` / `slice_polys_idx_into` weighted by its trip count and
+//! classifying by port with the table measured by `tools/ubench` and perf on this core, of which
+//! three entries matter most here:
+//!   * `vpermw` zmm is 2 uops (p0 + p5), hence the kernel uses `vpermb` (1 uop, p5) on
+//!     byte-split tables;
+//!   * `kmovq k, m64` is 1 uop on p5, so it competes with the shuffles, hence the transpose's last
 //!     phase avoids mask registers entirely;
-//!   * `vpbroadcastd zmm, m32` really is free (0 p0/p5 uops).
+//!   * `vpbroadcastd zmm, m32` is a pure load (0 p0/p5 uops).
 //! `cycles >= max(p0, p5, (p0 + p5 + p05)/2)`.
 use bin_ntt::perf::{Counts, PerfGroup};
 use bin_ntt::rng::Rng;

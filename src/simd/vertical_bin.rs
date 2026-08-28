@@ -1,7 +1,7 @@
 //! Forward NTT for **binary** inputs in the vertical batch-of-32 layout.
 //!
 //! Levels 0, 1, 2 and the level-3 twiddles are all folded into 16-entry lookup tables indexed by
-//! the 4-bit nibble `idx[i]` of `BinaryBatch32` (DESIGN.md section 5); levels 3..6 are radix-3
+//! the 4-bit nibble (b_i, b_{i+162}, b_{i+324}, b_{i+486}) of each polynomial; levels 3..6 are radix-3
 //! signed-Montgomery butterflies. The whole batch is done depth-first per 162-block: the table
 //! lookups, level 3 and level 4 write a 10 KB stack block, levels 5 and 6 are fused (a degree-9
 //! sub-ring is exactly three degree-3 sub-rings, so its nine values never leave registers) and go
@@ -11,11 +11,11 @@
 //! 297 cycles / polynomial for q = 3889 and 330 for q = 9721 (730 / 791 instructions,
 //! 278 / 317 port-0 uops, 236 / 258 port-5 uops); the static port floor is 257 / 287.
 //!
-//! ## Ports (measured on this core, `tools/ubench` + perf; corrects DESIGN.md section 3)
+//! ## Instruction selection (port facts measured on this core with `tools/ubench` and perf)
 //!
-//! `vpermw` zmm is **2 uops, p0 + p5** here, so a 16-entry i16 lookup done with `vpermw` would
-//! burn one port-0 slot per lookup (1080 per batch, ~17% of the port-0 budget). The tables are
-//! therefore stored **byte-split** (low halves at byte n, high halves at byte 16+n) and looked up
+//! `vpermw` zmm is 2 uops (p0 + p5), so a 16-entry i16 lookup done with `vpermw` would cost one
+//! port-0 slot per lookup (1080 per batch, ~17% of the port-0 budget). The tables are therefore
+//! stored **byte-split** (low halves at byte n, high halves at byte 16+n) and looked up
 //! with `vpermb` (1 uop, p5 only) on the byte-index rows `(n, 16+n)` that
 //! [`transpose::slice_polys_idx`] emits directly (`BinaryIndex32`), so the kernel has no
 //! index-expansion prologue at all.
