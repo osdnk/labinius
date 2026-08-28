@@ -812,7 +812,7 @@ pub fn commit_limbs_into(
     unsafe { commit_limbs_core(elems, limbs, keep, st, out) };
 }
 
-/// The base limb and the four [`crate::AdditionalLimb`]s: the widest limb list there is.
+/// The base limb and the four [`crate::Modulus`]s: the widest limb list there is.
 pub const MAX_LIMBS: usize = 5;
 
 /// One limb, resolved: everything the batch loop needs as plain words, so that the loop does not

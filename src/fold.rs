@@ -20,48 +20,26 @@
 //!
 //! # What it costs
 //!
-//! [`CommitmentKey::commit_with_aux`](crate::CommitmentKey::commit_with_aux) already left `NTT_3889(W)`
-//! in memory, so the fold never transforms the witness again: it reads those 85 MB once,
-//! which is the DRAM floor of the step. The accumulator is `len_ring/32 x 648` 32-lane i32 groups
+//! [`CommitmentKey::commit_into_aux`](crate::api::CommitmentKey::commit_into_aux) already left
+//! `NTT_3889(W)` in memory, so the fold never transforms the witness again: it reads those 85 MB
+//! once, which is the DRAM floor of the step. The accumulator is `len_ring/32 x 648` 32-lane i32 groups
 //! (663 KB for `len_ring = 256`, L2-resident) and every chunk contributes one `vpmaddwd` per slot
 //! vector; the small transform's own lazy reduction (`|W| <= 7.5 q`) survives untouched into the
 //! products, and the accumulator is folded back exactly, `x = l + (h + c) R mod q`, every
 //! [`FOLD_PERIOD`] chunks.
 //!
-//! Only the base limb's transform is kept. `v` is inverted back to coefficients modulo
-//! `q1 = 3889` — where it becomes a genuine small-integer vector, see [`FoldOutput::max_abs_v`] —
-//! and transformed forward again modulo every additional limb (`vertical_gen`, or
-//! `vertical_gen_quad` for a quadratic-slot one), which is why an additional limb costs an
-//! 8-batch NTT and its own `A v` instead of a second 85 MB stream.
-//!
-//! ```no_run
-//! use bin_ntt::{fold, CommitmentKey, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-//! # use bin_fields::scalar::F162;
-//! # let witness: Vec<F162> = Vec::new();
-//! let ck = CommitmentKey::random_default(1 << 10, 0xC0FFEE);
-//! let (c, aux) = ck.commit_with_aux(&witness, 256);
-//! let mut t = Transcript::new(b"bin-ntt/fold");
-//! for j in 0..256 {
-//!     t.absorb_elements(c.column(j));
-//! }
-//! let ch: Vec<_> = (0..256)
-//!     .map(|_| bin_ntt::sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
-//!     .collect();
-//! let out = fold::fold(&ck, &aux, &ch);
-//! let _ = &out.v; // the amortised witness, 256 ring elements, centered coefficients
-//! ```
-use crate::api::{
-    components_of, AuxData, CommitmentKey, PowerOfThreeRingElementWithLimbs, BASE_PRIME, N162,
-    PRIMES,
-};
+//! Only the base limb's transform is kept, and the prover stops there: `v` is inverted back to
+//! coefficients modulo `q1 = 3889`, where it becomes a genuine small-integer vector. The verifier
+//! is the one that transforms it forward again modulo every limb (`vertical_gen`, or
+//! `vertical_gen_quad` for a quadratic-slot one) and recomputes `A v`.
+use crate::api::{components_of, AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::challenge::ShortChallenge;
-use crate::params::{ParamsQ, N, QUAD_SLOTS};
+use crate::params::N;
 use crate::simd::commit as cm;
 use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
 use crate::simd::vertical_gen_quad::{self as vgq, ntt_quad_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
-use std::time::Instant;
 
 /// The prime the witness transform is kept in, and the one the fold accumulates over: the base
 /// limb of every key.
@@ -497,174 +475,27 @@ pub const fn av_period(q: u16) -> usize {
 }
 const _: () = assert!(av_period(2917) >= 1 && av_period(4861) >= 1 && av_period(12637) >= 1);
 
-/// `sum_j c_j C_j` for one limb, in that limb's slot algebra: a scalar product per slot for a
-/// splitting limb, and for a quadratic one the leaf product
-/// `(c_0 C_0 + leaf_c c_1 C_1) + (c_0 C_1 + c_1 C_0) X` (`scalar::mul_quad_slots`), summed over
-/// the chunks. The verifier's side of `A v = sum_j c_j C_j`.
-pub(crate) fn combine_limb(
-    q: u16,
-    quad: bool,
-    ch: &ChallengeNtt,
-    cs: &[[u32; N]],
-) -> [u32; N] {
-    if !quad {
-        let m = q as i64;
-        let mut out = [0u32; N];
-        for u in 0..N {
-            let mut s = 0i64;
-            for (j, c) in cs.iter().enumerate() {
-                s += ch.slot[j][u] as i64 * c[u] as i64;
-            }
-            out[u] = s.rem_euclid(m) as u32;
-        }
-        return out;
-    }
-    match q {
-        2917 => combine_quad::<2917>(ch, cs),
-        4861 => combine_quad::<4861>(ch, cs),
-        12637 => combine_quad::<12637>(ch, cs),
-        _ => unreachable!("no quadratic limb with q = {q}"),
-    }
-}
-
-fn combine_quad<const Q: u16>(ch: &ChallengeNtt, cs: &[[u32; N]]) -> [u32; N] {
-    let q = Q as i64;
-    let mut out = [0u32; N];
-    for j in 0..QUAD_SLOTS {
-        let leaf = ParamsQ::<Q>::LEAF_C[j] as i64;
-        let (mut s0, mut s1) = (0i64, 0i64);
-        for (t, c) in cs.iter().enumerate() {
-            let (a0, a1) = (ch.slot[t][2 * j] as i64, ch.slot[t][2 * j + 1] as i64);
-            let (b0, b1) = (c[2 * j] as i64, c[2 * j + 1] as i64);
-            s0 = (s0 + a0 * b0 + leaf * (a1 * b1 % q)) % q;
-            s1 = (s1 + a0 * b1 + a1 * b0) % q;
-        }
-        out[2 * j] = s0.rem_euclid(q) as u32;
-        out[2 * j + 1] = s1.rem_euclid(q) as u32;
-    }
-    out
-}
-
-// =============================================================================================
-// the output
-// =============================================================================================
-
-/// Wall time of the five stages of one [`fold`].
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FoldTimings {
-    /// Embedding and transforming the `r` challenges modulo the base limb, and modulo every
-    /// other limb when the check runs.
-    pub challenge_ntt_ms: f64,
-    /// The `r`-term slot-wise accumulation over the kept witness — the 85 MB stream.
-    pub accumulate_ms: f64,
-    /// `vertical_gen::intt_gen_batch32::<3889>` on the `len_ring/32` batches, and reading the
-    /// centered coefficients out of the vertical layout.
-    pub inverse_ntt_ms: f64,
-    /// The forward transform of `v` modulo every additional limb (`vertical_gen` for a splitting
-    /// one, `vertical_gen_quad` for a quadratic one).
-    pub forward_add_ms: f64,
-    /// `A v` for every limb and the four-way decomposition of the result.
-    pub y_ms: f64,
-    /// Everything.
-    pub total_ms: f64,
-}
-
-/// The result of one fold.
-pub struct FoldOutput {
-    /// **The amortised witness**, `len_ring` elements of `R_648` in coefficient form, centered
-    /// (`|coefficient| <= (q1-1)/2`, and in fact a few hundred — see [`max_abs_v`](Self::max_abs_v)),
-    /// so these are the true integer coefficients of `sum_j c_j W_j`.
-    pub v: Vec<RingElement>,
-    /// `NTT(v)` for every limb of the key, `len_ring / 32` batches each, centered.
-    pub v_ntt: Vec<Vec<Batch32>>,
-    /// `A v` as the four `R_162` components over every limb, centered — the same shape as one
-    /// column of a [`crate::VerticallyAlignedMatrix`] returned by a commitment.
-    pub y: [PowerOfThreeRingElementWithLimbs; 4],
-    /// The same `A v` before the decomposition: 648 rows in `[0, q)` per limb.
-    pub y_raw: Vec<[u32; N]>,
-    /// `max_i max_k |v_i[k]|`, the largest integer coefficient of the folded witness.
-    ///
-    /// A coefficient of `v` is a sum of `r * w` signed 0/1 terms (`r` challenges of weight `w`,
-    /// each hitting one binary coefficient per term), so it has mean zero and standard deviation
-    /// about `sqrt(r w / 2)` — 52 for `r = 256`, `w = 21` — and the maximum over the
-    /// `648 * len_ring` coefficients lands a few hundred below, two orders under
-    /// `q1 / 2 = 1944.5`. That margin is what makes the centered lift of `v mod q1` the true
-    /// integer vector, and it is the only place in the fold where the integers matter.
-    pub max_abs_v: i32,
-    /// Wall time per stage.
-    pub timings: FoldTimings,
-}
-
-impl FoldOutput {
-    /// The four `R_162` components of `v[i]` in coefficient form: component `k` is the
-    /// coefficients `4m + k`, `m = 0..162` (the basis `1, X, X^2, X^3` of `R_648` over
-    /// `S = Z[Y]/(Y^162 - Y^81 + 1)`, `Y = X^4`).
-    pub fn v_components(&self, i: usize) -> [[i16; N162]; 4] {
-        let mut out = [[0i16; N162]; 4];
-        for m in 0..N162 {
-            for k in 0..4 {
-                out[k][m] = self.v[i].v[4 * m + k];
-            }
-        }
-        out
-    }
-}
 
 // =============================================================================================
 // the fold
 // =============================================================================================
 
-/// The folding step: `v = sum_j c_j W_j` and `A v`, from a witness kept by
-/// [`CommitmentKey::commit_with_aux`](crate::CommitmentKey::commit_with_aux).
+/// `v = sum_j c_j W_j`, in coefficient form modulo [`Q1`], centered — the amortised witness.
 ///
-/// `challenges.len()` must be the number of chunks (even). The consistency identity
-/// `A v = sum_j c_j C_j` is verified when `debug_assertions` are on; [`fold_checked`] forces it.
-pub fn fold(key: &CommitmentKey, aux: &AuxData, challenges: &[ShortChallenge]) -> FoldOutput {
-    fold_with(key, aux, challenges, cfg!(debug_assertions))
-}
-
-/// [`fold`] with the consistency check forced on (`sum_j c_j C_j == A v` for every limb).
-pub fn fold_checked(
-    key: &CommitmentKey,
+/// Stage (a) embeds the challenges as `c(-X^4)` and transforms them modulo the base limb, (b) is
+/// the slot-wise inner product over the kept witness (the 85 MB stream), (c) is the inverse
+/// transform, whose output is already fully reduced and centered, so `v` is the true integer
+/// vector: a coefficient is a sum of `r w` signed 0/1 terms, standard deviation `sqrt(r w / 2)`,
+/// two orders below `q1 / 2 = 1944.5`.
+pub(crate) fn fold_witness(
     aux: &AuxData,
     challenges: &[ShortChallenge],
-) -> FoldOutput {
-    fold_with(key, aux, challenges, true)
-}
-
-fn ms(t: Instant) -> f64 {
-    t.elapsed().as_secs_f64() * 1e3
-}
-
-/// The whole step, stage by stage.
-pub fn fold_with(
-    key: &CommitmentKey,
-    aux: &AuxData,
-    challenges: &[ShortChallenge],
-    check: bool,
-) -> FoldOutput {
-    let r = aux.chunks();
-    assert_eq!(challenges.len(), r, "one challenge per chunk");
-    assert_eq!(aux.limbs(), key.limbs(), "the key and the auxiliary data disagree");
-    let bpc = aux.batches_per_chunk();
-    assert_eq!(bpc, key.len_ring() / 32, "the key and the chunks disagree");
-    let mut t = FoldTimings::default();
-    let t_all = Instant::now();
-
-    // (a) the challenges, embedded as c(-X^4) and transformed modulo the base limb.
-    let t0 = Instant::now();
-    let ch1 = challenge_ntt::<Q1>(challenges);
-    t.challenge_ntt_ms = ms(t0);
-
-    // (b) the slot-wise inner product over the kept witness.
-    let t0 = Instant::now();
-    let v1 = accumulate(aux, &ch1, bpc);
-    t.accumulate_ms = ms(t0);
-
-    // (c) back to coefficients modulo q1, where v is a small integer vector: one batch kernel
-    //     per batch position, whose output is already fully reduced and centered.
-    let t0 = Instant::now();
-    let mut vb = v1.clone();
+    bpc: usize,
+) -> Vec<RingElement> {
+    assert_eq!(challenges.len(), aux.chunks(), "one challenge per chunk");
+    assert_eq!(bpc, aux.batches_per_chunk(), "the key and the chunks disagree");
+    let ch = challenge_ntt::<Q1>(challenges);
+    let mut vb = accumulate(aux, &ch, bpc);
     let half = (Q1 as i32 - 1) / 2;
     let mut max_abs = 0i32;
     unsafe {
@@ -677,66 +508,33 @@ pub fn fold_with(
         max_abs <= half,
         "the folded witness does not fit the centered range of q1"
     );
-    let v: Vec<RingElement> = (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect();
-    t.inverse_ntt_ms = ms(t0);
+    (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect()
+}
 
-    // (d) forward again modulo every additional limb (|coefficient| <= (q1-1)/2 < q, so every
-    //     generic kernel's input bound holds); modulo q1 the accumulator's own output already is
-    //     NTT(v), so it is kept.
-    let t0 = Instant::now();
-    let mut v_ntt = vec![v1];
-    for k in 1..key.limbs() {
-        let mut b = vb.clone();
-        forward_limb(key.prime(k), key.is_quadratic(k), &mut b);
-        v_ntt.push(b);
-    }
-    t.forward_add_ms = ms(t0);
-
-    // (e) y = A v for every limb, then the four R_162 components.
-    let t0 = Instant::now();
-    let y_raw: Vec<[u32; N]> = (0..key.limbs())
-        .map(|k| a_times_v_limb(key.prime(k), key.is_quadratic(k), key.row(k), &v_ntt[k]))
-        .collect();
-    let per: Vec<[crate::api::PowerOfThreeRingElement; 4]> = (0..key.limbs())
-        .map(|k| components_of(key.prime(k), key.is_quadratic(k), &y_raw[k]))
-        .collect();
-    let y: [PowerOfThreeRingElementWithLimbs; 4] = core::array::from_fn(|c| {
-        PowerOfThreeRingElementWithLimbs {
-            limbs: per.iter().map(|d| d[c]).collect(),
-        }
-    });
-    t.y_ms = ms(t0);
-
-    // (f) the linearity identity that validates every step above.
-    if check {
-        let t0 = Instant::now();
-        for k in 0..key.limbs() {
-            let (q, quad) = (key.prime(k), key.is_quadratic(k));
-            let ch = if k == 0 {
-                None
+/// `NTT_162(c_j)[s] = c_j(-theta^{v_s})` for every challenge, modulo one limb, centered.
+///
+/// `Phi_243` splits into 162 linear factors modulo every limb (`q = 1 mod 243`), so a challenge
+/// has 162 slots whatever the tree of `R_648` looks like. For a splitting limb the value sits at
+/// slot [`SLOT_648`]`[0][s]` of the big transform (all four `t` carry it, the embedding lives in
+/// the subring); for a quadratic-slot limb it is component 0 of the same decomposition a
+/// commitment goes through.
+pub(crate) fn challenge_slots162(
+    q: u16,
+    quad: bool,
+    challenges: &[ShortChallenge],
+) -> Vec<[i16; N162]> {
+    let ch = challenge_ntt_limb(q, quad, challenges);
+    (0..challenges.len())
+        .map(|j| {
+            if quad {
+                let raw: [u32; N] =
+                    core::array::from_fn(|u| (ch.slot[j][u] as i32).rem_euclid(q as i32) as u32);
+                components_of(q, quad, &raw)[0].v
             } else {
-                Some(challenge_ntt_limb(q, quad, challenges))
-            };
-            let want = combine_limb(q, quad, ch.as_ref().unwrap_or(&ch1), &aux.raw[k]);
-            for u in 0..N {
-                assert_eq!(
-                    want[u], y_raw[k][u],
-                    "q = {q}: A v != sum_j c_j C_j at row {u}"
-                );
+                core::array::from_fn(|s| ch.slot[j][SLOT_648[0][s] as usize])
             }
-        }
-        t.challenge_ntt_ms += ms(t0);
-    }
-
-    t.total_ms = ms(t_all);
-    FoldOutput {
-        v,
-        v_ntt,
-        y,
-        y_raw,
-        max_abs_v: max_abs,
-        timings: t,
-    }
+        })
+        .collect()
 }
 
 /// `NTT(v)` for one limb, in place on centered coefficient batches, fully reduced and centered.

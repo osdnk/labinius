@@ -60,7 +60,7 @@ fn absorbed_data_separates() {
 
 #[test]
 fn absorb_elements_binds() {
-    use bin_ntt::PowerOfThreeRingElementWithLimbs;
+    use bin_ntt::api::PowerOfThreeRingElementWithLimbs;
     let mut x = PowerOfThreeRingElementWithLimbs::zero(2);
     let mut y = PowerOfThreeRingElementWithLimbs::zero(2);
     y.limbs[1].v[161] = -3;

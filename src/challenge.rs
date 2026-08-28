@@ -16,7 +16,7 @@
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-//! # use bin_ntt::PowerOfThreeRingElementWithLimbs;
+//! # use bin_ntt::api::PowerOfThreeRingElementWithLimbs;
 //! # let commitment = [PowerOfThreeRingElementWithLimbs::zero(2)];
 //! let mut t = Transcript::new(b"bin-ntt/example");
 //! t.absorb_elements(&commitment);

@@ -1,262 +1,153 @@
-//! The folding step: the commitment's auxiliary data against the scalar transform, the folded
-//! witness against `sum_j c_j W_j` computed with `scalar::mul_mod_phi` (and over the integers),
-//! the linearity identity `A v = sum_j c_j C_j` for both primes, and determinism.
-use bin_fields::scalar::F162;
-use bin_ntt::api::{AuxData, N162, PRIMES};
-use bin_ntt::challenge::{sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-use bin_ntt::f162::{self, RandomF162};
-use bin_ntt::params::N;
-use bin_ntt::rng::Rng;
-use bin_ntt::types::Representation;
-use bin_ntt::{fold, scalar, CommitmentKey};
+//! The fold: the shape and the size of the amortised witness, determinism, the opening check
+//! `A v = sum_j c_j C_j` on every modulus, and what the verifier does with a corrupted opening.
+use bin_ntt::{
+    Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
+};
 
-const Q1: u16 = PRIMES[0];
-const Q2: u16 = PRIMES[1];
+use Modulus::*;
 
-fn witness(n: usize, seed: u64) -> Vec<F162> {
-    let mut rng = Rng::new(seed);
-    (0..n).map(|_| F162::random(&mut rng)).collect()
+const MATRIX_SEED: [u8; 32] = [21u8; 32];
+const WITNESS_SEED: [u8; 32] = [23u8; 32];
+
+/// Everything one round produces, so that a test can corrupt any of it.
+struct Round {
+    verifier: Verifier,
+    point: bin_ntt::EvaluationPoint,
+    claimed_value: bin_ntt::F162,
+    row_evaluation: bin_ntt::RowEvaluation,
+    challenges: bin_ntt::FoldingChallenges,
+    folded_witness: bin_ntt::FoldedWitness,
+    folded_commitment: bin_ntt::FoldedCommitment,
+    folded_row_value: bin_ntt::F162,
 }
 
-/// `r` challenges bound to the commitment, as a verifier would draw them.
-fn challenges(
-    c: &bin_ntt::VerticallyAlignedMatrix<bin_ntt::PowerOfThreeRingElementWithLimbs>,
-    r: usize,
-) -> Vec<ShortChallenge> {
-    let mut t = Transcript::new(b"bin-ntt/test/fold");
-    for j in 0..r {
-        t.absorb_elements(c.column(j));
-    }
-    (0..r)
-        .map(|_| sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
-        .collect()
-}
-
-/// The challenge as an element of `R_648`: `c(-X^4)`, coefficient of `X^{4m}` is `(-1)^m c_m`.
-fn embed(c: &ShortChallenge) -> [i64; N] {
-    let co = c.coeffs();
-    let mut out = [0i64; N];
-    for m in 0..N162 {
-        out[4 * m] = if m % 2 == 0 { co[m] as i64 } else { -(co[m] as i64) };
-    }
-    out
-}
-
-/// `a * b` in `Z[X]/(X^648 - X^324 + 1)` over the integers: `X^k = X^{k-324} - X^{k-648}`.
-fn mul_mod_phi_int(a: &[i64; N], b: &[i64; N]) -> [i64; N] {
-    let mut c = [0i64; 2 * N];
-    for i in 0..N {
-        if a[i] == 0 {
-            continue;
-        }
-        for j in 0..N {
-            c[i + j] += a[i] * b[j];
-        }
-    }
-    for k in (N..2 * N).rev() {
-        let v = c[k];
-        c[k] = 0;
-        c[k - 324] += v;
-        c[k - N] -= v;
-    }
-    let mut out = [0i64; N];
-    out.copy_from_slice(&c[..N]);
-    out
-}
-
-/// The auxiliary transform is `scalar::ntt::<3889>` of the lifted ring element, slot for slot.
-fn check_aux(aux: &AuxData, w: &[F162], len_ring: usize) {
-    let bpc = aux.batches_per_chunk();
-    for j in 0..aux.chunks() {
-        for b in 0..bpc {
-            for p in 0..32 {
-                let i = j * len_ring + 32 * b + p;
-                let want = scalar::ntt::<Q1>(&f162::lift_elem(w, i));
-                let got = aux.batch(j * bpc + b).get(p);
-                assert_eq!(got.representation, Representation::Ntt);
-                for u in 0..N {
-                    assert_eq!(
-                        (got.v[u] as i32).rem_euclid(Q1 as i32) as u32,
-                        want[u],
-                        "element {i}, slot {u}"
-                    );
-                    assert!(
-                        (got.v[u] as i32).unsigned_abs() <= 7 * Q1 as u32 + Q1 as u32 / 2,
-                        "element {i}, slot {u}: |{}| over the kernel bound",
-                        got.v[u]
-                    );
-                }
-            }
-        }
+fn round(params: Params) -> Round {
+    let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+    let mut prover = Prover::new(&pp);
+    let verifier = Verifier::new(&pp);
+    let witness = Witness::random(&params, WITNESS_SEED);
+    let (commitment, opening) = prover.commit(&witness);
+    let mut transcript = Transcript::new(b"bin-ntt/test/fold");
+    let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
+    let claimed_value = witness.mle_evaluate(&point);
+    let row_evaluation = witness.row_evaluate(&point);
+    let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
+    let folded_witness = prover.fold(opening, &challenges);
+    let folded_commitment = verifier.fold_commitment(&commitment, &challenges);
+    let folded_row_value = verifier.fold_row_evaluation(&row_evaluation, &challenges);
+    Round {
+        verifier,
+        point,
+        claimed_value,
+        row_evaluation,
+        challenges,
+        folded_witness,
+        folded_commitment,
+        folded_row_value,
     }
 }
 
-/// `commit_with_aux` on `r` chunks of `len_f162` `F162`, checked against everything scalar.
-fn run(len_f162: usize, r: usize, deep: bool) {
-    let ck = CommitmentKey::random_default(len_f162, 0xF01D ^ r as u64);
-    let len_ring = len_f162 / 4;
-    let w = witness(r * len_f162, 0xC0FFEE ^ (r as u64) << 8);
-
-    let plain = ck.commit(&w, r);
-    let (c, aux) = ck.commit_with_aux(&w, r);
-    assert_eq!(plain, c, "commit_with_aux changed the commitment");
-    assert_eq!(aux.chunks(), r);
-    assert_eq!(aux.batches_per_chunk(), len_ring / 32);
-    if deep {
-        check_aux(&aux, &w, len_ring);
+impl Round {
+    fn verify(&self) -> Result<(), VerificationError> {
+        self.verifier.verify_evaluation(
+            &self.point,
+            &self.claimed_value,
+            &self.row_evaluation,
+        )?;
+        self.verifier.verify_folded_opening(
+            &self.folded_commitment,
+            &self.folded_witness,
+            &self.point,
+            &self.folded_row_value,
+        )
     }
+}
 
-    let ch = challenges(&c, r);
-    let out = fold::fold_checked(&ck, &aux, &ch);
+fn small() -> Params {
+    Params::new(11, 3, vec![Q9721]).unwrap()
+}
 
-    assert_eq!(out.v.len(), len_ring);
-    assert_eq!(out.v_ntt[0].len(), len_ring / 32);
-    assert_eq!(out.v_ntt[1].len(), len_ring / 32);
+#[test]
+fn an_honest_round_is_accepted() {
+    assert_eq!(round(small()).verify(), Ok(()));
+}
 
-    // v == sum_j c_j W_j, over Z_3889 and (because the coefficients are small) over Z.
-    let emb: Vec<[i64; N]> = ch.iter().map(embed).collect();
-    let mut max_abs = 0i64;
-    for i in 0..len_ring {
-        let mut want = [0i64; N];
-        for j in 0..r {
-            let wi = f162::lift_elem(&w, j * len_ring + i);
-            let mut b = [0i64; N];
-            for k in 0..N {
-                b[k] = wi[k] as i64;
-            }
-            let p = mul_mod_phi_int(&emb[j], &b);
-            for k in 0..N {
-                want[k] += p[k];
-            }
-        }
-        for k in 0..N {
-            max_abs = max_abs.max(want[k].abs());
-            assert_eq!(
-                out.v[i].v[k] as i64, want[k],
-                "element {i}, coefficient {k}: the fold is not the integer sum"
-            );
-        }
-        assert_eq!(out.v[i].representation, Representation::Coefficients);
+#[test]
+fn the_folded_witness_is_one_short_column() {
+    let params = small();
+    let r = round(params.clone());
+    assert_eq!(r.challenges.len(), params.columns());
+    assert_eq!(
+        r.folded_witness.len(),
+        params.witness_len() / params.columns() / 4
+    );
+    // A coefficient is a sum of r * 21 signed 0/1 terms, so it stays far inside q1 / 2 = 1944.5.
+    let max = r
+        .folded_witness
+        .elements()
+        .iter()
+        .flat_map(|e| e.v.iter())
+        .map(|x| x.unsigned_abs())
+        .max()
+        .unwrap();
+    assert!(max <= 1944, "the folded witness left the centered range");
+    assert!(max < 400, "the folded witness is unexpectedly large: {max}");
+}
 
-        // the same, through the crate's own modular reference
-        let mut ref_q = [0u32; N];
-        for j in 0..r {
-            let cj: [u32; N] = core::array::from_fn(|k| emb[j][k].rem_euclid(Q1 as i64) as u32);
-            let p = scalar::mul_mod_phi(&cj, &f162::lift_elem(&w, j * len_ring + i), Q1);
-            for k in 0..N {
-                ref_q[k] = (ref_q[k] + p[k]) % Q1 as u32;
-            }
-        }
-        for k in 0..N {
-            assert_eq!((out.v[i].v[k] as i32).rem_euclid(Q1 as i32) as u32, ref_q[k]);
-        }
+#[test]
+fn the_fold_is_deterministic() {
+    let a = round(small());
+    let b = round(small());
+    assert_eq!(a.folded_witness, b.folded_witness);
+    assert_eq!(a.folded_commitment, b.folded_commitment);
+    assert_eq!(a.folded_row_value, b.folded_row_value);
+}
 
-        // the four R_162 components are the coefficients 4m + k
-        let comp = out.v_components(i);
-        for m in 0..N162 {
-            for k in 0..4 {
-                assert_eq!(comp[k][m], out.v[i].v[4 * m + k]);
-            }
-        }
-    }
-    assert_eq!(out.max_abs_v as i64, max_abs);
-    assert!(2 * max_abs < Q1 as i64, "max |v| = {max_abs} does not fit q1/2");
-
-    // v_ntt is the transform of v, both primes.
-    for i in 0..len_ring {
-        let coeffs: [u32; N] =
-            core::array::from_fn(|k| (out.v[i].v[k] as i32).rem_euclid(Q1 as i32) as u32);
-        let want1 = scalar::ntt::<Q1>(&coeffs);
-        let coeffs2: [u32; N] =
-            core::array::from_fn(|k| (out.v[i].v[k] as i32).rem_euclid(Q2 as i32) as u32);
-        let want2 = scalar::ntt::<Q2>(&coeffs2);
-        let g1 = out.v_ntt[0][i / 32].get(i % 32);
-        let g2 = out.v_ntt[1][i / 32].get(i % 32);
-        for u in 0..N {
-            assert_eq!((g1.v[u] as i32).rem_euclid(Q1 as i32) as u32, want1[u]);
-            assert_eq!((g2.v[u] as i32).rem_euclid(Q2 as i32) as u32, want2[u]);
-            assert!(2 * (g1.v[u] as i32).abs() <= Q1 as i32 - 1);
-            assert!(2 * (g2.v[u] as i32).abs() <= Q2 as i32 - 1);
-        }
-    }
-
-    // A v = sum_j c_j C_j, slot by slot, both primes.
-    for (k, &q) in PRIMES.iter().enumerate() {
-        let chq: Vec<[u32; N]> = (0..r)
-            .map(|j| {
-                let cj: [u32; N] = core::array::from_fn(|t| emb[j][t].rem_euclid(q as i64) as u32);
-                if q == Q1 {
-                    scalar::ntt::<Q1>(&cj)
-                } else {
-                    scalar::ntt::<Q2>(&cj)
-                }
-            })
-            .collect();
-        for u in 0..N {
-            let mut s = 0u64;
-            for j in 0..r {
-                s += chq[j][u] as u64 * aux.commitment(k, j)[u] as u64;
-            }
-            assert_eq!(
-                (s % q as u64) as u32,
-                out.y_raw[k][u],
-                "q = {q}: A v != sum_j c_j C_j at slot {u}"
-            );
-            assert!(out.y_raw[k][u] < q as u32);
-        }
-        // y is the four-way decomposition of y_raw
-        let want = bin_ntt::api::decompose_648_to_4x162::<Q1>(&out.y_raw[0]);
-        let want2 = bin_ntt::api::decompose_648_to_4x162::<Q2>(&out.y_raw[1]);
-        for t in 0..4 {
-            for s in 0..N162 {
-                assert_eq!(
-                    (out.y[t].limbs[0].v[s] as i32).rem_euclid(Q1 as i32) as u32,
-                    want[t][s]
-                );
-                assert_eq!(
-                    (out.y[t].limbs[1].v[s] as i32).rem_euclid(Q2 as i32) as u32,
-                    want2[t][s]
-                );
-            }
+#[test]
+fn a_corrupted_folded_witness_is_rejected() {
+    for shift in [1i16, -1, 1000] {
+        for index in [0usize, 5, 31] {
+            let mut r = round(small());
+            let target = index % r.folded_witness.len();
+            r.folded_witness.elements_mut()[target].v[3] += shift;
+            assert_eq!(r.verify(), Err(VerificationError::Rejected));
         }
     }
 }
 
 #[test]
-fn small_instance() {
-    run(128, 4, true);
+fn a_folded_witness_outside_the_centered_range_is_rejected() {
+    let mut r = round(small());
+    r.folded_witness.elements_mut()[0].v[0] = 1945;
+    assert_eq!(r.verify(), Err(VerificationError::Rejected));
 }
 
 #[test]
-fn two_batches_per_chunk() {
-    run(256, 8, true);
-}
+fn the_folded_commitment_is_bound_to_the_challenges() {
+    let params = small();
+    let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+    let mut prover = Prover::new(&pp);
+    let verifier = Verifier::new(&pp);
+    let witness = Witness::random(&params, WITNESS_SEED);
+    let (commitment, opening) = prover.commit(&witness);
 
-/// 64 chunks crosses the 32-chunk fold-back of the accumulator.
-#[test]
-fn crosses_the_fold_back() {
-    run(128, 64, false);
-}
+    let mut transcript = Transcript::new(b"bin-ntt/test/fold");
+    let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
+    let row_evaluation = witness.row_evaluate(&point);
+    let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
+    let folded_witness = prover.fold(opening, &challenges);
 
-/// Two folds of the same inputs agree bit for bit, and so do two commitments.
-#[test]
-fn deterministic() {
-    let (len_f162, r) = (256usize, 8usize);
-    let ck = CommitmentKey::random_default(len_f162, 0xD37);
-    let w = witness(r * len_f162, 0xD37E);
-    let (c1, a1) = ck.commit_with_aux(&w, r);
-    let (c2, a2) = ck.commit_with_aux(&w, r);
-    assert_eq!(c1, c2);
-    let ch = challenges(&c1, r);
-    let f1 = fold::fold(&ck, &a1, &ch);
-    let f2 = fold::fold(&ck, &a2, &ch);
-    assert_eq!(f1.v, f2.v);
-    assert_eq!(f1.y_raw, f2.y_raw);
-    assert_eq!(f1.y, f2.y);
-    assert_eq!(f1.max_abs_v, f2.max_abs_v);
-    for k in 0..2 {
-        for b in 0..f1.v_ntt[k].len() {
-            assert_eq!(f1.v_ntt[k][b].v, f2.v_ntt[k][b].v);
-        }
-    }
+    let mut other = Transcript::new(b"bin-ntt/test/fold-other");
+    let other_challenges = verifier.derive_folding_challenges(&mut other, &row_evaluation);
+    let folded_commitment = verifier.fold_commitment(&commitment, &other_challenges);
+    let folded_row_value = verifier.fold_row_evaluation(&row_evaluation, &challenges);
+    assert_eq!(
+        verifier.verify_folded_opening(
+            &folded_commitment,
+            &folded_witness,
+            &point,
+            &folded_row_value
+        ),
+        Err(VerificationError::Rejected)
+    );
 }

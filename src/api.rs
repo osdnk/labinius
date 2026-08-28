@@ -1,27 +1,17 @@
-//! The public API: a commitment key, a commitment, and the height-4 view of its output over the
-//! 243-rd cyclotomic ring.
-//!
-//! Everything the crate does is reachable from three types.
+//! The commitment key, the commitment, and the height-4 view of its output over the 243-rd
+//! cyclotomic ring. This is the engine room of [`crate::scheme`], not the surface a caller uses.
 //!
 //! * [`CommitmentKey`] holds the Ajtai matrix `A` for the base prime [`BASE_PRIME`] and for each
-//!   [`AdditionalLimb`] the key was built with, in the NTT domain, centered, in the layout the
+//!   [`Modulus`] the key was built with, in the NTT domain, centered, in the layout the
 //!   AVX-512 kernel streams.
-//! * [`CommitmentKey::commit`] maps a witness — a plain `&[F162]`, read as binary ring elements
-//!   of `R_648 = Z_q[X]/(X^648 - X^324 + 1)` four `F162` at a time — to a
-//!   [`VerticallyAlignedMatrix`] of [`PowerOfThreeRingElementWithLimbs`].
-//! * [`PowerOfThreeRingElement`] is one element of `R_162 = Z_q[Z]/Phi_243(Z)` in its NTT domain:
-//!   162 slots, centered signed residues in `[-(q-1)/2, (q-1)/2]`, slot `s` holding the evaluation at the primitive
-//!   243-rd root of unity named by [`POW3_SLOT_EXP`]`[s]`.
-//!
-//! ```no_run
-//! use bin_ntt::{AdditionalLimb::*, CommitmentKey};
-//! # use bin_fields::scalar::F162;
-//! # let witness: Vec<F162> = Vec::new();
-//! let ck = CommitmentKey::random(1 << 18, 0xC0FFEE, &[Q9721, Q2917]);
-//! let c = ck.commit(&witness, 1);
-//! let slots = &c.get(0, 0).base().v[..];        // component 0 mod 3889, 162 centered slots
-//! let other = &c.get(0, 0).additional(1).v[..]; // the same component mod 2917
-//! ```
+//! * [`CommitmentKey::commit_into_aux`] maps a witness — a plain `&[F162]`, read as binary ring
+//!   elements of `R_648 = Z_q[X]/(X^648 - X^324 + 1)` four `F162` at a time — to a
+//!   [`VerticallyAlignedMatrix`] of [`PowerOfThreeRingElementWithLimbs`], and keeps the transform
+//!   the fold consumes.
+//! * [`PowerOfThreeRingElement`] (`RingElement162` in the public surface) is one element of
+//!   `R_162 = Z_q[Z]/Phi_243(Z)` in its NTT domain: 162 slots, centered signed residues in
+//!   `[-(q-1)/2, (q-1)/2]`, slot `s` holding the evaluation at the primitive 243-rd root of unity
+//!   named by [`POW3_SLOT_EXP`]`[s]`.
 //!
 //! # Why the output is a matrix of height 4
 //!
@@ -77,9 +67,8 @@ use crate::simd::commit as cm;
 use crate::types::{Batch32, Representation};
 use bin_fields::scalar::F162;
 use core::arch::x86_64::*;
-use std::time::Instant;
 
-/// The primes of the default limb list: the base and [`AdditionalLimb::Q9721`]. Both are
+/// The primes of the default limb list: the base and [`Modulus::Q9721`]. Both are
 /// `1 mod 1944`, so `R_q` splits into 648 linear factors and the transform is complete.
 pub const PRIMES: [u16; 2] = QS;
 
@@ -95,45 +84,42 @@ pub const BASE_PRIME: u16 = QS[0];
 /// `Z_q[X]/(X^2 - psi'^u)` leaves (`vertical_bin_quad`). Both kinds produce the same public
 /// output: four elements of `R_162`, 162 slots each, in the [`POW3_SLOT_EXP`] order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum AdditionalLimb {
+pub enum Modulus {
     Q2917,
     Q4861,
     Q9721,
     Q12637,
 }
 
-impl AdditionalLimb {
+impl Modulus {
     /// Every limb, cheapest first (the order of the ranking in the README).
-    pub const ALL: [AdditionalLimb; 4] = [
-        AdditionalLimb::Q2917,
-        AdditionalLimb::Q4861,
-        AdditionalLimb::Q9721,
-        AdditionalLimb::Q12637,
+    pub const ALL: [Modulus; 4] = [
+        Modulus::Q2917,
+        Modulus::Q4861,
+        Modulus::Q9721,
+        Modulus::Q12637,
     ];
 
     /// The prime.
     pub const fn prime(self) -> u16 {
         match self {
-            AdditionalLimb::Q2917 => QS_QUAD[0],
-            AdditionalLimb::Q4861 => QS_QUAD[1],
-            AdditionalLimb::Q9721 => QS[1],
-            AdditionalLimb::Q12637 => QS_QUAD[2],
+            Modulus::Q2917 => QS_QUAD[0],
+            Modulus::Q4861 => QS_QUAD[1],
+            Modulus::Q9721 => QS[1],
+            Modulus::Q12637 => QS_QUAD[2],
         }
     }
 
     /// Does `R_648` end in 324 quadratic leaves for this prime (rather than 648 linear slots)?
     pub const fn is_quadratic(self) -> bool {
-        !matches!(self, AdditionalLimb::Q9721)
+        !matches!(self, Modulus::Q9721)
     }
 
     /// The limb of a prime, if it is one.
-    pub fn from_prime(q: u16) -> Option<AdditionalLimb> {
-        AdditionalLimb::ALL.into_iter().find(|l| l.prime() == q)
+    pub fn from_prime(q: u16) -> Option<Modulus> {
+        Modulus::ALL.into_iter().find(|l| l.prime() == q)
     }
 }
-
-/// The default limb list of [`CommitmentKey::random_default`].
-pub const DEFAULT_LIMBS: [AdditionalLimb; 1] = [AdditionalLimb::Q9721];
 
 /// Degree of the small ring `R_162 = Z_q[Z]/Phi_243(Z)`; `Phi_243(Z) = Z^162 + Z^81 + 1`.
 pub const N162: usize = 162;
@@ -175,7 +161,7 @@ const POW3: ([u16; N162], [[u16; N162]; 4]) = pow3_tables();
 pub const POW3_SLOT_EXP: [u16; N162] = POW3.0;
 
 /// `SLOT_648[t][s]` = the slot of `R_648` holding `y(psi^{v_s + 486 t})`.
-const SLOT_648: [[u16; N162]; 4] = POW3.1;
+pub(crate) const SLOT_648: [[u16; N162]; 4] = POW3.1;
 
 /// The same table as 32-bit gather offsets, padded to [`PAD`] with 0.
 const SLOT_IDX: [[i32; PAD]; 4] = {
@@ -445,7 +431,7 @@ impl Default for PowerOfThreeRingElement {
 
 /// One element of `R_162` given by its residues modulo the key's limbs: `limbs[0]` is the residue
 /// modulo [`BASE_PRIME`] and `limbs[1 + i]` the one modulo the key's `i`-th
-/// [`AdditionalLimb`], in the order the key was built with.
+/// [`Modulus`], in the order the key was built with.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PowerOfThreeRingElementWithLimbs {
     pub limbs: Vec<PowerOfThreeRingElement>,
@@ -537,13 +523,13 @@ const F162_PER_BATCH: usize = 128;
 /// every limb of the key. Opaque: the layout is the vertical one the AVX-512 kernels stream
 /// ([`crate::simd::commit`]).
 ///
-/// Limb 0 is [`BASE_PRIME`]; limb `1 + i` is the `i`-th [`AdditionalLimb`] the key was built with.
+/// Limb 0 is [`BASE_PRIME`]; limb `1 + i` is the `i`-th [`Modulus`] the key was built with.
 /// A split limb's rows are the 648 tree-order slots, a quadratic limb's are the 648 rows of the
 /// quadratic tree (the two coefficients of each of the 324 leaves); in both cases every row is
 /// uniform in `[-(q-1)/2, (q-1)/2]`.
 pub struct CommitmentKey {
     a: Vec<Vec<Batch32>>,
-    additional: Vec<AdditionalLimb>,
+    additional: Vec<Modulus>,
     len_f162: usize,
 }
 
@@ -554,7 +540,7 @@ impl CommitmentKey {
     ///
     /// Costs `(1 + additional.len()) * len_f162 / 128 * 41472` bytes: 85 MB per limb for
     /// `len_f162 = 2^18`.
-    pub fn random(len_f162: usize, seed: u64, additional: &[AdditionalLimb]) -> Self {
+    pub fn random(len_f162: usize, seed: u64, additional: &[Modulus]) -> Self {
         assert!(
             len_f162 > 0 && len_f162 % F162_PER_BATCH == 0,
             "len_f162 must be a multiple of 128"
@@ -595,11 +581,6 @@ impl CommitmentKey {
         }
     }
 
-    /// [`random`](Self::random) with the default limb list ([`DEFAULT_LIMBS`], the base and 9721).
-    pub fn random_default(len_f162: usize, seed: u64) -> Self {
-        Self::random(len_f162, seed, &DEFAULT_LIMBS)
-    }
-
     /// Length of the key in `F162` elements: the size of one chunk of witness it commits to.
     pub fn len_f162(&self) -> usize {
         self.len_f162
@@ -616,7 +597,7 @@ impl CommitmentKey {
     }
 
     /// The additional limbs, in the order the commitment reports them.
-    pub fn additional(&self) -> &[AdditionalLimb] {
+    pub fn additional(&self) -> &[Modulus] {
         &self.additional
     }
 
@@ -673,83 +654,17 @@ impl CommitmentKey {
         out
     }
 
-    /// Commit to `witness` in `r` chunks under the same key.
+    /// Commit to `witness` in `r` chunks under the same key, keeping what the folding step
+    /// ([`crate::fold`]) consumes in a buffer the caller already owns.
     ///
     /// `r` must be a power of two and `witness.len()` must be `r * self.len_f162()`. Chunk `c` is
     /// `witness[c * len .. (c + 1) * len]`; it is read as `len / 4` binary ring elements of
     /// `R_648` (`crate::f162`), sliced once, and transformed and multiplied into the inner product
     /// `y = sum_i A_i * NTT(w_i)` once per limb. Each limb's `y` is then split into its four
-    /// `R_162` components ([`decompose_648_to_4x162`] for a split limb,
-    /// [`crate::scalar::decompose_quad_648_to_4x162`] for a quadratic one), which become column
-    /// `c`.
-    ///
-    /// The returned matrix is 4 x `r`. Reusing one key across `r` chunks is what makes a large `r`
-    /// faster: the same `A` is streamed `r` times instead of once, but at `r >= 8` it is small
-    /// enough to stay in L3.
-    pub fn commit(
-        &self,
-        witness: &[F162],
-        r: usize,
-    ) -> VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs> {
-        self.commit_timed(witness, r).0
-    }
-
-    /// [`commit`](Self::commit), with the wall time of the two phases.
-    pub fn commit_timed(
-        &self,
-        witness: &[F162],
-        r: usize,
-    ) -> (
-        VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
-        Timings,
-    ) {
-        self.check_witness(witness, r);
-        let limbs = self.limb_list();
-        let mut data = Vec::with_capacity(4 * r);
-        let mut t = Timings {
-            chunks: r,
-            commit_ms: 0.0,
-            decompose_ms: 0.0,
-            total_ms: 0.0,
-        };
-        let mut st = cm::Scratch::new(&limbs);
-        let mut raw = vec![[0u32; N]; limbs.len()];
-        let t_all = Instant::now();
-        for c in 0..r {
-            let chunk = &witness[c * self.len_f162..(c + 1) * self.len_f162];
-            let t0 = Instant::now();
-            cm::commit_limbs_into(chunk, &limbs, None, &mut st, &mut raw);
-            t.commit_ms += ms(t0);
-            let t1 = Instant::now();
-            data.extend(self.components(&raw));
-            t.decompose_ms += ms(t1);
-        }
-        t.total_ms = ms(t_all);
-        (VerticallyAlignedMatrix::new(4, r, data), t)
-    }
-
-    /// [`commit`](Self::commit), returning the auxiliary data a later folding step
-    /// ([`crate::fold::fold`]) consumes.
-    ///
-    /// The matrix is bit-identical to [`commit`](Self::commit)'s; the only difference is that the
-    /// transform of every ring element modulo the base limb is also written out — by the same
-    /// block sink that feeds the base multiplication, with non-temporal stores — so the 85 MB an
-    /// [`AuxData`] holds for a 2^16-element witness cost a few percent rather than the 2.3 ms a
-    /// separate cached write of that size would.
-    pub fn commit_with_aux(
-        &self,
-        witness: &[F162],
-        r: usize,
-    ) -> (
-        VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
-        AuxData,
-    ) {
-        let mut aux = AuxData::new(self.len_ring(), r, self.limbs());
-        let c = self.commit_into_aux(witness, r, &mut aux);
-        (c, aux)
-    }
-
-    /// [`commit_with_aux`](Self::commit_with_aux) writing into a buffer the caller already owns.
+    /// `R_162` components, which become column `c` of the returned 4 x `r` matrix. The transform
+    /// of every ring element modulo the base limb is written out as it goes, by the same block
+    /// sink that feeds the base multiplication and with non-temporal stores, so keeping it costs
+    /// a memory stream rather than a second transform.
     ///
     /// The 85 MB an [`AuxData`] holds for a 2^16-element witness is one `mmap` and 20 736 first
     /// touches, ~20 ms of page faults the kernel charges to whoever writes the pages first — more
@@ -827,9 +742,9 @@ fn uninit_batches(n: usize) -> Vec<Batch32> {
 /// layout the kernel produced it, and the raw 648-row commitments of the `r` chunks for every
 /// limb of the key.
 ///
-/// Produced by [`CommitmentKey::commit_with_aux`] as a by-product of the commitment itself, so it
-/// costs a memory stream rather than a second transform. For 2^16 ring elements it holds 2048
-/// `Batch32` = 85 MB, whatever the limb list is: only the base limb's transform is kept.
+/// Produced by [`CommitmentKey::commit_into_aux`] as a by-product of the commitment itself. For
+/// 2^16 ring elements it holds 2048 `Batch32` = 85 MB, whatever the limb list is: only the base
+/// limb's transform is kept.
 pub struct AuxData {
     /// The transform modulo [`BASE_PRIME`], `batches[b].v[u][p]` = slot `u` of ring element
     /// `32 b + p`, lazily reduced (`|v| <= 7.5 q`, the binary kernel's declared output bound).
@@ -881,21 +796,4 @@ impl AuxData {
     pub fn commitment(&self, k: usize, j: usize) -> &[u32; N] {
         &self.raw[k][j]
     }
-}
-
-fn ms(t: Instant) -> f64 {
-    t.elapsed().as_secs_f64() * 1e3
-}
-
-/// Wall time inside one [`CommitmentKey::commit_timed`] call.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Timings {
-    /// Number of chunks (`r`).
-    pub chunks: usize,
-    /// Front end + transform + base multiplication, every limb, all chunks.
-    pub commit_ms: f64,
-    /// The four-way decomposition of the `r` output elements, every limb.
-    pub decompose_ms: f64,
-    /// Everything, including building the output matrix.
-    pub total_ms: f64,
 }
