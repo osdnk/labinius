@@ -208,6 +208,23 @@ version spent 324 of them per batch). Port-5 bound, within 18 % of its static fl
   (fewer multiplies, but 548 vs 541); `black_box` on the table pointer (the loads stop folding
   into the multiplies).
 
+### Why there is no horizontal binary kernel
+
+The lookup trick needs, in every output lane, an index made of the four bits (b_i, b_{i+162},
+b_{i+324}, b_{i+486}) of that lane's polynomial. In the vertical layout that index *is* the
+input row (one nibble per polynomial per lane), so a lookup costs one `vpermb` and nothing
+else, and folding a twiddle is merely choosing a different table. In the horizontal layout the
+four bits sit at lane positions j, j+2, j+4, j+6 of the same 128-bit lane, so every register
+first needs an in-lane bit gather (byte shuffles plus shift/or, ~4-6 uops) to build the index,
+and the four sub-rings sharing a 128-bit lane need four different tables, i.e. a 64-entry
+`vpermi2b` (2 uops) or two `vpermb` plus a blend per lookup. Levels 0-2 would drop from ~21 to
+~14 uops per register — roughly 540 -> 450-470 cycles per polynomial — but the radix-3 levels
+cost exactly what they cost in the vertical layout, the level-3 twiddle folding (which removes
+two of that level's three multiplications) would need one table per (lane, role) and double
+the gathers, and all of the extra work lands on p5, the port the in-lane levels already fill
+with shuffles. That leaves it ~50 % above the vertical binary kernel, which wins precisely
+because its input representation makes the index free and every fold a table choice.
+
 ### `simd/pointwise.rs` — products in the NTT domain (not optimised)
 
 General Montgomery product of two batches (4 multiplies per slot, then a second multiplication
