@@ -71,7 +71,7 @@ variants), `bench_commit_h` (the horizontal one), `bench_f162` (the NTT alone).
 
 ## API
 
-Four types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
+Five types in `src/api.rs`, re-exported at the crate root, are the whole public surface.
 
 * `PowerOfThreeRingElement { v: [i16; 162] }` — one element of the 3^5-th cyclotomic ring
   `R_162 = Z_q[Z] / Phi_243(Z)` for one prime, in its NTT domain: 162 slots, centered signed
@@ -83,6 +83,8 @@ Four types in `src/api.rs`, re-exported at the crate root, are the whole public 
   elements, a multiple of 128 = 32 ring elements), `len_f162()`, `bytes()`.
 * `VerticallyAlignedMatrix<T>` — `rows()` x `cols()`, stored column by column, with `get(row, col)`,
   `column(col)`, `columns()`. One column is one commitment.
+* `AuxData` — what `commit_with_aux` leaves behind for the folding step below: the witness's
+  transform modulo `PRIMES[0]` and the raw 648-slot commitments of the `r` chunks.
 
 ```rust
 let ck = CommitmentKey::random(1 << 18, seed);
@@ -187,6 +189,88 @@ costs 0.7 us when the first block rejects it and 1.0 us when every root is evalu
 Tightening the bound costs wall time and cardinality, both mildly: at the default 9 a challenge
 takes 4.6 us and the accepted set holds 105.2 of the 107.7 bits; at 7.5 a challenge takes a
 millisecond and the set still holds 97.1 bits.
+
+### Folding
+
+`src/fold.rs`, re-exported at the crate root, is the folding step of the paper's `Pi_fold` on top
+of the commitment. A challenge `c_j` is a short ternary element of the subring `R_162`, embedded
+into `R_648` as `c_j(-X^4)`; the folded (amortised) witness and its commitment are
+
+    v = sum_j c_j W_j    (one chunk's worth of ring elements),        A v = sum_j c_j C_j,
+
+the second identity by `R_648`-linearity of `A`. Multiplication by a subring element acts on the
+four `R_162` components alike, so in the NTT domain the whole fold is one length-`r` inner product
+of scalars per slot, `NTT(v)[u] = sum_j NTT(c_j)[u] NTT(W_j)[u]`, with no ring multiplication
+anywhere.
+
+`CommitmentKey::commit_with_aux(&witness, r)` returns the same `4 x r` matrix as `commit` together
+with an opaque `AuxData`: the transform of every witness element modulo `q1 = 3889`, written
+straight out of the commitment's block sink with non-temporal stores, and the raw 648-slot
+commitments `C_j` of the `r` chunks for both primes. `fold(&key, &aux, &challenges)` then returns
+
+```rust
+let (c, aux) = ck.commit_with_aux(&witness, 256);          // 4 x 256, plus 85 MB of aux
+let mut t = Transcript::new(b"bin-ntt/fold");
+for j in 0..256 { t.absorb_elements(c.column(j)); }
+let ch: Vec<_> = (0..256)
+    .map(|_| sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
+    .collect();
+let out = fold(&ck, &aux, &ch);
+let coeffs = &out.v[0].v[..];        // v as 648 centered integer coefficients of R_648
+```
+
+`FoldOutput` carries `v`, the amortised witness as `len_ring` `RingElement`s in **coefficient
+form**, centered (`v_components(i)` splits one into its four `R_162` components, coefficients
+`4m + k`); `v_ntt`, its transform for both primes; `y = A v` as four
+`PowerOfThreeRingElementWithTwoLimbs`, the same shape as one column of a commitment; `y_raw`, the
+same before the decomposition; and `max_abs_v`.
+
+**The accumulation.** The witness transform keeps the binary kernel's own lazy reduction
+(`|W| <= 7.5 q1`) and the challenge slots are fully reduced (`|c| <= (q1-1)/2`), so one chunk adds
+at most `7.5 q1 (q1-1)/2 = 56 700 648` to an `i32` lane. Two chunks are processed together: a
+`vpunpcklwd`/`vpunpckhwd` pair interleaves their witness rows and one `vpmaddwd` against the
+broadcast dword `(c_j[u], c_{j+1}[u])` forms both products. Starting from the fold-back's own
+bound `2^15 (1 + R) = 108 592 384`, 32 chunks fit (`1 923 013 120 < 2^31`) and 64 do not, so the
+accumulator is folded back exactly — `x = l + (h + c) R mod q`, `simd::commit`'s reduction —
+every 32 chunks; both bounds are `const` assertions. The accumulator is `len_ring/32 x 648`
+groups of 32 lanes (663 KB at `len_ring = 256`, L2-resident) and the 85 MB of witness transform is
+read once, which is the step's floor.
+
+**Why `v` is a small-integer vector.** A coefficient of `v` is a sum of `r w = 5376` signed 0/1
+terms, so it has mean zero and standard deviation `sqrt(r w / 2) = 52`; the largest of the
+`648 x 256` coefficients measures **265**, against `q1 / 2 = 1944.5`. The centered lift of
+`v mod q1` is therefore the true integer vector, which is what makes `v` usable as the witness of
+the next round, and it is the only place in the fold where the integers matter. Modulo `q1` the
+accumulator's own output is already `NTT(v)`, so only `q2` needs a forward transform — of 8
+batches, not of the witness.
+
+**Measured** (`cargo run --release --offline`, `taskset -c 2`, 2^18 `F162` = 2^16 ring elements,
+`r = 256` chunks of 256 ring elements, weight-21 challenges, best of 3, ~4.2 GHz):
+
+| stage                                        | ms       | note                                            |
+|----------------------------------------------|---------:|-------------------------------------------------|
+| `commit`                                     | 13.9     | the commitment alone                            |
+| `commit_into_aux`                            | **14.9** | +7 %: 85 MB of transform kept, non-temporally   |
+| 256 challenges from a transcript over `C`    | 2.3      | 5.8 attempts each (`bound = 9`)                 |
+| `fold`                                       | **11.0** |                                                 |
+| — challenge NTTs                             | 0.11     | 8 batches of `c(-X^4)`, `vertical_gen`          |
+| — accumulation                               | 4.25     | 85 MB read at 20 GB/s: the DRAM floor           |
+| — inverse NTT, `q1`                          | 6.45     | 256 x `scalar::intt`                            |
+| — forward NTT, `q2`                          | 0.12     | 8 batches, `vertical_gen`                       |
+| — `y = A v`                                  | 0.04     | 8 batches per prime on the commitment's `vpdpwssd` accumulator |
+| prover total                                 | **25.9** | `commit_into_aux` + `fold`                      |
+
+The 85 MB an `AuxData` holds is one `mmap`: `commit_with_aux` measures 37 ms because 22 of them
+are the kernel's first touch of 20 736 fresh pages. `commit_into_aux` writes into a buffer the
+caller already owns (`AuxData::new`), which is what a prover that folds more than once does.
+
+Two numbers set the shape of the step. The accumulation is at the machine's read bandwidth — the
+two witness rows and the accumulator are plain forward streams, and adding one `prefetcht1` per
+slot a step ahead (what `commit` does for `A`) costs 4.96 ms against 4.25 with none, since this
+loop has no compute to hide the extra fill-buffer pressure behind. The inverse transform is the
+untuned `u64` reference: the same 256 elements cost 5.0 ms through `scalar::ntt` where the vector
+kernel costs 0.03, so a vectorised inverse in the shape of `vertical_gen` takes the fold from 11.0
+to ~4.6 ms and is the one thing worth writing next.
 
 ## Building and testing
 
@@ -527,7 +611,8 @@ Measured or modelled on this core, roughly in order of value for the commitment:
 
     src/api.rs                  the public API: CommitmentKey, PowerOfThreeRingElement(WithTwoLimbs), VerticallyAlignedMatrix
     src/challenge.rs            short fixed-weight ternary challenges over R_162, blake3 transcript
-    src/main.rs                 the demo: builds a key, commits 2^18 F162 for r = 1, 4, 16, 256, prints timings
+    src/fold.rs                 the folding step: v = sum_j c_j W_j in the NTT domain, and A v
+    src/main.rs                 the demo: commits 2^18 F162 for r = 1, 4, 16, 256 and folds the r = 256 run
     src/params.rs               ring constants, twiddle tables, Montgomery/Barrett constants (const-evaluated)
     src/f162.rs                 the F162 lift (lift4, pack4, scalar index rows, random elements)
     src/types.rs                Batch32, RingElement, BinaryPoly (test/comparison input form)

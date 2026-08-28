@@ -11,11 +11,13 @@
 //! - `simd`    : the AVX-512 kernels (one module per variant).
 //! - `api`     : the public API (`CommitmentKey`, `PowerOfThreeRingElement`, the height-4 view).
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
+//! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
 #![allow(clippy::needless_range_loop)]
 
 pub mod api;
 pub mod challenge;
 pub mod f162;
+pub mod fold;
 pub mod params;
 pub mod perf;
 pub mod rng;
@@ -24,6 +26,7 @@ pub mod simd;
 pub mod types;
 
 pub use api::*;
+pub use fold::{fold, fold_checked, fold_with, FoldOutput, FoldTimings};
 pub use challenge::{
     canonical_inf_norm_sq, sample_attempt, sample_short_challenge, ShortChallenge, Transcript,
     DEFAULT_BOUND, DEFAULT_WEIGHT, MAX_WEIGHT,

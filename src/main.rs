@@ -13,7 +13,10 @@ use bin_ntt::simd::transpose::BinaryIndex32;
 use bin_ntt::simd::transpose_f162 as tf;
 use bin_ntt::simd::vertical_bin_asm as va;
 use bin_ntt::types::{Batch32, Representation};
-use bin_ntt::{CommitmentKey, Timings, PRIMES};
+use bin_ntt::{
+    fold, sample_short_challenge, CommitmentKey, Timings, Transcript, DEFAULT_BOUND,
+    DEFAULT_WEIGHT, PRIMES,
+};
 use std::time::Instant;
 
 extern "C" {
@@ -182,5 +185,100 @@ fn main() {
         "\ncolumn c of the 4 x r output is the commitment of chunk c, split into its four R_162 \
          components;\nslot s of a component evaluates at a primitive 243-rd root of unity indexed \
          by POW3_SLOT_EXP[s]."
+    );
+
+    folding(&witness, nf162);
+}
+
+/// The folding step on top of the r = 256 commitment: `v = sum_j c_j W_j` and `A v`.
+fn folding(witness: &[F162], nf162: usize) {
+    const R: usize = 256;
+    let ck = CommitmentKey::random(nf162 / R, 0xF01D);
+    println!(
+        "\nfolding, r = {R} chunks of {} ring elements, weight-{DEFAULT_WEIGHT} ternary challenges",
+        ck.len_ring()
+    );
+
+    let mut plain = f64::MAX;
+    for _ in 0..3 {
+        let t0 = Instant::now();
+        std::hint::black_box(ck.commit(witness, R));
+        plain = plain.min(t0.elapsed().as_secs_f64() * 1e3);
+    }
+
+    let t0 = Instant::now();
+    let (_, mut aux) = ck.commit_with_aux(witness, R);
+    let cold = t0.elapsed().as_secs_f64() * 1e3;
+
+    let (mut keep, mut best) = (f64::MAX, None);
+    for _ in 0..3 {
+        let t0 = Instant::now();
+        let c = ck.commit_into_aux(witness, R, &mut aux);
+        let el = t0.elapsed().as_secs_f64() * 1e3;
+        if el < keep {
+            keep = el;
+            best = Some(c);
+        }
+    }
+    let c = best.unwrap();
+
+    let t0 = Instant::now();
+    let mut t = Transcript::new(b"bin-ntt/fold");
+    for j in 0..R {
+        t.absorb_elements(c.column(j));
+    }
+    let mut attempts = 0u64;
+    let ch: Vec<_> = (0..R)
+        .map(|_| {
+            let (x, a) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
+            attempts += a;
+            x
+        })
+        .collect();
+    let chal_ms = t0.elapsed().as_secs_f64() * 1e3;
+
+    let mut out = fold(&ck, &aux, &ch);
+    for _ in 0..2 {
+        let o = fold(&ck, &aux, &ch);
+        if o.timings.total_ms < out.timings.total_ms {
+            out = o;
+        }
+    }
+    let f = out.timings;
+
+    println!("commit                     {plain:>8.2} ms");
+    println!(
+        "commit_into_aux            {keep:>8.2} ms   (+{:.1} %, {:.0} MB of witness transform kept)",
+        100.0 * (keep / plain - 1.0),
+        aux.bytes() as f64 / 1e6,
+    );
+    println!(
+        "commit_with_aux            {cold:>8.2} ms   (the same, allocating the buffer: \
+         {:.0} ms of first-touch page faults)",
+        cold - keep
+    );
+    println!(
+        "challenges ({R} sampled)   {chal_ms:>8.2} ms   ({:.1} attempts each)",
+        attempts as f64 / R as f64
+    );
+    println!("fold                       {:>8.2} ms", f.total_ms);
+    for (name, ms) in [
+        ("challenge NTTs", f.challenge_ntt_ms),
+        ("accumulation", f.accumulate_ms),
+        ("inverse NTT (q1)", f.inverse_ntt_ms),
+        ("forward NTT (q2)", f.forward_q2_ms),
+        ("y = A v", f.y_ms),
+    ] {
+        println!("  {name:<24} {ms:>8.2} ms");
+    }
+    println!(
+        "prover total               {:>8.2} ms   (commit_into_aux + fold)",
+        keep + f.total_ms
+    );
+    println!(
+        "v: {} ring elements of R_648 in coefficient form, max |coefficient| = {} (q1/2 = {:.1})",
+        out.v.len(),
+        out.max_abs_v,
+        PRIMES[0] as f64 / 2.0
     );
 }

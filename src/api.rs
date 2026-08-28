@@ -511,6 +511,151 @@ impl CommitmentKey {
         t.total_ms = ms(t_all);
         (VerticallyAlignedMatrix::new(4, r, data), t)
     }
+
+    /// [`commit`](Self::commit), returning the auxiliary data a later folding step
+    /// ([`crate::fold::fold`]) consumes.
+    ///
+    /// The matrix is bit-identical to [`commit`](Self::commit)'s; the only difference is that the
+    /// transform of every ring element is also written out — by the same block sink that feeds the
+    /// base multiplication, with non-temporal stores — so the 85 MB an [`AuxData`] holds for a
+    /// 2^16-element witness cost a few percent rather than the 2.3 ms a separate cached write of
+    /// that size would.
+    pub fn commit_with_aux(
+        &self,
+        witness: &[F162],
+        r: usize,
+    ) -> (
+        VerticallyAlignedMatrix<PowerOfThreeRingElementWithTwoLimbs>,
+        AuxData,
+    ) {
+        let mut aux = AuxData::new(self.len_ring(), r);
+        let c = self.commit_into_aux(witness, r, &mut aux);
+        (c, aux)
+    }
+
+    /// [`commit_with_aux`](Self::commit_with_aux) writing into a buffer the caller already owns.
+    ///
+    /// The 85 MB an [`AuxData`] holds for a 2^16-element witness is one `mmap` and 20 736 first
+    /// touches, ~20 ms of page faults the kernel charges to whoever writes the pages first — more
+    /// than the commitment itself. A prover that folds repeatedly allocates one [`AuxData::new`]
+    /// and reuses it, and then keeping the witness costs what it should: the non-temporal stores,
+    /// which hide behind the transform.
+    pub fn commit_into_aux(
+        &self,
+        witness: &[F162],
+        r: usize,
+        aux: &mut AuxData,
+    ) -> VerticallyAlignedMatrix<PowerOfThreeRingElementWithTwoLimbs> {
+        assert!(r.is_power_of_two(), "r must be a power of two");
+        assert_eq!(
+            witness.len(),
+            r * self.len_f162,
+            "witness must be r * len_f162() elements ({} * {})",
+            r,
+            self.len_f162
+        );
+        let bpc = self.a[0].len();
+        assert!(
+            aux.chunks == r && aux.batches.len() == r * bpc,
+            "the auxiliary buffer does not match this key and r"
+        );
+        aux.raw[0].clear();
+        aux.raw[1].clear();
+        let mut data = Vec::with_capacity(4 * r);
+        for c in 0..r {
+            let chunk = &witness[c * self.len_f162..(c + 1) * self.len_f162];
+            let (y3, y9) = cm::commit_2q_keep(
+                chunk,
+                &self.a[0],
+                &self.a[1],
+                &mut aux.batches[c * bpc..(c + 1) * bpc],
+            );
+            let d3 = decompose_components::<{ PRIMES[0] }>(&y3);
+            let d9 = decompose_components::<{ PRIMES[1] }>(&y9);
+            for k in 0..4 {
+                data.push(PowerOfThreeRingElementWithTwoLimbs {
+                    limb: [d3[k], d9[k]],
+                });
+            }
+            aux.raw[0].push(y3);
+            aux.raw[1].push(y9);
+        }
+        VerticallyAlignedMatrix::new(4, r, data)
+    }
+}
+
+/// `n` `Batch32`s whose 41472 bytes each are never read before the kernel writes them (zeroing
+/// 85 MB would cost 4 ms of the very DRAM traffic the non-temporal stores are there to avoid).
+fn uninit_batches(n: usize) -> Vec<Batch32> {
+    let mut v: Vec<Batch32> = Vec::with_capacity(n);
+    unsafe {
+        let p = v.as_mut_ptr();
+        for i in 0..n {
+            (*p.add(i)).representation = Representation::Ntt;
+        }
+        v.set_len(n);
+    }
+    v
+}
+
+// =============================================================================================
+// the auxiliary data
+// =============================================================================================
+
+/// Everything a commitment leaves behind that the folding step ([`crate::fold`]) needs, and
+/// nothing a caller has to look inside: the witness's transform modulo `PRIMES[0]` in the layout
+/// the kernel produced it, and the raw 648-slot commitments of the `r` chunks for both primes.
+///
+/// Produced by [`CommitmentKey::commit_with_aux`] as a by-product of the commitment itself, so it
+/// costs a memory stream rather than a second transform. For 2^16 ring elements it holds 2048
+/// `Batch32` = 85 MB.
+pub struct AuxData {
+    /// The transform, `batches[b].v[u][p]` = slot `u` of ring element `32 b + p`, lazily reduced
+    /// (`|v| <= 7.5 q`, the binary kernel's declared output bound).
+    pub(crate) batches: Vec<Batch32>,
+    /// `raw[k][j]` = the commitment of chunk `j` modulo `PRIMES[k]`, 648 slots in `[0, q)`.
+    pub(crate) raw: [Vec<[u32; N]>; 2],
+    pub(crate) chunks: usize,
+}
+
+impl AuxData {
+    /// An empty buffer for `r` chunks of `len_ring` ring elements each, to be filled by
+    /// [`CommitmentKey::commit_into_aux`]. The `Batch32`s are left uninitialised: the kernel
+    /// writes every one of their 41472 bytes before anything reads them, and zeroing 85 MB would
+    /// cost more than the commitment.
+    pub fn new(len_ring: usize, r: usize) -> AuxData {
+        assert!(r > 0 && len_ring > 0 && len_ring % 32 == 0);
+        AuxData {
+            batches: uninit_batches(r * len_ring / 32),
+            raw: [Vec::with_capacity(r), Vec::with_capacity(r)],
+            chunks: r,
+        }
+    }
+
+    /// Number of chunks the witness was split into (`r`).
+    pub fn chunks(&self) -> usize {
+        self.chunks
+    }
+    /// Bytes of witness transform held.
+    pub fn bytes(&self) -> usize {
+        self.batches.len() * core::mem::size_of::<Batch32>()
+    }
+    /// `Batch32`s per chunk: `len_ring / 32`, 8 for a 1024-`F162` key.
+    pub fn batches_per_chunk(&self) -> usize {
+        self.batches.len() / self.chunks
+    }
+    /// Batch `i` of the kept transform, `32 i` .. `32 i + 32` in witness order; chunk `j` is
+    /// batches `j * batches_per_chunk()` onward. Read-only, for checking the fold against
+    /// [`crate::scalar`].
+    pub fn batch(&self, i: usize) -> &Batch32 {
+        &self.batches[i]
+    }
+    /// The commitment of chunk `j` modulo [`PRIMES`]`[k]`: 648 slots in `[0, q)`, before the
+    /// four-way decomposition. This is the form the fold's consistency identity
+    /// `A v = sum_j c_j C_j` lives in.
+    pub fn commitment(&self, k: usize, j: usize) -> &[u32; N] {
+        &self.raw[k][j]
+    }
 }
 
 fn ms(t: Instant) -> f64 {
