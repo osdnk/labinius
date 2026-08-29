@@ -124,5 +124,20 @@ one 128-`F162` batch, fewer than two columns, more columns than elements, or a r
   `zmm`, 12 unreduced `clmul` products per block and a single reduction at the end of the whole
   product. The witness never leaves its own layout; it is transposed 8 elements at a time inside
   the loop.
-* **The moduli, cheapest first.** 2917 ~ 3889 ~ 4861 < 9721 < 12637: a quadratic-slot modulus
-  wins on the transform and gives most of it back on the base multiplication.
+* **The moduli, quantified.** Committing 2^18 `F162` modulo the base 3889 alone takes 7.5 ms;
+  each extra modulus adds its own transform and base multiplication on the shared front end
+  (wall clock, one core; the cycle columns are per ring element, cache-resident):
+
+  | modulus | slots | added to `commit` | transform + front end | base multiplication |
+  |---------|-------|------------------:|----------------------:|--------------------:|
+  | 2917    | quadratic | +6.0 ms | 302 cycles | 100 cycles |
+  | 4861    | quadratic | +6.0 ms | 302 | 100 |
+  | 3889 (base) | linear | 7.5 ms | 316 | 58 |
+  | 9721    | linear | +6.4 ms | 345 | 58 |
+  | 12637   | quadratic | +6.9 ms | 324 | 100 |
+
+  A quadratic-slot modulus saves 14-43 cycles on the transform (648 lookups instead of 1080,
+  and 2917 / 4861 reduce nowhere) and gives 42 back in the base multiplication (three sums per
+  two rows instead of one per row), so 2917, 4861 and 3889 cost the same within 1 %, 9721 is
+  5 % dearer and 12637, which reduces on three levels, 13 %. All four extra moduli together:
+  35.2 ms.
