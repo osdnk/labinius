@@ -91,9 +91,21 @@ The host must have AVX-512 F/BW/VBMI/VBMI2/VNNI/GFNI, and the crate is built wit
 
 ## Changing the configuration
 
-`src/main.rs` takes no arguments: edit `MATRIX_SEED`, `WITNESS_SEED` and `CPU` at the top of the
-file, and `Params::basic()` for the shape. Other shapes come from
-`Params::new(witness_log_len, column_log_len, extra_moduli)`, which refuses a column shorter than
+`src/main.rs` takes no arguments; the configuration is the block of constants at the top of the
+file:
+
+```rust
+const WITNESS_LOG_LEN: u32 = 18;                      // 2^18 elements of F162
+const COLUMN_LOG_LEN: u32 = 8;                        // 256 columns
+const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721];   // plus the fixed base modulus 3889
+const MATRIX_SEED: [u8; 32] = [0x5A; 32];
+const WITNESS_SEED: [u8; 32] = [0xC7; 32];
+const CPU: usize = 2;
+```
+
+`EXTRA_MODULI` is any subset of `Modulus::{Q2917, Q4861, Q9721, Q12637}` (see the last
+implementation note for what each one costs); `Params::basic()` is this same shape for library
+users. `Params::new(witness_log_len, column_log_len, extra_moduli)` refuses a column shorter than
 one 128-`F162` batch, fewer than two columns, more columns than elements, or a repeated modulus.
 
 ## Implementation notes

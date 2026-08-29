@@ -1,8 +1,8 @@
 //! The reference usage: one round end to end, with the wall clock on every step.
 //!
 //! `cargo run --release --offline`, pinned with `taskset -c 2`. The configuration is the three
-//! constants below and [`Params::basic`]; edit them to change it.
-use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+//! constants below; edit them to change it (`Params::basic()` is the same shape as the defaults).
+use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
 /// The seed the public matrix `A` is expanded from.
@@ -11,6 +11,13 @@ const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
 /// The core the process pins itself to.
 const CPU: usize = 2;
+
+/// The shape of the instance: 2^WITNESS_LOG_LEN elements of F162 in 2^COLUMN_LOG_LEN columns,
+/// committed modulo the base modulus 3889 and every modulus listed in EXTRA_MODULI
+/// (any subset of Modulus::{Q2917, Q4861, Q9721, Q12637}).
+const WITNESS_LOG_LEN: u32 = 18;
+const COLUMN_LOG_LEN: u32 = 8;
+const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721];
 
 extern "C" {
     fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;
@@ -46,7 +53,7 @@ fn row(name: &str, milliseconds: f64) {
 fn main() {
     pin(CPU);
 
-    let params = Params::basic();
+    let params = Params::new(WITNESS_LOG_LEN, COLUMN_LOG_LEN, EXTRA_MODULI.to_vec()).expect("valid parameters");
     let public_parameters = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&public_parameters);
