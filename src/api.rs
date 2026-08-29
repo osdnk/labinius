@@ -386,7 +386,7 @@ pub(crate) fn decompose_components_quad<const Q: u16>(
 }
 
 /// The four components of a commitment for any limb, split or quadratic, dispatched on the prime.
-pub(crate) fn components_of(q: u16, quad: bool, y: &[u32; N]) -> [PowerOfThreeRingElement; 4] {
+pub fn components_of(q: u16, quad: bool, y: &[u32; N]) -> [PowerOfThreeRingElement; 4] {
     match (q, quad) {
         (3889, false) => decompose_components::<3889>(y),
         (9721, false) => decompose_components::<9721>(y),

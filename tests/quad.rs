@@ -296,34 +296,93 @@ impl<const Q: u16> Shadow<Q> {
         let kappa = [z6, (1 + q - z6) % q];
         let bar = vq::bar_levels(Q);
         let mut v = [0i16; N];
-        // levels 0 + 1 + the folded level-2 twiddle, as the 16-entry table would give them
-        for k in 0..4 {
+        let om = ParamsQ::<Q>::OMEGA as u64;
+        // levels 0 + 1 as the 16-entry table gives them, before any folded twiddle
+        let base_of = |k: usize, i: usize| -> u64 {
             let (s0, s1) = (k / 2, k % 2);
             let z1 = ParamsQ::<Q>::ZETA_L1[s0] as u64;
-            let z2 = ParamsQ::<Q>::ZETA_L2[k] as u64;
-            for i in 0..162 {
-                let n = [i, i + 162, i + 324, i + 486].map(|c| poly[c] as u64);
-                let inner = z1 * ((n[1] + kappa[s0] * n[3]) % q) % q;
-                let t = if s1 == 0 { inner } else { (q - inner) % q };
-                let base = ((n[0] + kappa[s0] * n[2]) % q + t) % q;
-                let f = pow_mod(z2, (i / 54) as u64, q);
-                v[162 * k + i] = self.see(center(base * f % q, q) as i32);
+            let n = [i, i + 162, i + 324, i + 486].map(|c| poly[c] as u64);
+            let inner = z1 * ((n[1] + kappa[s0] * n[3]) % q) % q;
+            let t = if s1 == 0 { inner } else { (q - inner) % q };
+            ((n[0] + kappa[s0] * n[2]) % q + t) % q
+        };
+        if vq::fold3(Q) {
+            // level 2 straight out of the tables: output s of position i is the sum of three
+            // lookups carrying zeta2^r omega^{r s} zeta3^{i/18}
+            for k in 0..4 {
+                let z2 = ParamsQ::<Q>::ZETA_L2[k] as u64;
+                for s in 0..3 {
+                    let z3 = ParamsQ::<Q>::ZETA_L3[3 * k + s] as u64;
+                    for i in 0..54 {
+                        let e = |r: usize| -> i32 {
+                            let g = pow_mod(z2, r as u64, q) * pow_mod(om, (r * s) as u64, q) % q
+                                * pow_mod(z3, (i / 18) as u64, q)
+                                % q;
+                            center(base_of(k, i + 54 * r) * g % q, q) as i32
+                        };
+                        let x = self.see(e(0) + e(1));
+                        v[162 * k + 54 * s + i] = self.see(x as i32 + e(2));
+                    }
+                }
             }
-        }
-        // level 2: omega-only radix-3 on (i, i+54, i+108)
-        for k in 0..4 {
-            for i in 0..54 {
-                let b = 162 * k + i;
-                let (t1, t2) = (v[b + 54], v[b + 108]);
-                let d = self.see(t1 as i32 - t2 as i32);
-                let u = self.mont(d, ParamsQ::<Q>::OMEGA);
-                let a0 = v[b];
-                v[b] = self.see(a0 as i32 + t1 as i32 + t2 as i32);
-                v[b + 54] = self.see(a0 as i32 - t2 as i32 + u as i32);
-                v[b + 108] = self.see(a0 as i32 - t1 as i32 - u as i32);
+        } else {
+            for k in 0..4 {
+                let z2 = ParamsQ::<Q>::ZETA_L2[k] as u64;
+                for i in 0..162 {
+                    let f = pow_mod(z2, (i / 54) as u64, q);
+                    v[162 * k + i] = self.see(center(base_of(k, i) * f % q, q) as i32);
+                }
+            }
+            // level 2: omega-only radix-3 on (i, i+54, i+108)
+            for k in 0..4 {
+                for i in 0..54 {
+                    let b = 162 * k + i;
+                    let (t1, t2) = (v[b + 54], v[b + 108]);
+                    let d = self.see(t1 as i32 - t2 as i32);
+                    let u = self.mont(d, ParamsQ::<Q>::OMEGA);
+                    let a0 = v[b];
+                    v[b] = self.see(a0 as i32 + t1 as i32 + t2 as i32);
+                    v[b + 54] = self.see(a0 as i32 - t2 as i32 + u as i32);
+                    v[b + 108] = self.see(a0 as i32 - t1 as i32 - u as i32);
+                }
             }
         }
         self.level_max(0, &v);
+        if vq::fold3(Q) {
+            // level 3: omega-only radix-3 on (i, i+18, i+36) of each 54-block
+            for base in (0..N).step_by(54) {
+                for i in 0..18 {
+                    let (t1, t2) = (v[base + i + 18], v[base + i + 36]);
+                    let d = self.see(t1 as i32 - t2 as i32);
+                    let u = self.mont(d, ParamsQ::<Q>::OMEGA);
+                    let a0 = v[base + i];
+                    v[base + i] = self.see(a0 as i32 + t1 as i32 + t2 as i32);
+                    v[base + i + 18] = self.see(a0 as i32 - t2 as i32 + u as i32);
+                    v[base + i + 36] = self.see(a0 as i32 - t1 as i32 - u as i32);
+                }
+            }
+            self.level_max(1, &v);
+            for (l, (blk, level)) in [(18usize, 4usize), (6, 5)].iter().enumerate() {
+                let m = blk / 3;
+                for base in (0..N).step_by(*blk) {
+                    let zeta = ParamsQ::<Q>::zeta(*level, base / blk);
+                    for i in 0..m {
+                        let (o0, o1, o2) = self.r3(
+                            v[base + i],
+                            v[base + i + m],
+                            v[base + i + 2 * m],
+                            zeta,
+                            bar[l + 1],
+                        );
+                        v[base + i] = o0;
+                        v[base + i + m] = o1;
+                        v[base + i + 2 * m] = o2;
+                    }
+                }
+                self.level_max(l + 2, &v);
+            }
+            return v;
+        }
         for (l, (blk, level)) in [(54usize, 3usize), (18, 4), (6, 5)].iter().enumerate() {
             let m = blk / 3;
             for base in (0..N).step_by(*blk) {

@@ -59,21 +59,21 @@ once each because the fold consumes the opening.
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit` | 15.04 |
-| `row_evaluate` | 0.29 |
-| `fold` | 4.53 |
-| *total* | *19.87* |
+| `commit` | 13.17 |
+| `row_evaluate` | 0.28 |
+| `fold` | 4.52 |
+| *total* | *17.96* |
 | **statement** | |
-| `derive_evaluation_point` | 0.55 |
-| `mle_evaluate` | 0.31 |
-| *total* | *0.86* |
+| `derive_evaluation_point` | 0.53 |
+| `mle_evaluate` | 0.29 |
+| *total* | *0.82* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.18 |
+| `derive_folding_challenges` | 1.15 |
 | `fold_commitment` | 0.30 |
 | `fold_row_evaluation` | 0.00 |
 | `verify_evaluation` | 0.01 |
-| `verify_folded_opening` | 0.33 |
-| *total* | *1.81* |
+| `verify_folded_opening` | 0.32 |
+| *total* | *1.78* |
 
 `Prover::new` allocates and first-touches the 85 MB workspace and runs one commitment and one
 fold to bring the kernels and the rejection tables up; `Prover::fold` hands the workspace back, so
@@ -115,41 +115,62 @@ one 128-`F162` batch, fewer than two columns, more columns than elements, or a r
   shuffle ever crosses a polynomial boundary.
 * **The binary lookup trick.** The NTT is linear and the inputs are bits, so levels 0 and 1 of
   the tree collapse into one 16-entry table lookup per output vector, indexed by the nibble the
-  bit-slicing front end already produces; the twiddles of levels 2 and 3 are pre-multiplied into
-  those tables. Multiplications per ring element drop from 3564 to 2160.
+  bit-slicing front end already produces; the twiddles of the next levels are pre-multiplied into
+  those tables. Montgomery products per batch of 32 drop from 3564 to 2160 — and to 1512 on the
+  quadratic tree, where the level-3 twiddles fold in too if the level-2 butterfly is replaced by
+  the sum it computes: three lookups and two adds per output row out of 108 tables, and levels 2
+  and 3 between them are left with one multiplication instead of seven.
 * **Per-modulus reduction schedules.** Each prime reduces only where its `2^15/q` head-room runs
-  out: 2917, 3889 and 4861 need no reduction anywhere inside the binary kernel, 9721 and 12637
-  need a lookup Barrett on one or three levels, and each accumulator gets its own fold-back
-  period from its own compile-time bound.
+  out: 2917 and 3889 need no reduction anywhere inside the binary kernel, 4861 and 9721 need a
+  lookup Barrett on one level and 12637 on three, and each accumulator gets its own fold-back
+  period from its own compile-time bound. The schedule is chosen by a `const` recursion over the
+  exact bounds, and the folded-twiddle phase 1 above is used only where its wider intermediates
+  still fit (which is why 12637 does not get it).
 * **Block-fused base multiplication.** The kernel hands out 27 finished slot vectors at a time
-  and a hook multiplies them against `A` and accumulates on the spot with `vpdpwssd`, so the
-  transform output never reaches memory and only `A` streams. A quadratic-slot modulus carries
-  three sums per two rows, formed by Karatsuba where the lazily reduced operand still fits i16
-  and schoolbook where it does not.
+  (18 on the quadratic tree) and a hook multiplies them against `A` and accumulates on the spot,
+  so the transform output never reaches memory and only `A` streams. A quadratic-slot modulus
+  carries three sums per two rows — the quadratic product has bilinear rank 3 — formed by
+  Karatsuba where the lazily reduced operand still fits i16 and schoolbook where it does not.
+  Prefetching the `A` a block will read one batch later is worth 0.5 ms per limb when `A` is a
+  real stream and costs 0.2 ms when a key has enough columns for it to stay in cache, so the
+  batch loop is compiled both ways and picks on the footprint.
+* **The fold-down is vectorised.** A key with `r` columns folds its accumulators down `r` times,
+  not once, so the eight lanes of a slot are summed in three `vpermt2d` stages and reduced sixteen
+  at a time through the double unit rather than in scalar i64: 45 to 7 cycles per ring element
+  for a splitting limb and 32 to 16 for a quadratic one.
 * **The fold is one 85 MB read.** The commitment writes the base-modulus transform of the witness
   out as it goes, with non-temporal stores hidden behind the transform, so the fold never
   transforms anything again: it is one `vpmaddwd` per slot vector and pair of columns over a
   single pass of that buffer, and the result comes back to coefficients as a genuine small
   integer vector.
+* **A reference kernel next to the generated one.** `simd::vertical_bin` is the pure-intrinsics
+  implementation of the same split-tree binary kernel — one Rust expression per butterfly, and the
+  two-multiply Barrett on the untwiddled `a0` of levels 4, 5 and 6 for q = 9721 — kept out of the
+  production path but checked against `vertical_bin_asm` on every test run: bit-identical for
+  q = 3889, equal modulo q for q = 9721, where the `asm!` kernel's lookup Barrett leaves smaller
+  representatives.
 * **Word-sliced `F162` arithmetic.** The binary side is one dot product over `F162` per step,
   computed with `bin_fields`' word-sliced kernels — limb `k` of 8 consecutive elements in one
   `zmm`, 12 unreduced `clmul` products per block and a single reduction at the end of the whole
   product. The witness never leaves its own layout; it is transposed 8 elements at a time inside
   the loop.
-* **The moduli, quantified.** Committing 2^18 `F162` modulo the base 3889 alone takes 7.5 ms;
-  each extra modulus adds its own transform and base multiplication on the shared front end
-  (wall clock, one core; the cycle columns are per ring element, cache-resident):
+* **The moduli, quantified.** Committing 2^18 `F162` in 256 columns modulo the base 3889 alone
+  takes 7.3 ms; each extra modulus adds its own transform, base multiplication and fold-down on
+  the shared front end (wall clock, one core, best of 15; the cycle columns are per ring element,
+  cache-resident):
 
-  | modulus | slots | added to `commit` | transform + front end | base multiplication |
-  |---------|-------|------------------:|----------------------:|--------------------:|
-  | 2917    | quadratic | +6.0 ms | 302 cycles | 100 cycles |
-  | 4861    | quadratic | +6.0 ms | 302 | 100 |
-  | 3889 (base) | linear | 7.5 ms | 316 | 58 |
-  | 9721    | linear | +6.4 ms | 345 | 58 |
-  | 12637   | quadratic | +6.9 ms | 324 | 100 |
+  | modulus | slots | added to `commit` | transform | base multiplication | fold-down |
+  |---------|-------|------------------:|----------:|--------------------:|----------:|
+  | 2917    | quadratic | +5.97 ms | 247 cycles | 74 cycles | 17 cycles |
+  | 4861    | quadratic | +6.29 ms | 254 | 74 | 17 |
+  | 3889 (base) | linear | 7.34 ms | 280 | 58 | 7 |
+  | 9721    | linear | +6.50 ms | 304 | 58 | 7 |
+  | 12637   | quadratic | +7.19 ms | 291 | 75 | 16 |
 
-  A quadratic-slot modulus saves 14-43 cycles on the transform (648 lookups instead of 1080,
-  and 2917 / 4861 reduce nowhere) and gives 42 back in the base multiplication (three sums per
-  two rows instead of one per row), so 2917, 4861 and 3889 cost the same within 1 %, 9721 is
-  5 % dearer and 12637, which reduces on three levels, 13 %. All four extra moduli together:
-  35.2 ms.
+  The front end costs 31 more cycles per ring element and is paid once however many moduli
+  follow. A quadratic-slot modulus runs a shorter tree — one radix-2 level fewer, and for 2917
+  and 4861 two thirds of the Montgomery products of a splitting one — but pays for it in the base
+  multiplication, where three sums per two rows cost 16 cycles more than one sum per row, and in
+  the fold-down, which has three accumulators to reduce instead of one. 2917 is the cheapest
+  modulus there is, 4861 and 9721 sit within 3 % of each other, and 12637 — three Barretts inside
+  the kernel, and an accumulator it has to fold back every batch — is 20 % dearer than 2917. All four extra moduli together: 35.9 ms.

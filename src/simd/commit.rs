@@ -61,23 +61,29 @@
 //! 85 MB of writes and 85 MB of reads and is DRAM-bound; one 41 KB buffer per batch 645 / 687;
 //! per block, which is what this module does, 630 / 664.
 //!
-//! # Prefetching A
+//! # Prefetching A, when there is an A stream to prefetch
 //!
 //! Per-block consumption is also what makes the A stream hideable. [`mac27`] issues one
 //! `prefetcht1` per cache line it will read one batch later, 27 per block, so the 648 lines of the
 //! next batch's A are requested at a steady ~1 per 20 cycles across the whole batch instead of in
-//! one burst: 630 -> 479 cycles per ring element for q = 3889. The same 648 prefetches issued at
-//! once from the batch-fused accumulate loop are worth nothing. Prefetch distances of 1, 2 and 3
-//! batches are equal within noise and 6 is worse; `prefetchnta` is a disaster (the A lines have to
-//! survive in L2 until the accumulate reads them).
+//! one burst: 630 -> 479 cycles per ring element for q = 3889 when A really is 85 MB read once.
+//! The same 648 prefetches issued at once from the batch-fused accumulate loop are worth nothing.
+//! Prefetch distances of 1, 2 and 3 batches are equal within noise and 6 is worse; `prefetchnta`
+//! is a disaster (the A lines have to survive in L2 until the accumulate reads them).
 //!
-//! # Measured (i7-11850H, one core, 2^18 F162 = 2^16 ring elements, 85 MB of A per prime)
+//! A key commits `r` columns against the *same* A, though, so what the prefetch is worth depends
+//! on the shape: at 2^18 `F162` in 256 columns A is 8 batches, 331 KB per limb, and stays in cache
+//! from one column to the next — there the 648 `prefetcht1` per batch buy nothing and cost 0.2 ms
+//! per limb. [`A_PREFETCH_BYTES`] is the footprint above which they pay for themselves, and
+//! [`batch_loop`] is compiled both ways around it (measured, 2^18 `F162`, base limb: 16 columns
+//! 7.8 ms with the prefetch against 8.3 without, 256 columns 7.1 against 7.3).
 //!
-//! A single-prime commitment runs at 7.5 ms / 479 cycles per ring element for q = 3889 and
-//! 7.9 ms / 499 for q = 9721; two primes off one slicing pass cost 483 cycles per ring element
-//! and prime. Of the 479 cycles, 309 are the front end plus the transform (cache-resident) and 58
-//! the base multiplication, leaving 112 of A stream that does not hide behind them; the floor is
-//! max(DRAM 4.4 ms, compute 5.9 ms).
+//! # Measured (i7-11850H, one core, 2^18 F162 = 2^16 ring elements in 256 columns)
+//!
+//! `commit` runs at 7.2 ms for the base limb alone and adds 6.0 (2917), 6.3 (4861), 6.5 (9721)
+//! and 7.2 (12637) per further limb. Per ring element and limb: 248-291 cycles of transform,
+//! 58 (splitting) or 74 (quadratic) of base multiplication, 7 or 16 of [`finish`], and the front
+//! end's 32 once for all of them.
 use crate::params::*;
 use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::transpose_f162::slice_f162_into;
@@ -281,18 +287,106 @@ pub unsafe fn reduce_acc<const Q: u16>(acc: *mut i32) {
     }
 }
 
-/// Sum of the 8 lanes of every slot, reduced to [0, q). Done once per commitment in scalar code
-/// (5184 i64 additions), so its cost is not measurable.
+// =============================================================================================
+// the horizontal finish
+// =============================================================================================
+//
+// The accumulator is folded down once per chunk of columns, not once per commitment: 648 slots
+// against 256 ring elements, so a scalar sum of eight i64 lanes and an i64 `rem_euclid` per slot
+// cost 45 cycles per ring element (measured), a tenth of the whole base limb. Both finishes are
+// therefore vectorised, and the only scalar work left is one combine per quadratic leaf.
+//
+// [`reduce_vec`] first: it brings a lane to `|x| <= 2^15 (1 + R)`, which is at most 2.4e8 for the
+// five primes, so the eight lanes of a group sum inside i32 (1.9e9 for the worst, q = 9721) and
+// the whole fold is 32-bit. [`hsum8`] then turns eight accumulator vectors into the sixteen sums
+// of their lane groups — `lane 2k` the low group of vector `k`, `lane 2k + 1` the high one — in
+// three `vpermt2d` stages, 21 shuffle/add uops for 16 sums against the 112 the scalar form needs,
+// and [`mod_q`] reduces sixteen of them to [0, q) at once through the double unit (`x` and `q`
+// are exact in f64, so `x - q floor(x/q)` is exact and the two masked corrections cover the one
+// rounding case, `x` an exact multiple of q).
+
+const HS_IDX: [[i32; 16]; 6] = [
+    [0, 1, 2, 3, 16, 17, 18, 19, 8, 9, 10, 11, 24, 25, 26, 27],
+    [4, 5, 6, 7, 20, 21, 22, 23, 12, 13, 14, 15, 28, 29, 30, 31],
+    [0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29],
+    [2, 3, 6, 7, 10, 11, 14, 15, 18, 19, 22, 23, 26, 27, 30, 31],
+    [0, 4, 2, 6, 8, 12, 10, 14, 16, 20, 18, 22, 24, 28, 26, 30],
+    [1, 5, 3, 7, 9, 13, 11, 15, 17, 21, 19, 23, 25, 29, 27, 31],
+];
+
+/// One stage of [`hsum8`]: halve the width of every partial sum in `a` and `b` at once.
+#[inline(always)]
+unsafe fn hs<const S: usize>(a: __m512i, b: __m512i) -> __m512i {
+    let lo = _mm512_loadu_si512(HS_IDX[2 * S].as_ptr() as *const __m512i);
+    let hi = _mm512_loadu_si512(HS_IDX[2 * S + 1].as_ptr() as *const __m512i);
+    _mm512_add_epi32(
+        _mm512_permutex2var_epi32(a, lo, b),
+        _mm512_permutex2var_epi32(a, hi, b),
+    )
+}
+
+/// The 16 lane-group sums of 8 consecutive accumulator vectors: lane `2k` is the sum of lanes
+/// 0..8 of vector `k`, lane `2k + 1` the sum of its lanes 8..16, each folded back first.
+///
+/// # Safety
+/// `p` must be 64-byte aligned and cover 8 vectors.
+#[inline(always)]
+unsafe fn hsum8<const Q: u16>(p: *const i32) -> __m512i {
+    let v = |k: usize| reduce_vec::<Q>(_mm512_load_si512(p.add(16 * k) as *const __m512i));
+    let r0 = hs::<0>(v(0), v(1));
+    let r1 = hs::<0>(v(2), v(3));
+    let r2 = hs::<0>(v(4), v(5));
+    let r3 = hs::<0>(v(6), v(7));
+    hs::<2>(hs::<1>(r0, r1), hs::<1>(r2, r3))
+}
+
+/// `x mod q` in [0, q) for eight i32 lanes held as doubles.
+#[inline(always)]
+unsafe fn mod_q_pd<const Q: u16>(v: __m512d) -> __m256i {
+    let q = _mm512_set1_pd(Q as f64);
+    let t = _mm512_roundscale_pd::<0x09>(_mm512_mul_pd(v, _mm512_set1_pd(1.0 / Q as f64)));
+    let r = _mm512_fnmadd_pd(t, q, v);
+    let r = _mm512_mask_add_pd(r, _mm512_cmp_pd_mask::<_CMP_LT_OQ>(r, _mm512_setzero_pd()), r, q);
+    let r = _mm512_mask_sub_pd(r, _mm512_cmp_pd_mask::<_CMP_NLT_UQ>(r, q), r, q);
+    _mm512_cvttpd_epi32(r)
+}
+
+/// `x mod q` in [0, q) for 16 i32 lanes, `|x| < 2^31`.
+#[inline(always)]
+unsafe fn mod_q<const Q: u16>(x: __m512i) -> __m512i {
+    let lo = mod_q_pd::<Q>(_mm512_cvtepi32_pd(_mm512_castsi512_si256(x)));
+    let hi = mod_q_pd::<Q>(_mm512_cvtepi32_pd(_mm512_extracti64x4_epi64::<1>(x)));
+    _mm512_inserti64x4::<1>(_mm512_castsi256_si512(lo), hi)
+}
+
+/// Sum of the 8 lanes of every slot, reduced to [0, q).
 pub fn finish<const Q: u16>(acc: &Acc) -> [u32; N] {
-    let q = Q as i64;
+    unsafe { finish_vec::<Q>(acc) }
+}
+
+/// A block's 14 accumulator vectors are 28 lane groups and 27 slots, the last group being the
+/// duplicate [`slot_lane`] parks in vector 13: the first [`hsum8`] gives slots 0..16 of the block
+/// and a second one, started six vectors in, gives 12..28, of which lanes 4..15 are wanted.
+///
+/// # Safety
+/// AVX-512 F/BW.
+#[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn finish_vec<const Q: u16>(acc: &Acc) -> [u32; N] {
+    let shift = _mm512_loadu_si512(HS_SHIFT4.as_ptr() as *const __m512i);
     let mut y = [0u32; N];
-    for s in 0..N {
-        let (v, g) = slot_lane(s);
-        let t: i64 = acc.v[v][8 * g..8 * g + 8].iter().map(|&x| x as i64).sum();
-        y[s] = t.rem_euclid(q) as u32;
+    let p = acc.v.as_ptr() as *const i32;
+    for bl in 0..24 {
+        let base = 16 * ACC_PER_BLK * bl;
+        let lo = mod_q::<Q>(hsum8::<Q>(p.add(base)));
+        let hi = mod_q::<Q>(hsum8::<Q>(p.add(base + 16 * 6)));
+        let o = y.as_mut_ptr().add(27 * bl) as *mut i32;
+        _mm512_storeu_si512(o as *mut __m512i, lo);
+        _mm512_mask_storeu_epi32(o.add(16), 0x07ff, _mm512_permutexvar_epi32(shift, hi));
     }
     y
 }
+
+const HS_SHIFT4: [i32; 16] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0, 0, 0, 0, 0];
 
 // =============================================================================================
 // the sink
@@ -305,14 +399,14 @@ struct Blk27([i16; 27 * 32]);
 /// The multiply-accumulate sink: the kernel writes every 27-slot block into the same L1-resident
 /// scratch, and this multiplies it into the accumulator against the batch's A rows (prefetching
 /// a later batch's) before the next `asm!` block starts.
-struct Mac {
+struct Mac<const PF: bool> {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
     acc: *mut i32,
 }
 
-impl BlockSink for Mac {
+impl<const PF: bool> BlockSink for Mac<PF> {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -335,7 +429,7 @@ impl BlockSink for Mac {
 /// there, so the accumulate is unchanged; the extra work is 27 `vmovntdq` per block, 41472 bytes
 /// per batch, which leave no cache footprint and are absorbed by the write-combining buffers
 /// while the transform of the next block runs.
-struct MacKeep {
+struct MacKeep<const PF: bool> {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
@@ -343,7 +437,7 @@ struct MacKeep {
     out: *mut i16,
 }
 
-impl BlockSink for MacKeep {
+impl<const PF: bool> BlockSink for MacKeep<PF> {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -416,6 +510,16 @@ pub const PF_DIST: usize = 1;
 // leaves (5 per block, the ninth leaf duplicated into the upper half as slot 26 is in `mac27`),
 // so a block costs 14 accumulator vectors exactly as a 27-slot block of the splitting kernel
 // does. 36 blocks: 32.3 KB, L1-resident. A lane again carries four products per batch.
+//
+// **Why three and not two.** The quadratic product has bilinear rank 3, so three sums have to be
+// carried; with 8 lanes each that is 1.5 vectors per leaf, and the only way to two vectors per two
+// leaves is to give the two of them matching scales — `acc_0 = sum a_0 b_0 + sum (c a_1) b_1`,
+// `acc_1 = sum a_0 b_1 + sum a_1 b_0`. That form measures 65.5 cycles per ring element against
+// this one's 74.7 (10 ALU uops per leaf against 11, 23 KB of accumulator against 32.3), but it
+// needs `c a_1` next to `a_1`: either 324 more Montgomery products per batch out of the kernel,
+// which is 40 uops per ring element and at least 20 cycles against the 9 saved, or a third A row
+// per leaf, which is 50 % more of the one stream that is DRAM-bound when a key has few columns.
+// Three accumulators it is.
 
 use crate::simd::vertical_bin_quad::{self as vq, BlockSink as QBlockSink};
 
@@ -428,8 +532,9 @@ pub const fn w_bound_quad(q: u16) -> i64 {
 pub const fn karatsuba(q: u16) -> bool {
     2 * w_bound_quad(q) <= 32767
 }
-const _: () = assert!(karatsuba(2917));
-const _: () = assert!(!karatsuba(4861) && !karatsuba(12637));
+// Which prime gets it follows from the kernel's declared output bound and moves with it: the
+// level-3-folded phase 1 costs 2917 its head-room (6.96 q) and buys 4861 one (3.20 q).
+const _: () = assert!(!karatsuba(2917) && karatsuba(4861) && !karatsuba(12637));
 
 /// What one batch adds to a lane of the `P_0 | P_1` accumulator: four products of `|W| |A|`.
 pub const fn acc_per_batch_quad01(q: u16) -> i64 {
@@ -481,11 +586,15 @@ pub const QBLOCKS: usize = 36;
 #[repr(C, align(64))]
 pub struct QuadAcc {
     /// `p01[9 blk + j]`: lanes 0..8 are `P_0` of leaf `9 blk + j`, lanes 8..16 its `P_1`.
-    pub p01: [[i32; 16]; QBLOCKS * QACC01_PER_BLK],
+    pub p01: [[i32; 16]; QBLOCKS * QACC01_PER_BLK + QPAD],
     /// `p2[5 blk + j/2]`: lanes `8 (j % 2) ..` are `P_2` of leaf `9 blk + j` (leaf 8 in lanes
     /// 0..8, its duplicate in 8..16).
-    pub p2: [[i32; 16]; QBLOCKS * QACC2_PER_BLK],
+    pub p2: [[i32; 16]; QBLOCKS * QACC2_PER_BLK + QPAD],
 }
+
+/// Vectors of zero padding after each quadratic accumulator: neither 324 nor 180 is a multiple of
+/// the eight vectors `hsum8` folds at a time, and the last group of each reads past the end.
+pub const QPAD: usize = 4;
 
 impl QuadAcc {
     pub fn zero() -> Box<QuadAcc> {
@@ -611,25 +720,50 @@ unsafe fn reduce_quad_part<const Q: u16>(acc: *mut i32, vecs: usize) {
 
 /// The three sums per leaf combined into the 648 rows of the commitment, reduced to `[0, q)`:
 /// `y[2j] = P_0 + c_j P_1`, `y[2j+1] = P_2` (minus `P_0 + P_1` when the Karatsuba product was
-/// accumulated). Scalar, once per commitment.
+/// accumulated).
 pub fn finish_quad<const Q: u16>(acc: &QuadAcc) -> [u32; N] {
-    let q = Q as i64;
+    unsafe { finish_quad_vec::<Q>(acc) }
+}
+
+/// Both accumulators are folded to one sum per lane group in [`hsum8`] order, which here is the
+/// leaf order itself: `p01` vector `j` *is* leaf `j`, so its two sums land at `2j` and `2j + 1`,
+/// and the five `p2` vectors of a block hold its nine leaves in their first nine groups. Only the
+/// per-leaf combine — a multiply by the leaf constant and one reduction — stays scalar, on
+/// operands already in [0, q) (`c p_1 + p_0 < q^2 + q`, an i32).
+///
+/// # Safety
+/// AVX-512 F/BW.
+#[target_feature(enable = "avx512f,avx512bw")]
+unsafe fn finish_quad_vec<const Q: u16>(acc: &QuadAcc) -> [u32; N] {
+    const G01: usize = (QBLOCKS * QACC01_PER_BLK + 7) / 8;
+    const G2: usize = (QBLOCKS * QACC2_PER_BLK + 7) / 8;
+    let mut s01 = [0i32; 16 * G01];
+    let mut s2 = [0i32; 16 * G2];
+    let p = acc.p01.as_ptr() as *const i32;
+    for g in 0..G01 {
+        let v = mod_q::<Q>(hsum8::<Q>(p.add(128 * g)));
+        _mm512_storeu_si512(s01.as_mut_ptr().add(16 * g) as *mut __m512i, v);
+    }
+    let p = acc.p2.as_ptr() as *const i32;
+    for g in 0..G2 {
+        let v = mod_q::<Q>(hsum8::<Q>(p.add(128 * g)));
+        _mm512_storeu_si512(s2.as_mut_ptr().add(16 * g) as *mut __m512i, v);
+    }
+
+    let q = Q as i32;
     let mut y = [0u32; N];
     for blk in 0..QBLOCKS {
         for j in 0..QACC01_PER_BLK {
             let leaf = QACC01_PER_BLK * blk + j;
-            let v = &acc.p01[QACC01_PER_BLK * blk + j];
-            let p0: i64 = v[0..8].iter().map(|&x| x as i64).sum();
-            let p1: i64 = v[8..16].iter().map(|&x| x as i64).sum();
-            let g = j % 2;
-            let w = &acc.p2[QACC2_PER_BLK * blk + j / 2];
-            let mut p2: i64 = w[8 * g..8 * g + 8].iter().map(|&x| x as i64).sum();
-            if karatsuba(Q) {
-                p2 -= p0 + p1;
-            }
-            let c = ParamsQ::<Q>::LEAF_C[leaf] as i64;
-            y[2 * leaf] = (p0 + c % q * (p1 % q)).rem_euclid(q) as u32;
-            y[2 * leaf + 1] = p2.rem_euclid(q) as u32;
+            let (p0, p1) = (s01[2 * leaf], s01[2 * leaf + 1]);
+            let p2 = s2[2 * QACC2_PER_BLK * blk + j];
+            let c = ParamsQ::<Q>::LEAF_C[leaf] as i32;
+            y[2 * leaf] = ((p0 + c * p1) % q) as u32;
+            y[2 * leaf + 1] = if karatsuba(Q) {
+                (p2 - p0 - p1).rem_euclid(q) as u32
+            } else {
+                p2 as u32
+            };
         }
     }
     y
@@ -638,7 +772,7 @@ pub fn finish_quad<const Q: u16>(acc: &QuadAcc) -> [u32; N] {
 /// The quadratic multiply-accumulate sink: the same L1 scratch for every block, multiplied into
 /// the three accumulators against the block's A rows (prefetching a later batch's) the moment the
 /// kernel has stored it.
-struct MacQ<const Q: u16> {
+struct MacQ<const Q: u16, const PF: bool> {
     buf: *mut i16,
     a: *const i16,
     apf: *const i8,
@@ -646,7 +780,7 @@ struct MacQ<const Q: u16> {
     acc2: *mut i32,
 }
 
-impl<const Q: u16> QBlockSink for MacQ<Q> {
+impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
     #[inline(always)]
     unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
         self.buf
@@ -671,7 +805,7 @@ impl<const Q: u16> QBlockSink for MacQ<Q> {
 /// `idx` is the batch's index rows; `a` and `apf` are 648-vector A rows; `buf` is 18 writable
 /// 64-byte aligned vectors.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn quad_batch<const Q: u16>(
+unsafe fn quad_batch<const Q: u16, const PF: bool>(
     idx: &BinaryIndex32,
     a: *const i16,
     apf: *const i8,
@@ -682,7 +816,7 @@ unsafe fn quad_batch<const Q: u16>(
 ) {
     vq::ntt_quad_bin_batch32_sink::<Q, _>(
         idx,
-        &mut MacQ::<Q> { buf, a, apf, acc01: p01, acc2: p2 },
+        &mut MacQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2 },
     );
     if done % red_period_quad01(Q) == 0 {
         reduce_quad_part::<Q>(p01, QBLOCKS * QACC01_PER_BLK);
@@ -755,7 +889,7 @@ impl Scratch {
 /// # Safety
 /// As [`quad_batch`]; `out` is 648 writable vectors.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn split_batch<const Q: u16, const KEEP: bool>(
+unsafe fn split_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     idx: &BinaryIndex32,
     a: *const i16,
     apf: *const i8,
@@ -767,10 +901,10 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool>(
     if KEEP {
         vb::ntt_bin_batch32_sink::<Q, _>(
             idx,
-            &mut MacKeep { buf, a, apf, acc, out },
+            &mut MacKeep::<PF> { buf, a, apf, acc, out },
         );
     } else {
-        vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac { buf, a, apf, acc });
+        vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc });
     }
     if done % red_period(Q) == 0 {
         reduce_acc::<Q>(acc);
@@ -875,36 +1009,10 @@ unsafe fn commit_limbs_core(
     }
     let runs = &plan[..limbs.len()];
 
-    let mut idx = BinaryIndex32::zero();
-    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
-    let bp = buf.as_mut_ptr() as *mut i16;
-    for b in 0..nb {
-        slice_f162_into(chunk128(elems, b), &mut idx);
-        for r in runs.iter() {
-            let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
-            let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
-            if r.quad {
-                match r.q {
-                    2917 => quad_batch::<2917>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
-                    4861 => quad_batch::<4861>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
-                    12637 => quad_batch::<12637>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
-                    _ => unreachable!("no quadratic kernel for q = {}", r.q),
-                }
-            } else {
-                let o = if r.keep.is_null() {
-                    core::ptr::null_mut()
-                } else {
-                    (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
-                };
-                match (r.q, o.is_null()) {
-                    (3889, true) => split_batch::<3889, false>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (3889, false) => split_batch::<3889, true>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (9721, true) => split_batch::<9721, false>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (9721, false) => split_batch::<9721, true>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    _ => unreachable!("no splitting kernel for q = {}", r.q),
-                }
-            }
-        }
+    if nb * limbs.len() * BATCH_BYTES > A_PREFETCH_BYTES {
+        batch_loop::<true>(elems, runs, nb);
+    } else {
+        batch_loop::<false>(elems, runs, nb);
     }
     if keep.is_some() {
         _mm_sfence();
@@ -926,6 +1034,57 @@ unsafe fn commit_limbs_core(
                 _ => unreachable!(),
             },
         };
+    }
+}
+
+/// Bytes of `A` one batch of one limb holds, and the footprint above which the matrix no longer
+/// survives in cache from one column to the next, so that the [`mac27`] prefetch is worth its
+/// uops. `A` is `nb * limbs * BATCH_BYTES` per column and is re-read by every column; at
+/// 2^18 `F162` in 256 columns that is 331 KB per limb, and issuing the 648 `prefetcht1` per batch
+/// then costs 0.2 ms per limb instead of saving anything (measured, both trees), while at 16
+/// columns — 5 MB per limb — dropping them costs 0.5 ms. The crossover on this core is a few MB;
+/// 4 MB is the threshold, and the whole batch loop is compiled both ways around it.
+pub const BATCH_BYTES: usize = 32 * N * 2;
+pub const A_PREFETCH_BYTES: usize = 4 << 20;
+
+/// The batch loop: one slicing pass per batch, then one kernel pass per limb, each into its own
+/// accumulator.
+///
+/// # Safety
+/// `runs` describes limbs whose `A`, accumulators and `keep` buffers all cover `nb` batches, and
+/// `elems` is `128 * nb` `F162`.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
+    let mut idx = BinaryIndex32::zero();
+    let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
+    let bp = buf.as_mut_ptr() as *mut i16;
+    for b in 0..nb {
+        slice_f162_into(chunk128(elems, b), &mut idx);
+        for r in runs.iter() {
+            let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
+            let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
+            if r.quad {
+                match r.q {
+                    2917 => quad_batch::<2917, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    4861 => quad_batch::<4861, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    12637 => quad_batch::<12637, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                    _ => unreachable!("no quadratic kernel for q = {}", r.q),
+                }
+            } else {
+                let o = if r.keep.is_null() {
+                    core::ptr::null_mut()
+                } else {
+                    (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
+                };
+                match (r.q, o.is_null()) {
+                    (3889, true) => split_batch::<3889, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (3889, false) => split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (9721, true) => split_batch::<9721, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (9721, false) => split_batch::<9721, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    _ => unreachable!("no splitting kernel for q = {}", r.q),
+                }
+            }
+        }
     }
 }
 
