@@ -157,6 +157,18 @@ impl PolxBuf {
         unsafe { std::slice::from_raw_parts(self.ptr.cast::<u8>(), self.len * sizeof_polx()) }
     }
 
+    /// The inverse of [`as_bytes`](Self::as_bytes). `polx` is a plain array of RNS images, so
+    /// the image is copied back as it stands.
+    pub fn from_bytes(len: usize, bytes: &[u8]) -> Option<Self> {
+        let size = len * sizeof_polx();
+        if bytes.len() != size {
+            return None;
+        }
+        let buf = Self::alloc(len);
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.ptr.cast::<u8>(), size) };
+        Some(buf)
+    }
+
     pub fn copy_from(&mut self, src: &PolxBuf) {
         assert_eq!(self.len, src.len, "polx length mismatch");
         unsafe { ffi::bn_polx_copy(self.ptr, src.ptr, self.len) };

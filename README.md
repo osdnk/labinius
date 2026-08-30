@@ -177,10 +177,80 @@ and the no-wraparound bound, summed once per public group instead of once per pr
 fold to bring the kernels and the rejection tables up; `Prover::fold` hands the workspace back, so
 a second `commit` allocates nothing.
 
+## Keccak
+
+`src/bin/keccak.rs` proves 482 keccak-f permutations — [binius64](https://github.com/IrreducibleOSS/binius64)'s
+keccak example at `--message-len 65536`, pinned to the revision `32d8cd07` that
+`binius64-f162` vendored — three ways: stock binius64, and this crate's commitment in place of
+its BaseFold oracle with the recursion off and on.
+
+binius64 builds the constraint system and the witness and packs the non-public trace as it
+always does: two 64-bit words per `B128`, zero-padded to `2^18`. That vector lifts to `F162` by
+zero-extension (`phi` carries the `beta` basis of `B128` onto `{1, X, ..., X^127}`) and is
+committed here, at `Params::basic()`'s shape. binius64's reductions then run unchanged down to
+the claim `w~(r) = s` on that trace, and the cross-field switch of `bin_fields::crossfield` — the
+128 partial evaluations, `r' ∈ F162^7` drawn after them, an 18-round sumcheck over `F162` —
+turns it into `pi1~(r'') = opened`, which this crate's opening discharges.
+
+One transcript throughout. binius64's `ProverTranscript` is the channel: the statement is
+observed into it, the commitment is written into it before any challenge is drawn, and the
+opening's own transcript is seeded from 32 bytes sampled off that channel after the switch, so
+every challenge it draws is bound to everything before it. `r''` arrives most significant first
+over the flat trace index, whose top 8 bits are the column and whose low 10 are the row, so the
+leading 8 coordinates reversed are `p1` and the trailing 10 reversed are `p0`
+(`EvaluationPoint::msb_first`).
+
+The stock column runs binius64's own `Prover::prove` and `Verifier::verify` on the same circuit
+and witness, at the example's defaults (`--log-inv-rate 1`, `--hash-suite sha256`), with the
+per-stage numbers read off binius64's own `INFO` phase spans. Everything is one thread on core 3;
+binius64's `rayon` feature is off by default, so its reductions are single-threaded too.
+
+```
+                                      stock    recursion    recursion
+                                   binius64          off           on
+SETUP (once, not per proof)
+  circuit                           1061.82      1061.82      1061.82 ms
+  commitment key and constraints     702.52       665.51       684.79 ms
+PROVER
+  witness                              4.65         4.65         4.65 ms
+  packing                                 —         0.60         0.71 ms
+  commit                              12.61        13.47        17.34 ms
+  BitAnd check                        32.31        31.62        34.15 ms
+  shift reduction                     75.44        72.86        73.50 ms
+  ring-switch / cross-field switch     4.40        15.17        15.20 ms
+  opening                                 —         6.18       178.64 ms
+  rest                                 4.45         1.49         0.56 ms
+  total                              129.21       141.40       320.09 ms
+VERIFIER
+  read the commitment                     —         0.67         0.01 ms
+  reductions                           0.40         0.45         0.42 ms
+  ring-switch / cross-field switch     0.00         0.30         0.29 ms
+  BaseFold / our opening               0.44         2.14       102.21 ms
+  wiring check (native)               41.84        42.21        41.80 ms
+  total                               43.09        45.90       144.80 ms
+SIZES
+  binius64 LIOP                           —         5.84         5.84 KB
+  cross-field switch                      —         3.12         3.12 KB
+  commitment (wire form)                  —       648.00         4.12 KB
+  opening                                 —       330.02        75.60 KB
+  total                              243.83       986.99        88.69 KB
+```
+
+`wiring check (native)` is `WiringEvalClaim::check_native`, which discharges the shift
+reduction's last claim by evaluating the wiring multilinear over all 289 179 constraints from the
+constraint system. It is per proof — it reads the challenges — and it dominates every verifier
+column alike, because it is binius64's own step on binius64's own data; the reductions themselves
+are 0.4 ms on both paths. It is written as a `par_iter`, so it is 42 ms only because
+`binius-utils/rayon` is off and the process is pinned to one core.
+
+The commitment sizes are the canonical wire form; `T_Y` travels on the tape as its `polx` image,
+which is 11.0 KB. The stock total is its whole proof tape.
+
 ## Running it
 
 ```
 cargo run --release --offline          # taskset -c 3 to pin it, as the table above is measured
+cargo run --release --offline --bin keccak
 cargo test --release --offline
 ```
 

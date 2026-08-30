@@ -358,6 +358,70 @@ impl Commitment {
         &self.matrix().get(row, column).limbs[modulus_index]
     }
 
+    /// The commitment as bytes, for a transcript that carries the proof itself: the `i16` slots
+    /// of the matrix in column-major order, or the `polx` image of `T_Y`, after a one-byte tag
+    /// and the element count. Wider than [`wire_bytes`](Self::wire_bytes) for `T_Y`, which is
+    /// `LOGQ` bits per coefficient rather than a whole `polx`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.wire_bytes());
+        match &self.value {
+            CommitmentValue::Matrix(m) => {
+                out.push(0);
+                out.extend_from_slice(&(m.cols() as u32).to_le_bytes());
+                for element in m.iter() {
+                    for limb in &element.limbs {
+                        for slot in limb.v {
+                            out.extend_from_slice(&slot.to_le_bytes());
+                        }
+                    }
+                }
+            }
+            CommitmentValue::Recursive(t) => {
+                out.push(1);
+                out.extend_from_slice(&(t.len() as u32).to_le_bytes());
+                out.extend_from_slice(t.as_bytes());
+            }
+        }
+        out
+    }
+
+    /// The inverse of [`to_bytes`](Self::to_bytes), against the parameters the verifier holds.
+    pub fn from_bytes(params: &Params, bytes: &[u8]) -> Result<Commitment, VerificationError> {
+        let primes = params.primes();
+        let (&tag, rest) = bytes.split_first().ok_or(VerificationError::Rejected)?;
+        if rest.len() < 4 || (tag == 1) != params.recursion {
+            return Err(VerificationError::Rejected);
+        }
+        let count = u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
+        let body = &rest[4..];
+        let value = if tag == 0 {
+            let slots = 4 * count * primes.len() * N162;
+            if count != params.columns() || body.len() != 2 * slots {
+                return Err(VerificationError::Rejected);
+            }
+            let mut slot = body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]));
+            let data = (0..4 * count)
+                .map(|_| PowerOfThreeRingElementWithLimbs {
+                    limbs: (0..primes.len())
+                        .map(|_| PowerOfThreeRingElement {
+                            v: core::array::from_fn(|_| slot.next().unwrap()),
+                        })
+                        .collect(),
+                })
+                .collect();
+            CommitmentValue::Matrix(VerticallyAlignedMatrix::new(4, count, data))
+        } else {
+            CommitmentValue::Recursive(Arc::new(
+                PolxBuf::from_bytes(count, body).ok_or(VerificationError::Rejected)?,
+            ))
+        };
+        Ok(Commitment {
+            primes,
+            columns: params.columns(),
+            value,
+        })
+    }
+
     /// Bytes on the wire: `LOGQ`-bit coefficients for `T_Y`, `i16` slots for the matrix.
     pub fn wire_bytes(&self) -> usize {
         match &self.value {
@@ -399,6 +463,27 @@ impl EvaluationPoint {
     /// A point from its two halves, for the key-time layout of [`recursion::setup`].
     pub fn of(p0: Vec<F162>, p1: Vec<F162>) -> EvaluationPoint {
         EvaluationPoint { p0, p1 }
+    }
+
+    /// A point given by its `witness_log_len` coordinates most significant first — the order a
+    /// multilinear indexed by `i -> 2 i + b` produces, which is what a sumcheck over the flat
+    /// witness hands back.
+    ///
+    /// The witness is `W[i + wdim j]`, so the flat index carries the row `i` in its low
+    /// `row_log_len` bits and the column `j` above them, while `p0` and `p1` are read least
+    /// significant first. The leading `column_log_len` coordinates are therefore `p1` reversed,
+    /// and the trailing `row_log_len` are `p0` reversed.
+    pub fn msb_first(params: &Params, coordinates: &[F162]) -> EvaluationPoint {
+        assert_eq!(
+            coordinates.len(),
+            params.witness_log_len as usize,
+            "one coordinate per variable of the witness"
+        );
+        let (high, low) = coordinates.split_at(params.column_log_len as usize);
+        EvaluationPoint {
+            p0: low.iter().rev().copied().collect(),
+            p1: high.iter().rev().copied().collect(),
+        }
     }
 
     pub fn p0(&self) -> &[F162] {

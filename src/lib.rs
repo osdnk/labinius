@@ -26,6 +26,7 @@ pub mod challenge;
 pub mod eval;
 pub mod f162;
 pub mod fold;
+pub mod keccak;
 pub mod labrador;
 pub mod params;
 pub mod recursion;
