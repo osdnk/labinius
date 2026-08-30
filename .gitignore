@@ -4,3 +4,4 @@ tools/ubench/ubench
 tools/ubench/ports
 tools/membw/membw
 *.o
+.claude/
