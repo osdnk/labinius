@@ -122,6 +122,23 @@ pub struct Opening<'a> {
     pub norms: &'a [u64],
 }
 
+/// Chains whose block equations are emitted diagonal by diagonal rather than chain by chain.
+///
+/// A key `phi` buffer is read by exactly two constraints — the two output components whose
+/// `(k, twist)` it is — at the same diagonal, and those two are `BLOCKS` constraints and 60 MB
+/// apart in chain order. Interleaving a limb's four components brings them four constraints
+/// apart, and the limb's whole diagonal (`2 * 4 * CHUNKS * n` polx, 12 MB) then stays in the
+/// last-level cache across them: `labrador::prove` 394 -> 374 ms, `verify` 233 -> 221 ms.
+/// Any order is sound; prover and verifier run this same function.
+const FAMILY: usize = 4;
+
+fn families(layout: &Instance) -> Vec<Vec<usize>> {
+    (0..layout.chains.len())
+        .step_by(FAMILY)
+        .map(|at| (at..(at + FAMILY).min(layout.chains.len())).collect())
+        .collect()
+}
+
 /// Dachshund reads `betasq == 0` as the binariness flag, so a witness vector that happens to be
 /// all zero announces `1`; the no-wraparound bound reads the caps, not the announced norms.
 pub fn build(
@@ -142,35 +159,40 @@ pub fn build(
         })
         .collect();
     let mut constraints: Vec<Constraint> = Vec::new();
-    for c in &layout.chains {
-        let runs = layout.runs(c);
+    let runs: Vec<Vec<crate::recursion::export::Run>> =
+        layout.chains.iter().map(|c| layout.runs(c)).collect();
+    for family in families(layout) {
         for a in 0..BLOCKS {
-            let mut blocks = Vec::with_capacity(runs.len() + c.scaled.len() + c.carries.at.len());
-            let mut parts = Vec::with_capacity(blocks.capacity());
-            for r in &runs {
-                blocks.push(Block::new(r.at.vector, r.at.off, r.len));
-                parts.push(match layout.groups[r.group].kind {
-                    Kind::Key { limb, part } => {
-                        (Arc::clone(setup.key_phi(limb, part, r.chunk, a)), r.offset)
-                    }
-                    _ => (Arc::clone(phi.get(r.group, r.chunk, a)), r.offset),
-                });
+            for &ci in &family {
+                let c = &layout.chains[ci];
+                let runs = &runs[ci];
+                let mut blocks = Vec::with_capacity(runs.len() + c.scaled.len() + c.carries.at.len());
+                let mut parts = Vec::with_capacity(blocks.capacity());
+                for r in runs {
+                    blocks.push(Block::new(r.at.vector, r.at.off, r.len));
+                    parts.push(match layout.groups[r.group].kind {
+                        Kind::Key { limb, part } => {
+                            (Arc::clone(setup.key_phi(limb, part, r.chunk, a)), r.offset)
+                        }
+                        _ => (Arc::clone(phi.get(r.group, r.chunk, a)), r.offset),
+                    });
+                }
+                for s in &c.scaled {
+                    blocks.push(Block::new(s.at.vector, s.at.off, 1));
+                    let factor = if a == SPAN * s.chunk { s.factor } else { 0 };
+                    parts.push((Arc::clone(setup.scalar_phi(factor)), 0));
+                }
+                for (d, at) in c.carries.at.iter().enumerate() {
+                    blocks.push(Block::new(at.vector, at.off, BLOCKS));
+                    parts.push((Arc::clone(setup.carry_phi(c.carries.gadget.base, d, a)), 0));
+                }
+                let mut b = [0i64; DEG];
+                for (u, x) in c.output[SUB * a..SUB * a + SUB].iter().enumerate() {
+                    b[u] = (*x as i128).rem_euclid(Q) as i64;
+                }
+                let b = (b != [0i64; DEG]).then(|| BSource::Int64(vec![b]));
+                constraints.push(Constraint::new(1, blocks, PhiSource::Blocks(parts), b));
             }
-            for s in &c.scaled {
-                blocks.push(Block::new(s.at.vector, s.at.off, 1));
-                let factor = if a == SPAN * s.chunk { s.factor } else { 0 };
-                parts.push((Arc::clone(setup.scalar_phi(factor)), 0));
-            }
-            for (d, at) in c.carries.at.iter().enumerate() {
-                blocks.push(Block::new(at.vector, at.off, BLOCKS));
-                parts.push((Arc::clone(setup.carry_phi(c.carries.gadget.base, d, a)), 0));
-            }
-            let mut b = [0i64; DEG];
-            for (u, x) in c.output[SUB * a..SUB * a + SUB].iter().enumerate() {
-                b[u] = (*x as i128).rem_euclid(Q) as i64;
-            }
-            let b = (b != [0i64; DEG]).then(|| BSource::Int64(vec![b]));
-            constraints.push(Constraint::new(1, blocks, PhiSource::Blocks(parts), b));
         }
     }
 

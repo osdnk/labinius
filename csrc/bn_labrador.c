@@ -1,4 +1,7 @@
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -232,4 +235,36 @@ void bn_polx_table_sum(void *out, size_t len, const void *table, size_t terms,
 
 double bn_composite_size(const void *cp) {
   return ((const composite*)cp)->size;
+}
+
+/* -------------------------------------------------------------------------------------
+ * stdout muting
+ *
+ * LaBRADOR prints a page of statement and proof-size chatter per recursion level. The
+ * crate reports its own timings, so the shim redirects fd 1 to /dev/null around the FFI
+ * calls and restores it afterwards; stderr, which carries the library's error messages,
+ * is untouched.
+ * ----------------------------------------------------------------------------------- */
+
+static int bn_saved_stdout = -1;
+
+void bn_mute_stdout(void) {
+  int devnull;
+
+  if(bn_saved_stdout >= 0) return;
+  fflush(stdout);
+  bn_saved_stdout = dup(1);
+  if(bn_saved_stdout < 0) return;
+  devnull = open("/dev/null",O_WRONLY);
+  if(devnull < 0) { close(bn_saved_stdout); bn_saved_stdout = -1; return; }
+  dup2(devnull,1);
+  close(devnull);
+}
+
+void bn_unmute_stdout(void) {
+  if(bn_saved_stdout < 0) return;
+  fflush(stdout);
+  dup2(bn_saved_stdout,1);
+  close(bn_saved_stdout);
+  bn_saved_stdout = -1;
 }

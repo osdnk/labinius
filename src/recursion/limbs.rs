@@ -1,12 +1,15 @@
 //! The per-limb identity `sum_i F_i v_i - sum_j c_j C_j - q k = 0` in `S`-component form.
 //!
-//! The key rows and the RNS residues reach this module in the NTT domain, so both are inverted
-//! once — [`crate::scalar::intt`] for a splitting limb, [`intt_quad`] for a quadratic-slot one —
-//! and read in the `Z`-basis of `S`. For output component `m` the multiplier of `v_{i,l}` is
-//! `F_{i,(m-l) mod 4}`, twisted by `-Z` when `l > m`.
+//! The key rows and the RNS residues reach this module in the NTT domain and are inverted into
+//! the `Z`-basis of `S`. The key rows go once per key through the scalar [`crate::scalar::intt`]
+//! or [`intt_quad`]; the residues are per commitment and go 32 columns at a time through the
+//! recombination table of [`recombination`] and the vectorised [`intt_gen_batch32`], with the
+//! scalar route left for the quadratic-slot limbs, which have no batched inverse transform.
+//! For output component `m` the multiplier of `v_{i,l}` is `F_{i,(m-l) mod 4}`, twisted by `-Z`
+//! when `l > m`.
 use super::chain::{At, Carries, Chain, Product};
 use super::setup::Setup;
-use super::{centre, chunk, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS};
+use super::{centre, chunk, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
 use crate::api::{
     PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
     POW3_SLOT_EXP, SLOT_648,
@@ -17,7 +20,8 @@ use crate::params::{
 };
 use crate::scalar;
 use crate::scheme::PublicParameters;
-use crate::types::RingElement;
+use crate::simd::vertical_gen::intt_gen_batch32;
+use crate::types::{Batch32, Representation, RingElement};
 
 /// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the two
 /// base-512 digits of the wraparound quotient.
@@ -252,6 +256,100 @@ impl Residues {
     }
 }
 
+/// The recombination `E_t = sum_k psi^{v_s k} i^{tk} Y_k(v_s)` of the plan's section 3, as a
+/// table: `e[(s * 4 + t) * 4 + k]` is the multiplier of component `k` in slot `SLOT_648[t][s]`.
+///
+/// `psi^{v_s k}` for `k = 0..4` is three multiplications by `psi^{v_s}` and `i^{tk}` is one of
+/// four constants, so the whole table costs `N162` exponentiations rather than `16 N162`.
+fn recombination<const Q: u16>() -> Vec<u16> {
+    let q = Q as u64;
+    let psi = Params::<Q>::PSI as u64;
+    let i4 = pow_mod(psi, (CONDUCTOR / 4) as u64, q);
+    let mut e = vec![0u16; N162 * 16];
+    for s in 0..N162 {
+        let base = pow_mod(psi, POW3_SLOT_EXP[s] as u64, q);
+        let mut pk = 1u64;
+        for k in 0..4 {
+            let step = pow_mod(i4, k as u64, q);
+            let mut it = 1u64;
+            for t in 0..4 {
+                e[(s * 4 + t) * 4 + k] = (pk * it % q) as u16;
+                it = it * step % q;
+            }
+            pk = pk * base % q;
+        }
+    }
+    e
+}
+
+/// The residues of one splitting limb, 32 columns at a time: the recombination above out of a
+/// table, then the crate's vectorised inverse transform [`intt_gen_batch32`] on the whole batch,
+/// then the four `S`-components read straight out of the batch in chunk order.
+fn columns_split<const Q: u16>(
+    matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
+    limb: usize,
+    r: usize,
+    out: &mut [Vec<Poly>],
+) {
+    let q = Q as i32;
+    let half = (q - 1) / 2;
+    let e = recombination::<Q>();
+    let mut batch = Batch32::zero(Representation::Ntt);
+    for first in (0..r).step_by(32) {
+        let cols = (r - first).min(32);
+        batch.v.iter_mut().for_each(|row| *row = [0i16; 32]);
+        batch.representation = Representation::Ntt;
+        for p in 0..cols {
+            let c: [&PowerOfThreeRingElement; 4] =
+                core::array::from_fn(|k| &matrix.get(k, first + p).limbs[limb]);
+            for s in 0..N162 {
+                let y: [i32; 4] = core::array::from_fn(|k| c[k].v[s] as i32);
+                for t in 0..4 {
+                    let g = &e[(s * 4 + t) * 4..(s * 4 + t) * 4 + 4];
+                    let acc = (0..4).map(|k| g[k] as i32 * y[k]).sum::<i32>().rem_euclid(q);
+                    batch.v[SLOT_648[t][s] as usize][p] =
+                        if acc > half { (acc - q) as i16 } else { acc as i16 };
+                }
+            }
+        }
+        unsafe { intt_gen_batch32::<Q>(&mut batch) };
+        for p in 0..cols {
+            for (l, vector) in out.iter_mut().enumerate() {
+                for b in 0..CHUNKS {
+                    let poly = &mut vector[b * r + first + p];
+                    for (u, x) in poly.iter_mut().take(CHUNK).enumerate() {
+                        let m = CHUNK * b + u;
+                        let c = batch.v[4 * m + l][p];
+                        *x = if m % 2 == 0 { c } else { -c };
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The same for a quadratic-slot limb, which has no vectorised inverse transform: the 648 slots
+/// are rebuilt column by column and inverted by [`intt_quad`].
+fn columns_scalar(
+    q: u16,
+    quad: bool,
+    matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
+    limb: usize,
+    r: usize,
+    out: &mut [Vec<Poly>],
+) {
+    for j in 0..r {
+        let c: [PowerOfThreeRingElement; 4] =
+            core::array::from_fn(|m| matrix.get(m, j).limbs[limb]);
+        let components = split(&coefficients(q, quad, &slots_of(q, quad, &c)));
+        for (m, vector) in out.iter_mut().enumerate() {
+            for (b, p) in chunk::chunks(&components[m]).into_iter().enumerate() {
+                vector[b * r + j] = p;
+            }
+        }
+    }
+}
+
 /// The residues of every limb of one commitment, in coefficient form.
 pub fn residues(
     matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
@@ -261,25 +359,14 @@ pub fn residues(
     let mut vectors = Vec::with_capacity(4 * primes.len());
     for (limb, &prime) in primes.iter().enumerate() {
         let Shape { q, quad, .. } = Shape::of(prime);
-        let columns: Vec<[SElem; 4]> = (0..r)
-            .map(|j| {
-                let c: [PowerOfThreeRingElement; 4] =
-                    core::array::from_fn(|m| matrix.get(m, j).limbs[limb]);
-                split(&coefficients(q, quad, &slots_of(q, quad, &c)))
-            })
-            .collect();
-        for m in 0..4 {
-            let chunks: Vec<[Poly; CHUNKS]> =
-                columns.iter().map(|c| chunk::chunks(&c[m])).collect();
-            let mut v = Vec::with_capacity(CHUNKS * r);
-            for b in 0..CHUNKS {
-                for c in chunks.iter() {
-                    v.push(c[b]);
-                }
-            }
-            v.resize((CHUNKS * r).next_multiple_of(super::PAD), [0i16; super::DEG]);
-            vectors.push(v);
+        let mut out: Vec<Vec<Poly>> =
+            (0..4).map(|_| vec![[0i16; DEG]; (CHUNKS * r).next_multiple_of(PAD)]).collect();
+        match (q, quad) {
+            (3889, false) => columns_split::<3889>(matrix, limb, r, &mut out),
+            (9721, false) => columns_split::<9721>(matrix, limb, r, &mut out),
+            _ => columns_scalar(q, quad, matrix, limb, r, &mut out),
         }
+        vectors.append(&mut out);
     }
     Residues { vectors }
 }

@@ -351,7 +351,7 @@ fn tamper_wrong_witness_coefficient() {
     let i = flipped.vectors[1].iter().position(|&c| c != 0).unwrap();
     flipped.vectors[1][i] = -flipped.vectors[1][i];
     assert_eq!(flipped.normsq(1), wit.normsq(1));
-    let err = labrador::prove(&stmt, &flipped).expect_err("tampered witness must not prove");
+    let err = labrador::prove_verified(&stmt, &flipped).expect_err("tampered witness must not prove");
     println!("--- (d) wrong witness coefficient (norm preserved): {err}");
     assert!(err.contains("simple_verify"), "unexpected error: {err}");
 
@@ -517,7 +517,7 @@ fn mixed_degrees() {
     println!("--- (e) degrees 0/1/{MIXED_KAPPA} interleaved: {:.2} KB", proof.size_kb());
 
     let (bad, wit) = mixed_setup(true);
-    let err = labrador::prove(&bad, &wit).expect_err("a coefficient outside the support");
+    let err = labrador::prove_verified(&bad, &wit).expect_err("a coefficient outside the support");
     println!("--- (e) coefficient outside its support: {err}");
     assert!(err.contains("simple_verify"), "unexpected error: {err}");
 }

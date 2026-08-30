@@ -7,6 +7,11 @@ use std::sync::LazyLock;
 pub fn reduce(p: &[i64]) -> SElem {
     let mut c = p.to_vec();
     c.resize(c.len().max(N162), 0);
+    reduce_in_place(&mut c)
+}
+
+/// The same over a caller-owned buffer, which [`blocks`] reuses across the shifts of one element.
+fn reduce_in_place(c: &mut [i64]) -> SElem {
     for t in (N162..c.len()).rev() {
         let x = c[t];
         c[t] = 0;
@@ -41,8 +46,11 @@ pub fn mul(a: &SElem, b: &SElem) -> SElem {
 /// The public blocks of `g`: `blocks[b][a][u]` is coefficient `SUB a + u` of
 /// `Z^{CHUNK b} g mod Phi_243`, the multiplier chunk `b` of a witness meets at diagonal `a`.
 pub fn blocks(g: &SElem) -> Blocks {
+    let mut p = [0i64; CHUNK * (CHUNKS - 1) + N162];
     core::array::from_fn(|b| {
-        let h = shift(g, CHUNK * b);
+        p.fill(0);
+        p[CHUNK * b..CHUNK * b + N162].copy_from_slice(g);
+        let h = reduce_in_place(&mut p);
         core::array::from_fn(|a| {
             core::array::from_fn(|u| {
                 let x = h[SUB * a + u];

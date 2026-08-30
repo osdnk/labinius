@@ -1,7 +1,8 @@
 # Recursing the folded opening into LaBRADOR
 
-Branch `labrador`. Status: plan for approval — nothing below is implemented. Reviewed once by Codex (xhigh);
-its findings are folded in, see the end.
+Branch `labrador`. Status: implemented and measured; sections 11 and 12 record where the design
+moved after the first working version. Reviewed once by Codex (xhigh); its findings are folded in,
+see section 10.
 
 ## 1. What changes, in one paragraph
 
@@ -317,13 +318,16 @@ projection (AES expansion of 33 MB plus 268M adds, ≈ 15 ms) and its four lifte
 (≈ 30 ms), aggregation of our sparse constraints (≈ 0.8M `polx` MACs, ≈ 10 ms), and the
 recursion levels, which start from an amortised opening of 3072 polys (≈ 2× level one).
 
-Measured at `Params::basic()` on one core of an i7-11850H, `LOGQ = 48`: proof 80.0 KB
-(`T_Y` 4.1 + `T_u` 1.1 + `T_R` 3.0 + 29 norms 0.2 + LaBRADOR 71.5), against 978 KB in the clear.
-Prover: `commit` 50.3 ms with `T_Y` (13.9 without), `commit_left_expansion` 0.2 ms,
-`prove_opening` 489 ms = fold 4.5 + encoding 22.7 + `T_R` 2.7 + masks 2.4 + constraint `phi` 16.9
-+ `labrador::prove` 404.7, so 49.2 ms of arithmetic of our own. Verifier: statement rebuild
-26.7 ms + `labrador::verify` 235.7 ms. Key time (`PublicParameters::from_seed`): 124 ms and 233 MB
-of key-time `phi` for two limbs; 81 MB of per-proof `phi`; peak resident set 592 MB.
+Measured at `Params::basic()` on core 3 of an i7-11850H, `LOGQ = 48`: proof 79.6 KB
+(`T_Y` 4.1 + `T_u` 1.1 + `T_R` 3.0 + 18 norms 0.1 + LaBRADOR 71.2), against 978 KB in the clear.
+Prover: `commit` 18.4 ms with `T_Y` (13.1 without), `commit_left_expansion` 0.25 ms,
+`prove_opening` 382.9 ms = fold 4.7 + encoding 18.1 + `T_R` 2.6 + masks 2.0 + constraint `phi` 9.0
++ statement build 7.8 + `labrador::prove` 300.5, so 44.2 ms of arithmetic of our own. Verifier:
+statement rebuild 23.3 ms (layout 2.4 + no-wrap bound 2.3 + constraint `phi` 9.0 + build 7.8)
++ `labrador::verify` 221.7 ms. Key time (`PublicParameters::from_seed`): 120 ms and 233 MB of
+key-time `phi` for two limbs; 81 MB of per-proof `phi` plus 33 MB of mask rows; peak resident set
+588 MB. The encoded witness is 18 vectors and 10 752 polynomials: the digit levels of one gadget
+share a vector (section 12).
 
 ## 7. Build and code layout
 
@@ -402,3 +406,118 @@ no-wrap bound becomes `‖c-row‖₂·‖Y_q‖₂ ≈ 2^6.2·2^20 = 2^26`, `κ
 witness norm is now dominated by the residues (`≈ 2^40`), which its parameter search absorbs
 (JL cap 2^56, per-vector ceiling 2^39 met by splitting 9721's vector). Only the carries, the
 wraparound quotients `k_q` and the two binary-side quotients are gadget-decomposed.
+
+
+## 12. Where the time went, and what is left (2026-08-30)
+
+Measured on core 3, `Params::basic()`, both modes. The non-recursive mode is unchanged
+(`commit` 13.1, `fold` 4.4, verifier 1.7 ms).
+
+| step | before | after | what changed |
+|---|---:|---:|---|
+| `commit` with `T_Y` | 49.6 | 18.4 | the residues off the scalar inverse transform |
+| `prove_opening` | 526.4 | 382.9 | |
+| — fold | 5.0 | 4.7 | |
+| — encoding | 24.0 | 18.1 | blocked transposes, one gadget split per value |
+| — `T_R` | 2.7 | 2.6 | fewer witness vectors |
+| — masks | 2.1 | 2.0 | fewer witness vectors |
+| — constraint `phi` and statement build | 17.0 | 16.8 | |
+| — `labrador::prove` | 440.6 | 300.5 | no stdout, no `simple_verify`, diagonal order |
+| verifier total | 287.8 | 246.1 | |
+| — statement rebuild | 27.4 | 23.3 | the no-wrap bound summed per group |
+| — `labrador::verify` | 259.2 | 221.7 | no stdout, diagonal order |
+| proof | 80.0 KB | 79.6 KB | |
+| peak resident set | 592 MB | 588 MB | |
+
+Each change on its own, at the point it was made:
+
+| change | prove | verify | other |
+|---|---:|---:|---|
+| `dup2` stdout to `/dev/null` around every FFI call | -48 | -27 | |
+| `limbs::residues` batched: recombination table, `intt_gen_batch32` | | | `commit` -32 |
+| block equations emitted diagonal by diagonal (`FAMILY = 4`) | -20 | -12 | |
+| digit and carry levels of one gadget share a witness vector | 0 | 0 | 29 -> 18 vectors, -0.4 KB |
+| `simple_verify` dropped from the production path | -60 | | |
+| `chain::prepare` and `chain::sums` transposed 32 terms at a time | -3 | | |
+| nine accumulators per `x` load in the diagonal dot product | -3 | | |
+| one `Gadget::split` per value instead of one per level | -1 | | |
+| the no-wrap bound summed once per public group | | -2.5 | |
+| `chunk::blocks` reduces in one stack buffer | -0.5 | -0.5 | |
+
+### What the statement shape cannot buy
+
+* **The chunking is already at its optimum.** The key `phi` is `2 * 8 * CHUNKS * BLOCKS * n` polx
+  and the witness rank is proportional to `1 / CHUNK`, under `CHUNK + SUB <= DEG + 1`, `SUB | 81`,
+  `SUB | CHUNK` and `CHUNK | 162`. `CHUNK = 54, SUB = 9` is the largest chunk any admissible pair
+  reaches, so no choice shrinks the witness; the only admissible pair with less `phi` is
+  `CHUNK = SUB = 27`, which cuts the `phi` by a third (36 chunk-diagonal pairs instead of 54) and
+  nearly doubles the witness rank (`v` 3072 -> 6144, the residues 6144 -> 12288). About 30 % of
+  `labrador::prove` scales with the rank (`simple_commit`, `collaps_jlproj_raw`, `amortize`,
+  `polxvec_frompolyvec`, and every recursion level below the first), so that trade loses roughly
+  165 ms to save 45.
+* **The four component equations of a limb cannot be merged.** They are different equations, and
+  they do not share a `phi` buffer either: component `m` reads key part `(m - l) mod 4` with the
+  twist `l > m`, so the eight parts are permuted differently for each `m` and each part is read by
+  exactly two of the four. A `deg > 1` extension constraint does give `deg` equations out of one
+  `phi` block, but its `deg` outputs pair each witness element with *different* `phi` entries, so
+  it cannot express four equations that need four different multipliers of the same witness.
+* **Merging witness vectors is free but does not pay.** Collapsing the digit and carry levels of
+  each gadget took the statement from 29 vectors and 11 040 polynomials to 18 and 10 752, and the
+  proof from 80.0 to 79.6 KB; LaBRADOR's own multiplicity fell from 61 to 39. Neither
+  `labrador::prove` nor `labrador::verify` moved by more than the noise, so the per-vector overhead
+  and the quadratic garbage are not where the time is. The four residue vectors of a limb could be
+  merged the same way (18 -> 12) for the same expected nothing. The no-wraparound margins paid for
+  it: 1992x -> 1277x on 3889 and 552x -> 291x on 9721, since the levels' rows now add in quadrature
+  against one cap.
+* **The commitment ranks are minimal.** `kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8` are what
+  `sis_secure` returns for the caps with LaBRADOR's own `6 T SLACK`. The three commitment
+  constraints cost about `sum kappa * len = 103k` polx multiply-adds against the chains' 647k, so
+  even a free `kappa_Y` would be 3 % of the aggregation.
+* **`LIFTS` is fixed at 3.** `ceil(128 / LOGQ)` masks give `Q^-3 = 2^-144`; two would give `2^-96`.
+* **Padding is nearly free.** With the merged vectors, 96 of 10 752 polynomials are padding, and a
+  padding polynomial costs only its 64 mask positions.
+
+### Ranked, what is left inside LaBRADOR
+
+From `perf record --call-graph lbr` over the reference binary (one proof, one verification and one
+repeat proof); the millisecond column is per pass, prover or verifier.
+
+| # | function | ms | why |
+|---|---|---:|---|
+| 1 | `aggregate_sparsecnst` / `polxvec_collaps_add_extension` | ~62 | 690k `phi` references of 1024 B each, read once and accumulated into an equally large output: 1.4 GB of traffic per pass for 353M `int16` multiply-adds, i.e. memory bound by a factor of 25. |
+| 2 | `collaps_sparsecnst`, of which `polxvec_refresh` / `polz_frompolx` ~32 | ~43 | Runs once per `LIFTS`. It scales the `phi` of every degree-0 constraint (our three masks, 10 752 `polx` each) into the accumulator and then refreshes `ost->r * ost->n` `polx` — the *whole* rectangular output `phi`, not the ranges it touched. |
+| 3 | `collaps_jlproj_raw` / `polxvec_jlproj_collapsmat` | ~38 | Proportional to the witness rank; the projection matrix is expanded from AES and collapsed `LIFTS` times. |
+| 4 | `lift_aggregate_zqcnst` | ~24 | The degree-0 lift of the same three mask constraints. |
+| 5 | `simple_commit`, `commit_raw`, `amortize` | ~35 | `kappa * n`; proportional to the rank, unavoidable. |
+| 6 | `polxvec_frompolyvec` for `sx` | ~3 | `simple_prove` converts the whole witness to `polx` again, although the shim has already converted every one of its vectors for `T_Y`, `T_u` and `T_R`. |
+
+Recommendations for the C side, in the order of what they would buy here:
+
+1. **A short `phi` block in `sparsecnst`.** Every one of our 647k chain `phi` is `SUB = 9`
+   consecutive nonzero coefficients out of 64 — 18 bytes of information stored as 1024 bytes of NTT
+   images, and read once each. If `init_sparsecnst_half` accepted a block flagged as "short",
+   holding the `SUB` coefficients and their offset, the collapse `acc += alpha * phi` could be
+   `acc += sum_c phi_c * (alpha (*) ntt(X^c))` with the 64 `ntt(X^c)` precomputed once: nine times
+   the arithmetic (4608 instead of 512 `int16` multiply-adds per element) against 57 times less
+   memory. On a pass that is 25x memory bound this should be worth 2-3x on item 1, i.e. 30-40 ms a
+   side, and the key `phi` would stop costing 226 MB of resident memory.
+2. **Refresh only what was scaled, in `collaps_sparsecnst`.** The closing
+   `polxvec_refresh(ocnst->phi, ost->r * ost->n)` covers the whole rectangular output `phi`,
+   `LIFTS` times, although the ranges a degree-0 constraint writes are exactly its `idx/off/len`.
+   Worth most of the ~32 ms a side in item 2.
+3. **Let the caller hand in `sx`.** `simple_prove` allocates and fills its own `polx` copy of the
+   witness. An entry point taking a caller-owned `sx` would save one conversion of the whole
+   witness on the prover and let the shim share one buffer with `commit_blocks`.
+4. **A zero-mask constraint family** (section 4, second bullet) would remove our three degree-0
+   constraints entirely and with them items 2 and 4 — ~67 ms a side — at the cost of drawing the
+   masks from LaBRADOR's own hash state after its inner commitment. It also makes `T_R` unnecessary
+   (3 KB of the proof).
+
+### The statement-shape change we recommend but could not make from Rust
+
+Nothing in the statement's *shape* is left to change from this side: the chunking is at its
+optimum, the constraint order is chosen, the vectors are merged as far as the caps allow, and the
+commitment ranks are minimal. What the relation wants and the library does not offer is item 1
+above — a `phi` block that says "nine `int16` at offset `SUB * a`" instead of a dense `polx`. That
+is a representation change in `sparsecnst` and `polxvec_collaps_add_extension`, not a change to the
+relation, and it is the single largest lever left.

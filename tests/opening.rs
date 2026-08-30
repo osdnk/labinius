@@ -282,7 +282,7 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
         masks(),
         [3u8; 32],
     );
-    let err = labrador::prove(&statement, &labrador::Witness::new(witness.vectors))
+    let err = labrador::prove_verified(&statement, &labrador::Witness::new(witness.vectors))
         .expect_err("a coefficient outside its support");
     assert!(err.contains("simple_verify"), "{err}");
 }

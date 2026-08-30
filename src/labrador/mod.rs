@@ -53,6 +53,15 @@
 //! `init_comkey()` reallocates, so proving and verifying are serialised here behind a
 //! process-wide lock. [`warm_comkey`] expands the key on a background thread so that the
 //! first proof does not pay for it.
+//!
+//! # What the prover does not do
+//!
+//! [`prove`] does not run `simple_verify`. It converts the whole witness to `polx` and evaluates
+//! every constraint against it -- an aggregation pass' worth of work, 60 ms of a 375 ms proof at
+//! `Params::basic()` -- to tell an honest prover what it already knows. [`prove_verified`] keeps
+//! it for the tests. The library's own stdout chatter is redirected to `/dev/null` around every
+//! entry point unless `BIN_NTT_LABRADOR_VERBOSE` is set; on a terminal it cost 48 ms of a proof
+//! and 27 ms of a verification.
 
 pub mod ffi;
 pub mod polx;
@@ -403,6 +412,30 @@ impl Witness {
 // commitment key warm-up
 // ---------------------------------------------------------------------------------------
 
+/// LaBRADOR prints a page of statement and proof-size chatter per recursion level. Every
+/// entry point into the library takes one of these, which redirects fd 1 to `/dev/null`
+/// for as long as it lives; `BIN_NTT_LABRADOR_VERBOSE=1` leaves it alone. Errors go to
+/// stderr and are never suppressed.
+struct Quiet(bool);
+
+impl Quiet {
+    fn new() -> Quiet {
+        let verbose = std::env::var_os("BIN_NTT_LABRADOR_VERBOSE").is_some();
+        if !verbose {
+            unsafe { ffi::bn_mute_stdout() };
+        }
+        Quiet(!verbose)
+    }
+}
+
+impl Drop for Quiet {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { ffi::bn_unmute_stdout() };
+        }
+    }
+}
+
 fn labrador_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
@@ -738,18 +771,32 @@ fn build_raw_witness(stmt: &Statement, wit: &Witness) -> Result<RawWitness, Stri
 // prove / verify
 // ---------------------------------------------------------------------------------------
 
-/// Check the statement and witness, run `simple_verify`, then `composite_prove_simple`.
+/// Check the statement and witness, then `composite_prove_simple`.
 pub fn prove(stmt: &Statement, wit: &Witness) -> Result<ProofHandle, String> {
+    prove_inner(stmt, wit, false)
+}
+
+/// The same with LaBRADOR's `simple_verify` first: it converts the whole witness to `polx` and
+/// evaluates every constraint against it, which costs as much as an aggregation pass and tells
+/// an honest prover nothing it does not already know. Tests use it; [`prove`] does not.
+pub fn prove_verified(stmt: &Statement, wit: &Witness) -> Result<ProofHandle, String> {
+    prove_inner(stmt, wit, true)
+}
+
+fn prove_inner(stmt: &Statement, wit: &Witness, verify: bool) -> Result<ProofHandle, String> {
     check_statement(stmt)?;
     check_witness(stmt, wit)?;
 
     let _guard = labrador_lock();
+    let _quiet = Quiet::new();
     let raw_stmt = build_raw_statement(stmt)?;
     let raw_wit = build_raw_witness(stmt, wit)?;
 
-    let ret = unsafe { ffi::labrador48_simple_verify(raw_stmt.0, raw_wit.0) };
-    if ret != 0 {
-        return Err(format!("simple_verify: FAIL (code {ret})"));
+    if verify {
+        let ret = unsafe { ffi::labrador48_simple_verify(raw_stmt.0, raw_wit.0) };
+        if ret != 0 {
+            return Err(format!("simple_verify: FAIL (code {ret})"));
+        }
     }
 
     let composite = unsafe { ffi::bn_alloc_composite() };
@@ -783,6 +830,7 @@ pub fn verify(stmt: &Statement, proof: &ProofHandle) -> Result<(), String> {
     check_statement(stmt)?;
 
     let _guard = labrador_lock();
+    let _quiet = Quiet::new();
     let raw_stmt = build_raw_statement(stmt)?;
     let ret =
         unsafe { ffi::labrador48_composite_verify_simple(proof.composite, proof.commitment, raw_stmt.0) };

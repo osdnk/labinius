@@ -117,6 +117,42 @@ fn inverse_transforms_round_trip() {
     }
 }
 
+/// The residues a recursive commitment opens re-transform to the columns of the matrix: the
+/// batched recombination and vectorised inverse transform of `limbs::residues` against the
+/// crate's own forward transform, over both a partial and a full batch of columns.
+#[test]
+fn residues_re_transform_to_the_commitment() {
+    for params in [Params::new(9, 2, vec![Modulus::Q9721], false).unwrap(), Params::new(15, 6, vec![Modulus::Q2917, Modulus::Q9721], false).unwrap()] {
+        let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+        let mut prover = Prover::new(&pp);
+        let witness = Witness::random(&params, WITNESS_SEED);
+        let (commitment, _) = prover.commit(&witness);
+        let matrix = commitment.matrix();
+        let primes = params.primes();
+        let residues = limbs::residues(matrix, &primes);
+        let r = params.columns();
+        for (limb, &q) in primes.iter().enumerate() {
+            let quad = limbs::Shape::of(q).quad;
+            for j in 0..r {
+                let mut a = [0i64; N];
+                for m in 0..4 {
+                    let c: [bin_ntt::recursion::Poly; CHUNKS] = core::array::from_fn(|b| {
+                        residues.vectors[limb * 4 + m][b * r + j]
+                    });
+                    let e = chunk::decode(&c);
+                    for t in 0..N162 {
+                        a[4 * t + m] = if t % 2 == 0 { e[t] } else { -e[t] };
+                    }
+                }
+                let back = bin_ntt::api::components_of(q, quad, &limbs::transform(q, quad, &a));
+                for m in 0..4 {
+                    assert_eq!(back[m], matrix.get(m, j).limbs[limb], "q = {q} column {j} component {m}");
+                }
+            }
+        }
+    }
+}
+
 /// The key rows really are the matrix the kernel commits with.
 #[test]
 fn key_rows_re_transform_to_the_key() {

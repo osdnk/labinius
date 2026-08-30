@@ -113,15 +113,20 @@ pub struct Gadget {
 
 impl Gadget {
     pub fn split(&self, x: i64) -> Vec<i64> {
+        let mut d = vec![0i64; self.levels];
+        self.split_into(x, &mut d);
+        d
+    }
+
+    /// The same into a caller-owned buffer, which the encoding reuses across the whole `S`-element
+    /// rather than allocating one per coefficient and level.
+    pub fn split_into(&self, x: i64, d: &mut [i64]) {
         let mut r = x;
-        let mut d = Vec::with_capacity(self.levels);
-        for _ in 0..self.levels {
-            let t = centre(r, self.base);
-            d.push(t);
-            r = (r - t) / self.base;
+        for t in d.iter_mut().take(self.levels) {
+            *t = centre(r, self.base);
+            r = (r - *t) / self.base;
         }
         assert_eq!(r, 0, "{x} does not fit {} base-{} digits", self.levels, self.base);
-        d
     }
     /// The largest magnitude the gadget represents.
     pub fn reach(&self) -> i64 {
@@ -506,36 +511,32 @@ impl Build {
         first
     }
 
-    /// One witness vector per carry level of `gadget`.
+    /// The witness vector the carries of `gadget` live in, returned once per level.
+    ///
+    /// The levels of one gadget share a cap and a support, so they share a vector and are told
+    /// apart by their offsets. The no-wraparound bound then adds their rows in quadrature against
+    /// one cap instead of one at a time, which costs about `sqrt(levels)` of the margin.
     pub fn carry_vectors(&mut self, tag: &str, gadget: Gadget) -> Vec<usize> {
-        (0..gadget.levels)
-            .map(|d| {
-                let v = self.vector(
-                    format!("e[{tag}][{d}]"),
-                    Cap::PerCoefficient(gadget.base as f64 / 2.0),
-                    CARRY,
-                    false,
-                );
-                self.rest.push(v);
-                v
-            })
-            .collect()
+        let v = self.vector(
+            format!("e[{tag}]"),
+            Cap::PerCoefficient(gadget.base as f64 / 2.0),
+            CARRY,
+            false,
+        );
+        self.rest.push(v);
+        vec![v; gadget.levels]
     }
 
-    /// One witness vector per digit level of `gadget`.
+    /// The same for the digit levels of a quotient.
     pub fn digit_vectors(&mut self, tag: &str, gadget: Gadget) -> Vec<usize> {
-        (0..gadget.levels)
-            .map(|d| {
-                let v = self.vector(
-                    format!("{tag}[{d}]"),
-                    Cap::PerCoefficient(gadget.base as f64 / 2.0),
-                    CHUNK,
-                    false,
-                );
-                self.rest.push(v);
-                v
-            })
-            .collect()
+        let v = self.vector(
+            tag.to_string(),
+            Cap::PerCoefficient(gadget.base as f64 / 2.0),
+            CHUNK,
+            false,
+        );
+        self.rest.push(v);
+        vec![v; gadget.levels]
     }
 
     /// Close one chain: the exact quotient of its left side by `divisor` into `quotient`'s digit
@@ -576,9 +577,16 @@ impl Build {
         if levels.is_empty() {
             assert_eq!(k, [0i64; N162], "{}: an unquotiented left side", chain.name);
         }
+        let mut split = vec![0i64; gadget.levels.max(1)];
+        let mut digits = vec![[0i64; N162]; levels.len()];
+        for t in 0..N162 {
+            gadget.split_into(k[t], &mut split);
+            for (d, digit) in digits.iter_mut().enumerate() {
+                digit[t] = split[d];
+            }
+        }
         for (d, &vector) in levels.iter().enumerate() {
-            let digit: SElem = core::array::from_fn(|t| gadget.split(k[t])[d]);
-            let off = self.vectors[vector].push_s(&digit);
+            let off = self.vectors[vector].push_s(&digits[d]);
             for b in 0..CHUNKS {
                 chain.scaled.push(Scaled {
                     factor: -divisor * gadget.base.pow(d as u32),
@@ -589,13 +597,20 @@ impl Build {
         }
         chain.scaled_into(&mut sums, &self.vectors);
         let e = Chain::honest_carries(&sums);
+        let g = chain.carries.gadget;
+        let mut polys = vec![[[0i16; DEG]; BLOCKS]; carry.len()];
+        split.resize(g.levels.max(1), 0);
+        for a in 0..BLOCKS {
+            for t in 0..CARRY {
+                g.split_into(e[a][t], &mut split);
+                for (d, level) in polys.iter_mut().enumerate() {
+                    level[a][t] = split[d] as i16;
+                }
+            }
+        }
         for (d, &vector) in carry.iter().enumerate() {
             chain.carries.at.push(At { vector, off: self.vectors[vector].polys.len() });
-            for a in 0..BLOCKS {
-                let mut p = [0i16; DEG];
-                for t in 0..CARRY {
-                    p[t] = chain.carries.gadget.split(e[a][t])[d] as i16;
-                }
+            for p in polys[d] {
                 self.vectors[vector].push(p);
             }
         }

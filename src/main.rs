@@ -13,7 +13,7 @@ const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 /// The seed the witness is drawn from.
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
 /// The core the process pins itself to.
-const CPU: usize = 2;
+const CPU: usize = 3;
 
 /// The shape of the instance: 2^WITNESS_LOG_LEN elements of F162 in 2^COLUMN_LOG_LEN columns,
 /// committed modulo the base modulus 3889 and every modulus listed in EXTRA_MODULI
@@ -275,6 +275,13 @@ fn recursive() {
         once(|| labrador::prove(&statement, &labrador::Witness::new(encoded.vectors)).expect("prove"));
     let phi_bytes = phi.footprint();
 
+    // The two halves of the verifier's rebuild that the prover does not run.
+    let (layout_ms, layout) = once(|| {
+        Instance::layout(&setup, &folding_challenges, &evaluation_point, &claimed_value)
+    });
+    let (bound_ms, cleared) = once(|| layout.clears());
+    assert!(cleared, "the no-wrap bound holds");
+
     println!("\n=== recursion on ===");
     row("public parameters", setup_ms);
     println!(
@@ -302,7 +309,8 @@ fn recursive() {
     row("  encoding", encode_ms + witness_ms);
     row("  T_R", t_r_ms);
     row("  masks", mask_ms);
-    row("  constraint phi", phi_ms + statement_ms);
+    row("  constraint phi", phi_ms);
+    row("  statement build", statement_ms);
     row("  labrador::prove", labrador_prove_ms);
     row("total", commit_ms + row_evaluate_ms + left_ms + prove_ms);
 
@@ -314,6 +322,10 @@ fn recursive() {
     println!("\nVERIFIER");
     row("derive_folding_challenges", challenges_ms);
     row("statement rebuild", rebuild_ms);
+    row("  layout", layout_ms);
+    row("  no-wrap bound", bound_ms);
+    row("  constraint phi", phi_ms);
+    row("  statement build", statement_ms);
     row("labrador::verify", labrador_verify_ms);
     row("total", challenges_ms + rebuild_ms + labrador_verify_ms);
 

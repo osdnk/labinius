@@ -6,7 +6,7 @@
 //! vector `i`. Cauchy-Schwarz gives `|.| <= sum_i ‖row_{t,i}‖_2 sqrt(betasq_i)`, exact over the
 //! caps and attained by a sign-aligned witness, and that is what this module computes from the
 //! generated blocks.
-use super::{Instance, BLOCKS, CARRY, DEG, Q, SPAN, SUB};
+use super::{Instance, BLOCKS, CARRY, CHUNKS, DEG, Q, SPAN, SUB};
 
 /// The worst position of one chain.
 #[derive(Clone, Debug)]
@@ -28,11 +28,37 @@ impl ChainBound {
 }
 
 impl Instance {
+    /// `‖row‖^2` of a whole public group at one `(chunk, diagonal, position)`, which is what every
+    /// run of a chain contributes: a run always covers its group, and the challenge group is
+    /// covered by nine of the ten chains, so summing the squares once per group rather than once
+    /// per product is the difference between `2.7M` and `6.2M` accumulations per proof.
+    fn group_squares(&self) -> Vec<Vec<[f64; SUB]>> {
+        self.groups
+            .iter()
+            .map(|g| {
+                let mut out = vec![[0f64; SUB]; CHUNKS * BLOCKS];
+                for e in &self.public[g.first..g.first + g.len] {
+                    for b in 0..CHUNKS {
+                        for a in 0..BLOCKS {
+                            let row = &mut out[b * BLOCKS + a];
+                            for (u, &x) in e[b][a].iter().enumerate() {
+                                row[u] += (x as f64) * (x as f64);
+                            }
+                        }
+                    }
+                }
+                out
+            })
+            .collect()
+    }
+
     /// The bound of the plan's section 5, one entry per chain.
     pub fn bound(&self) -> Vec<ChainBound> {
+        let squares = self.group_squares();
         self.chains
             .iter()
             .map(|c| {
+                let runs = self.runs(c);
                 let mut best = ChainBound {
                     name: c.name.clone(),
                     block: 0,
@@ -45,11 +71,11 @@ impl Instance {
                 let mut acc = vec![[0f64; SUB]; self.vectors.len()];
                 for a in 0..BLOCKS {
                     acc.iter_mut().for_each(|x| *x = [0f64; SUB]);
-                    for p in &c.products {
-                        let g = &self.public[p.blocks][p.chunk][a];
-                        let row = &mut acc[p.at.vector];
+                    for r in &runs {
+                        let g = &squares[r.group][r.chunk * BLOCKS + a];
+                        let row = &mut acc[r.at.vector];
                         for (u, &x) in g.iter().enumerate() {
-                            row[u] += (x as f64) * (x as f64);
+                            row[u] += x;
                         }
                     }
                     for t in 0..DEG {

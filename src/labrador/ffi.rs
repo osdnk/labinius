@@ -110,4 +110,7 @@ extern "C" {
     pub fn bn_set_witness_i16(wt: *mut c_void, i: usize, n: usize, s: *const i16) -> c_int;
     pub fn bn_witness_normsq(wt: *const c_void, i: usize) -> u64;
     pub fn bn_composite_size(p: *const c_void) -> f64;
+
+    pub fn bn_mute_stdout();
+    pub fn bn_unmute_stdout();
 }

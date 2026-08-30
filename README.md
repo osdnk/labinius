@@ -94,56 +94,71 @@ are given, which run once.
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit` | 13.96 |
-| `row_evaluate` | 0.30 |
-| `fold` | 4.48 |
-| *total* | *18.74* |
+| `commit` | 13.09 |
+| `row_evaluate` | 0.28 |
+| `fold` | 4.41 |
+| *total* | *17.77* |
 | **statement** | |
-| `derive_evaluation_point` | 0.55 |
-| `mle_evaluate` | 0.31 |
-| *total* | *0.86* |
+| `derive_evaluation_point` | 0.51 |
+| `mle_evaluate` | 0.28 |
+| *total* | *0.80* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.15 |
+| `derive_folding_challenges` | 1.12 |
 | `fold_commitment` | 0.30 |
 | `fold_row_evaluation` | 0.00 |
 | `verify_evaluation` | 0.01 |
-| `verify_folded_opening` | 0.32 |
-| *total* | *1.78* |
+| `verify_folded_opening` | 0.31 |
+| *total* | *1.74* |
 
 The wire is 648 KB of commitment, 6 KB of row evaluation and 324 KB of folded witness.
 
 The same shape with the recursion on. `PublicParameters::from_seed` additionally inverts the key
 rows, blocks them, converts the 221 184 key-time `phi` and the nine-bit pattern table to `polx`,
-and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 124 ms and
-233 MB, paid once per key.
+and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 120 ms and
+233 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 50.27 |
-| `row_evaluate` | 0.28 |
-| `commit_left_expansion` | 0.24 |
-| `prove_opening` | 489.25 |
-| — fold | 4.47 |
-| — encoding | 22.65 |
-| — `T_R` | 2.74 |
-| — masks | 2.41 |
-| — constraint `phi` | 16.90 |
-| — `labrador::prove` | 404.74 |
-| *total* | *540.05* |
+| `commit`, including `T_Y` | 18.38 |
+| `row_evaluate` | 0.29 |
+| `commit_left_expansion` | 0.25 |
+| `prove_opening` | 382.93 |
+| — fold | 4.67 |
+| — encoding | 18.10 |
+| — `T_R` | 2.58 |
+| — masks | 1.95 |
+| — constraint `phi` | 9.00 |
+| — statement build | 7.83 |
+| — `labrador::prove` | 300.49 |
+| *total* | *401.85* |
 | **statement** | |
 | `derive_evaluation_point` | 0.00 |
-| `mle_evaluate` | 0.29 |
-| *total* | *0.29* |
+| `mle_evaluate` | 0.30 |
+| *total* | *0.30* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.21 |
-| statement rebuild | 26.65 |
-| `labrador::verify` | 235.74 |
-| *total* | *263.60* |
+| `derive_folding_challenges` | 1.22 |
+| statement rebuild | 23.25 |
+| — layout | 2.37 |
+| — no-wrap bound | 2.30 |
+| — constraint `phi` | 9.00 |
+| — statement build | 7.83 |
+| `labrador::verify` | 221.66 |
+| *total* | *246.12* |
 
-The proof is 80.0 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 29 announced norms 0.2 KB and
-LaBRADOR's own 71.5 KB, against 978 KB in the clear. Per proof the constraint `phi` take 81 MB on
-top of the key's 233 MB; the peak resident set of one round in each mode is 592 MB.
+The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
+LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 81 MB on
+top of the key's 233 MB, plus 33 MB for the three mask rows; the peak resident set of one round in
+each mode is 588 MB.
+
+Against the first working version of the recursion, at the same shape and on the same core:
+`commit` 49.6 -> 18.4, `prove_opening` 526.4 -> 382.9 and the verifier 287.8 -> 246.1 ms. Where it
+went: LaBRADOR's own stdout chatter, which a terminal charges at 48 ms of a proof and 27 ms of a
+verification; `simple_verify`, which the honest prover has no reason to run (-60 ms); the residues
+of `T_Y`, off the scalar inverse transform and onto the vectorised one (-32 ms); the diagonal
+constraint order, which puts the key `phi` of a limb's four components in the last-level cache
+together (-20 ms proving, -12 ms verifying); the encoding's transposes and gadget splits (-5 ms);
+and the no-wraparound bound, summed once per public group instead of once per product (-2.5 ms).
 
 `Prover::new` allocates and first-touches the 85 MB workspace and runs one commitment and one
 fold to bring the kernels and the rejection tables up; `Prover::fold` hands the workspace back, so
@@ -152,7 +167,7 @@ a second `commit` allocates nothing.
 ## Running it
 
 ```
-cargo run --release --offline          # taskset -c 2 to pin it, as the table above is measured
+cargo run --release --offline          # taskset -c 3 to pin it, as the table above is measured
 cargo test --release --offline
 ```
 
@@ -170,7 +185,7 @@ const COLUMN_LOG_LEN: u32 = 8;                        // 256 columns
 const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721];   // plus the fixed base modulus 3889
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
-const CPU: usize = 2;
+const CPU: usize = 3;
 ```
 
 `EXTRA_MODULI` is any subset of `Modulus::{Q2917, Q4861, Q9721, Q12637}` (see the last
@@ -225,6 +240,29 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   `zmm`, 12 unreduced `clmul` products per block and a single reduction at the end of the whole
   product. The witness never leaves its own layout; it is transposed 8 elements at a time inside
   the loop.
+* **The residues are a batched inverse transform.** `T_Y` opens the RNS residues of the
+  commitment's columns, which are the four `R_162` components of each column read in the `Z`-basis.
+  Recovering them means rebuilding the 648 slots of the `R_648` element from its four components
+  and inverting the big transform; both used to be scalar, with a modular exponentiation per
+  twiddle, and cost 36 ms of a 50 ms `commit`. The recombination `E_t = sum_k psi^{v k} i^{tk} Y_k`
+  is now one table of `162 * 16` multipliers built with `162` exponentiations, and the inverse
+  transform is the crate's own `intt_gen_batch32` over 32 columns of a `Batch32` at a time: 5 ms.
+  A quadratic-slot limb has no batched inverse transform and keeps the scalar route.
+* **The block equations are emitted diagonal by diagonal.** A key `phi` buffer is read by exactly
+  two of the eighty limb constraints — the two output components whose `(k, twist)` it is, at the
+  same diagonal — and LaBRADOR's `aggregate_sparsecnst` streams `phi` constraint by constraint,
+  1.4 GB of it per pass. In chain order those two reads are eighteen constraints and 60 MB apart;
+  interleaving a limb's four components puts them four constraints apart, where the limb's whole
+  diagonal (12 MB) is still in the last-level cache. Worth 20 ms of proving and 12 ms of verifying,
+  and nothing else changes: any order is sound, and the two parties run the same function.
+* **The honest prover does not check its own witness.** `labrador::prove` used to call LaBRADOR's
+  `simple_verify` first, which converts the whole witness to `polx` and evaluates all 183
+  constraints against it — an aggregation pass' worth of work, 60 ms, to confirm what the encoding
+  has already asserted coefficient by coefficient. `prove_verified` keeps it for the tests.
+* **The library is quiet.** LaBRADOR prints a page of statement and proof-size chatter per
+  recursion level; on a terminal that is 48 ms of a proof and 27 ms of a verification. The shim
+  redirects fd 1 to `/dev/null` around every entry point and restores it after, so the crate's own
+  timing table is all that reaches the console. `BIN_NTT_LABRADOR_VERBOSE=1` puts it back.
 * **What the recursion precomputes.** A chain constraint's `phi` over a run of key rows is a
   function of the commitment key alone, so `recursion::setup` inverts the key rows once, blocks
   them, and converts all 432 buffers of `n` `polx` per limb — one per `(component, twist, chunk,

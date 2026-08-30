@@ -72,4 +72,10 @@ void bn_polx_table_sum(void *out, size_t len, const void *table, size_t terms,
 
 double bn_composite_size(const void *composite);
 
+/* Redirect fd 1 to /dev/null and back: LaBRADOR prints a page of chatter per recursion
+ * level and the crate keeps its own timing table. Not reentrant, and not thread safe;
+ * both calls are made under the crate's LaBRADOR lock. */
+void bn_mute_stdout(void);
+void bn_unmute_stdout(void);
+
 #endif

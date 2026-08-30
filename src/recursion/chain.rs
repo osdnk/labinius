@@ -73,11 +73,13 @@ impl Chain {
     pub fn prepare(&self, public: &[Blocks]) -> Prepared {
         let terms = self.products.len().next_multiple_of(32).max(32);
         let mut g = vec![0i16; BLOCKS * SUB * terms];
-        for (t, p) in self.products.iter().enumerate() {
-            let b = &public[p.blocks][p.chunk];
+        for (tile, ps) in self.products.chunks(32).enumerate() {
             for a in 0..BLOCKS {
                 for u in 0..SUB {
-                    g[(a * SUB + u) * terms + t] = b[a][u];
+                    let row = &mut g[(a * SUB + u) * terms + 32 * tile..];
+                    for (t, p) in ps.iter().enumerate() {
+                        row[t] = public[p.blocks][p.chunk][a][u];
+                    }
                 }
             }
         }
@@ -89,10 +91,12 @@ impl Chain {
     pub fn sums(&self, prep: &Prepared, w: &[Vector]) -> Sums {
         let terms = prep.terms;
         let mut x = vec![0i16; DEG * terms];
-        for (t, p) in self.products.iter().enumerate() {
-            let q = poly(w, p.at);
+        for (tile, ps) in self.products.chunks(32).enumerate() {
             for j in 0..DEG {
-                x[j * terms + t] = q[j];
+                let row = &mut x[j * terms + 32 * tile..];
+                for (t, p) in ps.iter().enumerate() {
+                    row[t] = poly(w, p.at)[j];
+                }
             }
         }
         let mut out = [[0i64; DEG]; BLOCKS];
@@ -100,14 +104,15 @@ impl Chain {
         for a in 0..BLOCKS {
             acc.fill(0);
             for j in 0..DEG {
-                for u in 0..SUB {
-                    acc[j + u] += unsafe {
-                        dot(
-                            prep.g.as_ptr().add((a * SUB + u) * terms),
-                            x.as_ptr().add(j * terms),
-                            terms,
-                        )
-                    };
+                let d = unsafe {
+                    dots(
+                        prep.g.as_ptr().add(a * SUB * terms),
+                        x.as_ptr().add(j * terms),
+                        terms,
+                    )
+                };
+                for (u, &x) in d.iter().enumerate() {
+                    acc[j + u] += x;
                 }
             }
             out[a][..DEG].copy_from_slice(&acc[..DEG]);
@@ -231,22 +236,28 @@ impl Chain {
     }
 }
 
-/// `sum_k a_k b_k` over `n` `i16` pairs, `n` a multiple of 32: `vpmaddwd` into `i32` lanes, widened
-/// every eight accumulations so that `8 * 2 * BLOCK_LIMIT * COEFF_LIMIT` cannot overflow.
+/// `sum_k a_{u,k} b_k` over `n` `i16` pairs for the [`SUB`] consecutive rows of `a`, `n` a multiple
+/// of 32: `vpmaddwd` into `i32` lanes, widened every eight accumulations so that
+/// `8 * 2 * BLOCK_LIMIT * COEFF_LIMIT` cannot overflow. One load of `b` feeds all [`SUB`] rows,
+/// which is what the diagonal loop wants and what keeps the kernel off the load ports.
 #[target_feature(enable = "avx512f,avx512bw")]
-unsafe fn dot(a: *const i16, b: *const i16, n: usize) -> i64 {
-    let mut wide = _mm512_setzero_si512();
-    let mut acc = _mm512_setzero_si512();
+unsafe fn dots(a: *const i16, b: *const i16, n: usize) -> [i64; SUB] {
+    let mut wide = [_mm512_setzero_si512(); SUB];
+    let mut acc = [_mm512_setzero_si512(); SUB];
     for k in 0..n / 32 {
-        let x = _mm512_loadu_si512(a.add(32 * k) as *const __m512i);
         let y = _mm512_loadu_si512(b.add(32 * k) as *const __m512i);
-        acc = _mm512_add_epi32(acc, _mm512_madd_epi16(x, y));
+        for u in 0..SUB {
+            let x = _mm512_loadu_si512(a.add(u * n + 32 * k) as *const __m512i);
+            acc[u] = _mm512_add_epi32(acc[u], _mm512_madd_epi16(x, y));
+        }
         if k % 8 == 7 {
-            wide = _mm512_add_epi64(wide, widen(acc));
-            acc = _mm512_setzero_si512();
+            for u in 0..SUB {
+                wide[u] = _mm512_add_epi64(wide[u], widen(acc[u]));
+                acc[u] = _mm512_setzero_si512();
+            }
         }
     }
-    _mm512_reduce_add_epi64(_mm512_add_epi64(wide, widen(acc)))
+    core::array::from_fn(|u| _mm512_reduce_add_epi64(_mm512_add_epi64(wide[u], widen(acc[u]))))
 }
 
 #[inline(always)]
