@@ -155,6 +155,11 @@ impl PublicParameters {
     pub fn params(&self) -> &Params {
         &self.params
     }
+
+    /// The expanded matrix, for [`crate::recursion`], which needs `A` in coefficient form.
+    pub(crate) fn key(&self) -> &CommitmentKey {
+        &self.key
+    }
 }
 
 // =============================================================================================
@@ -336,6 +341,11 @@ impl FoldingChallenges {
 
     pub fn is_empty(&self) -> bool {
         self.challenges.is_empty()
+    }
+
+    /// The challenges themselves, for [`crate::recursion`], which needs them as `S`-elements.
+    pub(crate) fn challenges(&self) -> &[ShortChallenge] {
+        &self.challenges
     }
 }
 
