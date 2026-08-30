@@ -29,22 +29,45 @@
 //! [`FOLD_PERIOD`] chunks.
 //!
 //! Only the base limb's transform is kept, and the prover stops there: `v` is inverted back to
-//! coefficients modulo `q1 = 3889`, where it becomes a genuine small-integer vector. The verifier
-//! is the one that transforms it forward again modulo every limb (`vertical_gen`, or
-//! `vertical_gen_quad` for a quadratic-slot one) and recomputes `A v`.
+//! coefficients modulo the base prime, where it becomes a genuine small-integer vector. The
+//! verifier is the one that transforms it forward again modulo every limb (`vertical_gen`,
+//! `vertical_gen_large` above `2^14`, or `vertical_gen_quad` for a quadratic-slot one) and
+//! recomputes `A v`.
+//!
+//! # The base limb is any of the seven
+//!
+//! Nothing above depends on the tree the base limb's `R_648` has. The transform the commitment
+//! keeps is 648 rows either way — the 648 linear slots of a splitting prime, or the two
+//! coefficients of each of the 324 quadratic leaves — and the *challenge* is what decides whether
+//! the slot-wise product is a scalar one:
+//!
+//! `c` enters `R_648` as `c(-X^4)`, a polynomial in `X^4`. Modulo a quadratic leaf `X^2 - psi'^u`
+//! that is `X^4 = psi'^{2u}`, a constant, so the leaf image of a challenge is the *scalar*
+//! `c(-theta^v)` and its `X`-coefficient row vanishes. Multiplying a witness leaf `w_0 + w_1 X`
+//! by it is `c w_0 + c w_1 X`: the same one `vpmaddwd` per slot vector as for a splitting base,
+//! once the scalar is written into both rows of the leaf ([`duplicate_leaf_scalars`]). The
+//! degree-2 product with its bilinear rank 3 is the *commitment's* problem, where `A` is uniform
+//! ([`crate::simd::commit`]'s `MacQ`), not the fold's.
+//!
+//! What does change with the base is the accumulation bound: `|W|` is the binary kernel's
+//! declared output bound for that prime — 6.96 q for 2917, 7.50 for 3889, 3.17 for 4861, 2.29 for
+//! 9721, 1.94 for 12637, 1.79 and 1.58 for the two above `2^14` — and `|c|` is `(q-1)/2`, so
+//! [`fold_period`] is per prime and runs from 64 chunks down to 4. The inverse transform back to
+//! coefficients is that tree's ([`intt_gen_batch32`], `vertical_gen_large`'s, or
+//! `vertical_gen_quad`'s).
 use crate::api::{components_of, AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::challenge::ShortChallenge;
-use crate::params::{N, QS_LARGE};
+use crate::params::{quadratic_slots, N, QS, QS_LARGE, QS_QUAD, QUAD_SLOTS};
 use crate::simd::commit as cm;
 use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
 use crate::simd::vertical_gen_large as vgl;
-use crate::simd::vertical_gen_quad::{self as vgq, ntt_quad_gen_batch32};
+use crate::simd::vertical_gen_quad::{self as vgq, intt_quad_gen_batch32, ntt_quad_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
 
-/// The prime the witness transform is kept in, and the one the fold accumulates over: the base
-/// limb of every key.
+/// The default base limb, the prime the witness transform is kept in unless [`crate::Params`]
+/// names another.
 pub const Q1: u16 = BASE_PRIME;
 /// The second prime of the default limb list, reached — like every additional limb — by an
 /// inverse transform of `v` and a forward one on `len_ring / 32` batches.
@@ -54,26 +77,56 @@ pub const Q2: u16 = PRIMES[1];
 // the accumulation bound
 // =============================================================================================
 
-/// What one chunk adds to one accumulator lane: `|W| <= 7.5 q` (the binary kernel's declared
-/// output bound, [`cm::w_bound`]) times `|c| <= (q-1)/2` (a fully reduced centered challenge
-/// slot, [`cm::a_bound`]) — one product, unlike the commitment's four, because a lane of this
-/// accumulator carries one ring element rather than four.
-pub const fn fold_per_chunk(q: u16) -> i64 {
-    cm::w_bound(q) * cm::a_bound(q)
+/// Bound on one lane of the kept transform: the base kernel's declared output bound, whichever
+/// tree it runs ([`cm::w_bound`] for a splitting prime, [`cm::w_bound_quad`] for a quadratic
+/// one).
+pub const fn witness_bound(q: u16) -> i64 {
+    if quadratic_slots(q) {
+        cm::w_bound_quad(q)
+    } else {
+        cm::w_bound(q)
+    }
 }
 
-/// Chunks accumulated between two fold-backs.
+/// What one chunk adds to one accumulator lane: `|W| <= witness_bound(q)` times `|c| <= (q-1)/2`
+/// (a fully reduced centered challenge slot, [`cm::a_bound`]) — one product, unlike the
+/// commitment's four, because a lane of this accumulator carries one ring element rather than
+/// four.
+pub const fn fold_per_chunk(q: u16) -> i64 {
+    witness_bound(q) * cm::a_bound(q)
+}
+
+/// Chunks accumulated between two fold-backs of a base limb's accumulator.
 ///
 /// `|acc| <= acc_after_reduce + P * fold_per_chunk` must fit `i32`; for `q = 3889` that is
 /// `2^15 (1 + 3312) + P * 29167 * 1944 = 108 592 384 + P * 56 700 648`, so `P = 32` (1 923 013 120)
-/// fits and `P = 64` does not.
-pub const FOLD_PERIOD: usize = 32;
+/// fits and `P = 64` does not. The chunks are accumulated in pairs, so the period must be even.
+pub const fn fold_period(q: u16) -> usize {
+    cm::period_for(q, fold_per_chunk(q))
+}
+
+/// The default base's period, and the constant the module comment quotes.
+pub const FOLD_PERIOD: usize = fold_period(Q1);
 
 const fn fits(q: u16, p: usize) -> bool {
     cm::acc_after_reduce(q) + (p as i64) * fold_per_chunk(q) <= i32::MAX as i64
 }
+const _: () = assert!(FOLD_PERIOD == 32);
 const _: () = assert!(fits(Q1, FOLD_PERIOD));
 const _: () = assert!(!fits(Q1, 2 * FOLD_PERIOD));
+const _: () = {
+    let mut i = 0;
+    while i < 3 {
+        assert!(fits(QS_QUAD[i], fold_period(QS_QUAD[i])) && fold_period(QS_QUAD[i]) % 2 == 0);
+        i += 1;
+    }
+    let mut i = 0;
+    while i < 2 {
+        assert!(fits(QS[i], fold_period(QS[i])) && fold_period(QS[i]) % 2 == 0);
+        assert!(fits(QS_LARGE[i], fold_period(QS_LARGE[i])) && fold_period(QS_LARGE[i]) % 2 == 0);
+        i += 1;
+    }
+};
 
 /// Batches of `A v` between two fold-backs of a splitting limb's accumulator: both operands are
 /// centered, so a lane grows by `4 ((q-1)/2)^2` per batch. 128 for 3889 and 32 for 9721, where
@@ -100,24 +153,45 @@ const _: () = {
 // small vector helpers
 // =============================================================================================
 
-/// `floor(2^43 / q)`, the Barrett magic of [`barrett29`].
+/// `floor(2^43 / q)`, the Barrett magic of [`barrett_u31`].
 const fn barrett_magic(q: u16) -> u64 {
     (1u64 << 43) / q as u64
 }
 
-/// The multiple of `q` added before [`barrett29`] to make a folded-back lane non-negative:
-/// the smallest one at least [`cm::acc_after_reduce`], so the sum stays below `2^29`.
+/// The multiple of `q` added before [`barrett_u31`] to make a folded-back lane non-negative:
+/// the smallest one at least [`cm::acc_after_reduce`], so the sum is in `[0, 2 shift_up]`.
 const fn shift_up(q: u16) -> i32 {
     let a = cm::acc_after_reduce(q);
     let k = (a + q as i64 - 1) / q as i64;
     (k * q as i64) as i32
 }
-const _: () = assert!(2 * (shift_up(Q1) as i64) < (1i64 << 29));
 
-/// `p mod q` for `0 <= p < 2^29`, 16 lanes at a time (the same Barrett as
-/// `api::decompose_648_to_4x162` uses).
+/// What [`barrett_u31`] needs of a base limb: the shifted lane is a non-negative i32, and the
+/// 32x32 product against the magic stays inside the 64-bit lane it is formed in. `2 shift_up` is
+/// `2^15 (1 + 2^16 mod q)` rounded up to a multiple of q, so it is largest for 17497
+/// (855 million, `2^29.7`) and 9721 (473 million); the products are `2^59` at worst.
+const fn drain_fits(q: u16) -> bool {
+    let p = 2 * shift_up(q) as u64;
+    p < (1u64 << 31) && p * barrett_magic(q) < (1u64 << 63)
+}
+const _: () = {
+    let mut i = 0;
+    while i < 3 {
+        assert!(drain_fits(QS_QUAD[i]));
+        i += 1;
+    }
+    let mut i = 0;
+    while i < 2 {
+        assert!(drain_fits(QS[i]) && drain_fits(QS_LARGE[i]));
+        i += 1;
+    }
+};
+
+/// `p mod q` for `0 <= p < 2^31` with `p * barrett_magic(q) < 2^63` ([`drain_fits`]), 16 lanes at
+/// a time: the quotient estimate is short by at most `p / 2^43 < 1`, so one conditional subtract
+/// finishes it.
 #[inline(always)]
-unsafe fn barrett29<const Q: u16>(p: __m512i) -> __m512i {
+unsafe fn barrett_u31<const Q: u16>(p: __m512i) -> __m512i {
     let q = _mm512_set1_epi32(Q as i32);
     let mag = _mm512_set1_epi64(barrett_magic(Q) as i64);
     let lo = _mm512_set1_epi64(0xFFFF_FFFFu32 as i64);
@@ -271,7 +345,7 @@ pub(crate) fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> Chal
 }
 
 /// The same on the quadratic-slot tree: the 648 rows are then the two coefficients of each of the
-/// 324 leaves, which is the algebra [`combine_limb`] multiplies in.
+/// 324 leaves.
 pub(crate) fn challenge_ntt_quad<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
     let mut bs = slots(challenges);
     unsafe {
@@ -280,6 +354,34 @@ pub(crate) fn challenge_ntt_quad<const Q: u16>(challenges: &[ShortChallenge]) ->
             center_batch::<Q>(b);
         }
     }
+    pack(&bs, challenges.len())
+}
+
+/// Each leaf's scalar written into both of the leaf's rows.
+///
+/// `c(-X^4)` is a polynomial in `X^4`, and `X^4 = psi'^{2u}` in the leaf `X^2 - psi'^u`, so a
+/// challenge's leaf image is the scalar `c(-theta^v)`: row `2j+1` of its transform is zero and
+/// row `2j` carries the scalar. Copying it up makes the leaf product `c (w_0 + w_1 X)` the same
+/// row-wise multiply a splitting limb's slot product is.
+fn duplicate_leaf_scalars(b: &mut Batch32) {
+    for j in 0..QUAD_SLOTS {
+        debug_assert!(b.v[2 * j + 1] == [0i16; 32], "a challenge leaf is not a scalar");
+        b.v[2 * j + 1] = b.v[2 * j];
+    }
+}
+
+/// The challenge transform a quadratic-slot *base* limb folds against.
+pub(crate) fn challenge_ntt_quad_base<const Q: u16>(
+    challenges: &[ShortChallenge],
+) -> ChallengeNtt {
+    let mut bs = slots(challenges);
+    unsafe {
+        for b in bs.iter_mut() {
+            ntt_quad_gen_batch32::<Q>(b);
+            center_batch::<Q>(b);
+        }
+    }
+    bs.iter_mut().for_each(duplicate_leaf_scalars);
     pack(&bs, challenges.len())
 }
 
@@ -416,8 +518,8 @@ unsafe fn drain<const Q: u16>(acc: *const i32, out: &mut Batch32) {
         let p = acc.add(32 * u);
         let lo = cm::reduce_vec::<Q>(_mm512_load_si512(p as *const __m512i));
         let hi = cm::reduce_vec::<Q>(_mm512_load_si512(p.add(16) as *const __m512i));
-        let lo = barrett29::<Q>(_mm512_add_epi32(lo, up));
-        let hi = barrett29::<Q>(_mm512_add_epi32(hi, up));
+        let lo = barrett_u31::<Q>(_mm512_add_epi32(lo, up));
+        let hi = barrett_u31::<Q>(_mm512_add_epi32(hi, up));
         let n0 = _mm512_permutex2var_epi32(lo, i0, hi);
         let n1 = _mm512_permutex2var_epi32(lo, i1, hi);
         let c0 = _mm512_mask_sub_epi32(n0, _mm512_cmpgt_epi32_mask(n0, half), n0, q);
@@ -428,8 +530,9 @@ unsafe fn drain<const Q: u16>(acc: *const i32, out: &mut Batch32) {
     }
 }
 
-/// `v_ntt = sum_j c_j o W_j` modulo `Q1`, centered, one `Batch32` per batch position.
-fn accumulate(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
+/// `v_ntt = sum_j c_j o W_j` modulo the base prime `Q`, centered, one `Batch32` per batch
+/// position.
+fn accumulate<const Q: u16>(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
     let pairs = ch.pair.len();
     let mut acc = vec![AccVec([0i32; 16]); bpc * N * 2];
     let base = acc.as_mut_ptr() as *mut i32;
@@ -444,15 +547,15 @@ fn accumulate(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
                     base.add(32 * N * b),
                 );
             }
-            if (2 * (i + 1)) % FOLD_PERIOD == 0 {
-                fold_back::<Q1>(base, bpc * N * 2);
+            if (2 * (i + 1)) % fold_period(Q) == 0 {
+                fold_back::<Q>(base, bpc * N * 2);
             }
         }
         let mut out: Vec<Batch32> = (0..bpc)
             .map(|_| Batch32::zero(Representation::Ntt))
             .collect();
         for b in 0..bpc {
-            drain::<Q1>(base.add(32 * N * b), &mut out[b]);
+            drain::<Q>(base.add(32 * N * b), &mut out[b]);
         }
         out
     }
@@ -529,33 +632,84 @@ const _: () = assert!(av_period_quad(12637) >= 1);
 // the fold
 // =============================================================================================
 
-/// `v = sum_j c_j W_j`, in coefficient form modulo [`Q1`], centered — the amortised witness.
+/// The inverse transform of a splitting base limb: `vertical_gen` below `2^14`,
+/// `vertical_gen_large` above it, chosen before the branches are emitted.
+///
+/// # Safety
+/// AVX-512 F/BW/VL/VBMI; `b` is a centered transform.
+#[inline(always)]
+unsafe fn inverse_split<const Q: u16>(b: &mut Batch32) {
+    if Gen::<Q>::LARGE {
+        vgl::intt_gen_batch32::<Q>(b);
+    } else {
+        intt_gen_batch32::<Q>(b);
+    }
+}
+
+/// The fold over a splitting base limb: transform the challenges, accumulate, invert.
+fn fold_split<const Q: u16>(
+    aux: &AuxData,
+    challenges: &[ShortChallenge],
+    bpc: usize,
+) -> Vec<Batch32> {
+    let ch = challenge_ntt::<Q>(challenges);
+    let mut vb = accumulate::<Q>(aux, &ch, bpc);
+    unsafe {
+        for b in vb.iter_mut() {
+            inverse_split::<Q>(b);
+        }
+    }
+    vb
+}
+
+/// The same over a quadratic-slot base limb.
+fn fold_quad<const Q: u16>(
+    aux: &AuxData,
+    challenges: &[ShortChallenge],
+    bpc: usize,
+) -> Vec<Batch32> {
+    let ch = challenge_ntt_quad_base::<Q>(challenges);
+    let mut vb = accumulate::<Q>(aux, &ch, bpc);
+    unsafe {
+        for b in vb.iter_mut() {
+            intt_quad_gen_batch32::<Q>(b);
+        }
+    }
+    vb
+}
+
+/// `v = sum_j c_j W_j`, in coefficient form modulo the base prime, centered — the amortised
+/// witness.
 ///
 /// Stage (a) embeds the challenges as `c(-X^4)` and transforms them modulo the base limb, (b) is
-/// the slot-wise inner product over the kept witness (the 85 MB stream), (c) is the inverse
-/// transform, whose output is already fully reduced and centered, so `v` is the true integer
-/// vector: a coefficient is a sum of `r w` signed 0/1 terms, standard deviation `sqrt(r w / 2)`,
-/// two orders below `q1 / 2 = 1944.5`.
+/// the slot-wise inner product over the kept witness (the 85 MB stream), (c) is the base limb's
+/// inverse transform, whose output is already fully reduced and centered, so `v` is the true
+/// integer vector: a coefficient is a sum of `r w` signed 0/1 terms, standard deviation
+/// `sqrt(r w / 2)`, two orders below `q/2` for the narrowest base there is (2917, `q/2 = 1458.5`).
 pub(crate) fn fold_witness(
     aux: &AuxData,
     challenges: &[ShortChallenge],
     bpc: usize,
+    q: u16,
+    quad: bool,
 ) -> Vec<RingElement> {
     assert_eq!(challenges.len(), aux.chunks(), "one challenge per chunk");
     assert_eq!(bpc, aux.batches_per_chunk(), "the key and the chunks disagree");
-    let ch = challenge_ntt::<Q1>(challenges);
-    let mut vb = accumulate(aux, &ch, bpc);
-    let half = (Q1 as i32 - 1) / 2;
-    let mut max_abs = 0i32;
-    unsafe {
-        for b in vb.iter_mut() {
-            intt_gen_batch32::<Q1>(b);
-            max_abs = max_abs.max(max_abs_batch(b));
-        }
-    }
+    let vb = match (q, quad) {
+        (3889, false) => fold_split::<3889>(aux, challenges, bpc),
+        (9721, false) => fold_split::<9721>(aux, challenges, bpc),
+        (17497, false) => fold_split::<17497>(aux, challenges, bpc),
+        (19441, false) => fold_split::<19441>(aux, challenges, bpc),
+        (2917, true) => fold_quad::<2917>(aux, challenges, bpc),
+        (4861, true) => fold_quad::<4861>(aux, challenges, bpc),
+        (12637, true) => fold_quad::<12637>(aux, challenges, bpc),
+        _ => unreachable!("no limb with q = {q}"),
+    };
+    let half = (q as i32 - 1) / 2;
+    let max_abs = vb.iter().map(|b| unsafe { max_abs_batch(b) }).max().unwrap_or(0);
     assert!(
         max_abs <= half,
-        "the folded witness does not fit the centered range of q1"
+        "the folded witness does not fit the centered range of the base modulus {q}"
     );
     (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect()
 }

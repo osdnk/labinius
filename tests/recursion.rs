@@ -31,7 +31,7 @@ fn round(params: &Params) -> Instance {
 }
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Modulus::Q9721], true).unwrap()
+    Params::new(9, 2, vec![Modulus::Q9721_FS_S], true).unwrap()
 }
 
 // =============================================================================================
@@ -122,7 +122,7 @@ fn inverse_transforms_round_trip() {
 /// crate's own forward transform, over both a partial and a full batch of columns.
 #[test]
 fn residues_re_transform_to_the_commitment() {
-    for params in [Params::new(9, 2, vec![Modulus::Q9721], false).unwrap(), Params::new(15, 6, vec![Modulus::Q2917, Modulus::Q9721], false).unwrap()] {
+    for params in [Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap(), Params::new(15, 6, vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S], false).unwrap()] {
         let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
         let mut prover = Prover::new(&pp);
         let witness = Witness::random(&params, WITNESS_SEED);
@@ -221,11 +221,11 @@ fn the_instance_holds_over_z() {
 fn the_instance_holds_on_every_limb() {
     for extra in [
         vec![],
-        vec![Modulus::Q2917],
-        vec![Modulus::Q2917, Modulus::Q4861, Modulus::Q12637],
-        vec![Modulus::Q17497],
-        vec![Modulus::Q19441],
-        vec![Modulus::Q9721, Modulus::Q19441],
+        vec![Modulus::Q2917_Q_S],
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S, Modulus::Q12637_Q_S],
+        vec![Modulus::Q17497_FS_L],
+        vec![Modulus::Q19441_FS_L],
+        vec![Modulus::Q9721_FS_S, Modulus::Q19441_FS_L],
     ] {
         let n = extra.len() + 1;
         let i = round(&Params::new(9, 2, extra.clone(), true).unwrap());
@@ -334,7 +334,7 @@ fn lifts_reduce_to_f162() {
 /// row, and the reduction's two foldings leave it at twice `|g|` at worst.
 #[test]
 fn public_blocks_stay_inside_their_limit() {
-    for m in Modulus::ALL {
+    for m in Modulus::ALL.into_iter().filter(|m| *m != Modulus::BASE) {
         let params = Params::new(9, 2, vec![m], false).unwrap();
         let pp = PublicParameters::from_seed(params, [3u8; 32]);
         for limb in 0..2 {

@@ -2,8 +2,9 @@
 
 An Ajtai commitment, a folding step and their verifier over `R_648 = Z_q[X]/(X^648 - X^324 + 1)`,
 the 1944-th cyclotomic ring, for a witness of binary ring elements carried as elements of
-`F162 = GF(2)[x]/(x^162 + x^81 + 1)`. The witness is committed modulo the base modulus 3889 and
-any of `2917, 4861, 9721, 12637, 17497, 19441`, folded against short ternary challenges of the
+`F162 = GF(2)[x]/(x^162 + x^81 + 1)`. The witness is committed modulo any subset of
+`2917, 3889, 4861, 9721, 12637, 17497, 19441`, one of which is the base — 3889 by default —
+folded against short ternary challenges of the
 subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the folded opening is checked against the multilinear
 extension of the same witness over `F162` — one AVX-512 thread throughout. The opening is either
 sent in the clear or recursed into a single LaBRADOR proof of 80 KB.
@@ -53,14 +54,15 @@ witness `v` is short, that `A v` equals `sum_j c_j C_j` modulo every modulus, an
 
 ## The recursive opening
 
-`Params::new(witness_log_len, column_log_len, extra_moduli, true)` replaces the last three
+`Params::new(witness_log_len, column_log_len, extra_moduli, true)` — or `Params::with_base` with
+a base other than 3889 — replaces the last three
 messages by one LaBRADOR proof. The commitment the verifier receives becomes the Ajtai commitment
 `T_Y` to the RNS residues of the matrix, the left expansion `u` becomes `T_u`, and `v` is never
 sent: the prover commits to the rest of the witness as `T_R`, announces the exact squared norm of
 every witness vector, takes the verifier's mask scalars, and proves everything at once.
 
 ```rust
-let params = Params::new(18, 8, vec![Modulus::Q9721], true).unwrap();
+let params = Params::new(18, 8, vec![Modulus::Q9721_FS_S], true).unwrap();
 // public_parameters, witness, prover and verifier as above
 let (commitment, opening) = prover.commit(&witness);            // commitment = T_Y
 
@@ -265,17 +267,22 @@ file:
 ```rust
 const WITNESS_LOG_LEN: u32 = 18;                      // 2^18 elements of F162
 const COLUMN_LOG_LEN: u32 = 8;                        // 256 columns
-const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721];   // plus the fixed base modulus 3889
+const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721_FS_S];   // plus the default base modulus 3889
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
 const CPU: usize = 3;
 ```
 
-`EXTRA_MODULI` is any subset of `Modulus::{Q2917, Q4861, Q9721, Q12637, Q17497, Q19441}` (see the
-last implementation note for what each one costs); `Params::basic()` is this same shape for library
-users, with the recursion off. `Params::new(witness_log_len, column_log_len, extra_moduli,
-recursion)` refuses a column shorter than one 128-`F162` batch, fewer than two columns, more
-columns than elements, or a repeated modulus. `cargo run` prints both modes.
+`EXTRA_MODULI` is any subset of
+`Modulus::{Q2917_Q_S, Q3889_FS_S, Q4861_Q_S, Q9721_FS_S, Q12637_Q_S, Q17497_FS_L, Q19441_FS_L}`
+that leaves out the base (see the last implementation note for what each one costs); the suffix
+names the family — `_FS_S` fully splitting below `2^14`, `_Q_S` quadratic-slot, `_FS_L` fully
+splitting above `2^14`. `Params::basic()` is this same shape for library users, with the recursion
+off. `Params::new(witness_log_len, column_log_len, extra_moduli, recursion)` builds it over the
+default base 3889 and `Params::with_base(witness_log_len, column_log_len, base, extra_moduli,
+recursion)` over any other; both refuse a column shorter than one 128-`F162` batch, fewer than two
+columns, more columns than elements, a repeated modulus, or the base repeated among the extra
+ones. `cargo run` prints both modes.
 
 ## Implementation notes
 
@@ -345,6 +352,22 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   transforms anything again: it is one `vpmaddwd` per slot vector and pair of columns over a
   single pass of that buffer, and the result comes back to coefficients as a genuine small
   integer vector.
+* **Any modulus can be the base.** The base limb is the one the commitment keeps the transform
+  of, the fold accumulates over and the folded witness comes back from; `Params::with_base` picks
+  it, and all three families cost the same one `vpmaddwd` per slot vector. A quadratic-slot base
+  is *not* a degree-2 product: a challenge enters `R_648` as `c(-X^4)`, and `X^4` is a constant
+  modulo a leaf `X^2 - psi'^u`, so its leaf image is the scalar `c(-theta^v)` and the fold is the
+  same row-wise multiply once that scalar is written into both rows of the leaf. What does change
+  is the fold-back period, which each prime's `|W| |c|` fixes at compile time: 64 batches for
+  2917, 32 for 3889 and 4861, 16 for 9721, 8 for 12637 and 4 for the two above `2^14`, whose
+  wider `|A|` is what makes them the only ones to pay for it. At the basic shape the fold is
+  4.43 ms over 2917, 4.44 over 3889, 4.48 over 4861, 4.51 over 9721, 4.69 over 12637, 4.85 over
+  17497 and 4.84 over 19441 — a 9 % spread, all of it the fold-backs. Coming back to coefficients uses
+  that tree's inverse transform: `vertical_gen`'s below `2^14`, `vertical_gen_large`'s above it,
+  and `vertical_gen_quad`'s for the quadratic tree, whose reduction placement is the same kind of
+  `const` search as the forward kernel's (1080 lookup Barretts per batch of 32 for 2917 and 4861,
+  1836 for 12637) and whose whole `1/324` normalisation, corrected by the Phi_6 determinant, sits
+  in the three level-0 constants.
 * **A reference kernel next to the generated one.** `simd::vertical_bin` is the pure-intrinsics
   implementation of the same split-tree binary kernel — one Rust expression per butterfly, and the
   two-multiply Barrett on the untwiddled `a0` of levels 4, 5 and 6 for q = 9721 — kept out of the
@@ -363,7 +386,9 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   twiddle, and cost 36 ms of a 50 ms `commit`. The recombination `E_t = sum_k psi^{v k} i^{tk} Y_k`
   is now one table of `162 * 16` multipliers built with `162` exponentiations, and the inverse
   transform is the crate's own `intt_gen_batch32` over 32 columns of a `Batch32` at a time: 5 ms.
-  A quadratic-slot limb has no batched inverse transform and keeps the scalar route.
+  A quadratic-slot limb goes the same way now that its tree has a batched inverse too — the
+  recombination is then the class butterfly `y mod (X^2 -+ psi'^v) = Y_k -+ psi'^v Y_{k+2}` out of
+  a table of 162 constants — which takes that limb from 5.5 ms to 1.0 ms at 256 columns.
 * **The block equations are emitted diagonal by diagonal.** A key `phi` buffer is read by exactly
   two of the eighty limb constraints — the two output components whose `(k, twist)` it is, at the
   same diagonal — and LaBRADOR's `aggregate_sparsecnst` streams `phi` constraint by constraint,
@@ -408,17 +433,18 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
 * **The moduli, quantified.** Committing 2^18 `F162` in 256 columns modulo the base 3889 alone
   takes 7.3 ms; each extra modulus adds its own transform, base multiplication and fold-down on
   the shared front end (wall clock, one core, best of 15; the cycle columns are per ring element,
-  cache-resident):
+  cache-resident). The name's suffix is the family: `_FS_S` fully splitting below `2^14`, `_Q_S`
+  quadratic-slot, `_FS_L` fully splitting above `2^14`.
 
-  | modulus | slots | added to `commit` | transform | base multiplication | fold-down |
-  |---------|-------|------------------:|----------:|--------------------:|----------:|
-  | 2917    | quadratic | +5.97 ms | 247 cycles | 74 cycles | 17 cycles |
-  | 4861    | quadratic | +6.29 ms | 254 | 74 | 17 |
-  | 3889 (base) | linear | 7.34 ms | 280 | 58 | 7 |
-  | 9721    | linear | +6.50 ms | 304 | 58 | 7 |
-  | 12637   | quadratic | +7.19 ms | 291 | 75 | 16 |
-  | 17497   | linear | +8.13 ms | 415 | 58 | 9 |
-  | 19441   | linear | +9.83 ms | 514 | 58 | 7 |
+  | modulus | added to `commit` | transform | base multiplication | fold-down |
+  |---------|------------------:|----------:|--------------------:|----------:|
+  | `Q2917_Q_S`   | +5.97 ms | 247 cycles | 74 cycles | 17 cycles |
+  | `Q4861_Q_S`   | +6.29 ms | 254 | 74 | 17 |
+  | `Q3889_FS_S` (the default base) | 7.34 ms | 280 | 58 | 7 |
+  | `Q9721_FS_S`  | +6.50 ms | 304 | 58 | 7 |
+  | `Q12637_Q_S`  | +7.19 ms | 291 | 75 | 16 |
+  | `Q17497_FS_L` | +8.13 ms | 415 | 58 | 9 |
+  | `Q19441_FS_L` | +9.83 ms | 514 | 58 | 7 |
 
   The front end costs 31 more cycles per ring element and is paid once however many moduli
   follow. A quadratic-slot modulus runs a shorter tree — one radix-2 level fewer, and for 2917

@@ -11,7 +11,7 @@ const MATRIX_SEED: [u8; 32] = [31u8; 32];
 const WITNESS_SEED: [u8; 32] = [37u8; 32];
 
 fn small() -> Params {
-    Params::new(11, 3, vec![Q9721], false).unwrap()
+    Params::new(11, 3, vec![Q9721_FS_S], false).unwrap()
 }
 
 /// `eq(ps, b)` straight from the definition.

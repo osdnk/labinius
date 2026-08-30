@@ -17,10 +17,10 @@ const CPU: usize = 3;
 
 /// The shape of the instance: 2^WITNESS_LOG_LEN elements of F162 in 2^COLUMN_LOG_LEN columns,
 /// committed modulo the base modulus 3889 and every modulus listed in EXTRA_MODULI
-/// (any subset of Modulus::{Q2917, Q4861, Q9721, Q12637}).
+/// (any subset of Modulus::{Q2917_Q_S, Q4861_Q_S, Q9721_FS_S, Q12637_Q_S}).
 const WITNESS_LOG_LEN: u32 = 18;
 const COLUMN_LOG_LEN: u32 = 8;
-const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721];
+const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721_FS_S];
 
 extern "C" {
     fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;

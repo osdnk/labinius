@@ -854,26 +854,72 @@ impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
     }
 }
 
+/// The same sink, plus a non-temporal copy of the block to a materialised transform — what a
+/// quadratic *base* limb leaves behind for [`crate::fold`]. 18 `vmovntdq` per block, the same
+/// 41472 bytes per batch the splitting [`MacKeep`] streams out.
+struct MacKeepQ<const Q: u16, const PF: bool> {
+    buf: *mut i16,
+    a: *const i16,
+    apf: *const i8,
+    acc01: *mut i32,
+    acc2: *mut i32,
+    out: *mut i16,
+}
+
+impl<const Q: u16, const PF: bool> QBlockSink for MacKeepQ<Q, PF> {
+    #[inline(always)]
+    unsafe fn dst(&mut self, _blk: usize) -> *mut i16 {
+        self.buf
+    }
+
+    #[target_feature(enable = "avx512f,avx512bw")]
+    unsafe fn block(&mut self, blk: usize, w: *const i16) {
+        mac_quad18::<Q, true>(
+            w,
+            self.a.add(32 * 18 * blk),
+            self.apf.add(64 * 18 * blk),
+            self.acc01.add(16 * QACC01_PER_BLK * blk),
+            self.acc2.add(16 * QACC2_PER_BLK * blk),
+        );
+        let dst = self.out.add(32 * 18 * blk);
+        for i in 0..18 {
+            _mm512_stream_si512(
+                dst.add(32 * i) as *mut __m512i,
+                _mm512_load_si512(w.add(32 * i) as *const __m512i),
+            );
+        }
+    }
+}
+
 /// One batch of a quadratic limb: the transform consumed block by block into `acc`, with the A
-/// prefetch one batch ahead and the two fold-backs on their own periods.
+/// prefetch one batch ahead, the two fold-backs on their own periods, and the transform kept
+/// when `KEEP`.
 ///
 /// # Safety
 /// `idx` is the batch's index rows; `a` and `apf` are 648-vector A rows; `buf` is 18 writable
-/// 64-byte aligned vectors.
+/// 64-byte aligned vectors; `out` is 648 writable vectors when `KEEP`.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn quad_batch<const Q: u16, const PF: bool>(
+unsafe fn quad_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     idx: &BinaryIndex32,
     a: *const i16,
     apf: *const i8,
     buf: *mut i16,
     p01: *mut i32,
     p2: *mut i32,
+    out: *mut i16,
     done: usize,
 ) {
-    vq::ntt_quad_bin_batch32_sink::<Q, _>(
-        idx,
-        &mut MacQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2 },
-    );
+    if KEEP {
+        vq::ntt_quad_bin_batch32_sink::<Q, _>(
+            idx,
+            &mut MacKeepQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2, out },
+        );
+    } else {
+        vq::ntt_quad_bin_batch32_sink::<Q, _>(
+            idx,
+            &mut MacQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2 },
+        );
+    }
     if done % red_period_quad01(Q) == 0 {
         reduce_quad_part::<Q>(p01, QBLOCKS * QACC01_PER_BLK);
     }
@@ -983,7 +1029,8 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool, const PF: bool>(
 ///
 /// `limbs[0]` is the base limb; `w`, when given, receives the transform of every ring element
 /// modulo `limbs[0].q` (non-temporal stores out of that limb's block sink), which is what
-/// [`crate::fold`] consumes. `out` receives one 648-row commitment per limb, in `[0, q)`.
+/// [`crate::fold`] consumes — 648 rows whichever tree that limb runs. `out` receives one 648-row
+/// commitment per limb, in `[0, q)`.
 pub fn commit_limbs_into(
     elems: &[F162],
     limbs: &[Limb],
@@ -1131,19 +1178,34 @@ unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
         for r in runs.iter() {
             let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
             let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
+            let o = if r.keep.is_null() {
+                core::ptr::null_mut()
+            } else {
+                (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
+            };
             if r.quad {
-                match r.q {
-                    2917 => quad_batch::<2917, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
-                    4861 => quad_batch::<4861, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
-                    12637 => quad_batch::<12637, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, b + 1),
+                match (r.q, o.is_null()) {
+                    (2917, true) => {
+                        quad_batch::<2917, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
+                    (2917, false) => {
+                        quad_batch::<2917, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
+                    (4861, true) => {
+                        quad_batch::<4861, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
+                    (4861, false) => {
+                        quad_batch::<4861, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
+                    (12637, true) => {
+                        quad_batch::<12637, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
+                    (12637, false) => {
+                        quad_batch::<12637, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    }
                     _ => unreachable!("no quadratic kernel for q = {}", r.q),
                 }
             } else {
-                let o = if r.keep.is_null() {
-                    core::ptr::null_mut()
-                } else {
-                    (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
-                };
                 match (r.q, o.is_null()) {
                     (3889, true) => split_batch::<3889, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
                     (3889, false) => split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),

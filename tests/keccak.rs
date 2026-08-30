@@ -21,7 +21,7 @@ fn f162(rng: &mut Rng) -> F162 {
 /// multilinear must agree.
 #[test]
 fn the_switch_point_is_the_evaluation_point() {
-    for params in [Params::new(11, 3, vec![Modulus::Q9721], false).unwrap(), Params::basic()] {
+    for params in [Params::new(11, 3, vec![Modulus::Q9721_FS_S], false).unwrap(), Params::basic()] {
         let mut rng = Rng::new(0x5EED_1234);
         let trace: Vec<B128> = (0..params.witness_len())
             .map(|_| B128(u128::from(rng.next_u64()) | (u128::from(rng.next_u64()) << 64)))

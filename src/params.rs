@@ -260,6 +260,25 @@ pub const CONDUCTOR_QUAD: u32 = 972;
 pub const QS_QUAD: [u16; 3] = [2917, 4861, 12637];
 /// Number of quadratic leaves.
 pub const QUAD_SLOTS: usize = 324;
+
+/// Does `R_648` end in 324 quadratic leaves modulo `q` rather than in 648 linear slots?
+/// `q = 1 mod 972` but not mod 1944, which is exactly [`QS_QUAD`].
+pub const fn quadratic_slots(q: u16) -> bool {
+    (q as u32 - 1) % CONDUCTOR_QUAD == 0 && (q as u32 - 1) % CONDUCTOR != 0
+}
+
+const _: () = {
+    let mut i = 0;
+    while i < 3 {
+        assert!(quadratic_slots(QS_QUAD[i]));
+        i += 1;
+    }
+    let mut i = 0;
+    while i < 2 {
+        assert!(!quadratic_slots(QS[i]) && !quadratic_slots(QS_LARGE[i]));
+        i += 1;
+    }
+};
 /// Radix of the split that turns level `l` into level `l+1` (level 0 is the whole ring).
 pub const RADIX_Q: [usize; 6] = [2, 2, 3, 3, 3, 3];
 /// Number of sub-rings at level `l` (level 6 = the 324 quadratic leaves).

@@ -1,8 +1,9 @@
 //! Correctness, bound and product tests for the quadratic-slot tree (q in `QS_QUAD`): the scalar
-//! reference against the definition, both SIMD kernels against the scalar reference slot for
-//! slot, the declared output bounds, an i32 shadow model of the binary kernel's schedule, and the
-//! `R_162` decomposition of a transform.
+//! reference against the definition, all three SIMD kernels — binary, generic and the generic
+//! inverse — against the scalar reference slot for slot, the declared bounds, an i32 shadow model
+//! of the binary kernel's schedule, and the `R_162` decomposition of a transform.
 use bin_ntt::params::*;
+use bin_ntt::recursion::limbs;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar::{self, Coeffs};
 use bin_fields::scalar::F162;
@@ -630,4 +631,138 @@ fn product_through_the_simd_outputs() {
     simd_product::<2917>();
     simd_product::<4861>();
     simd_product::<12637>();
+}
+
+// ------------------------------------------------------------------ the vectorised inverse
+
+/// A fully reduced transform written into a batch, centered — what the fold hands the inverse.
+fn centered_slots<const Q: u16>(slots: &[Coeffs]) -> Batch32 {
+    let half = ((Q - 1) / 2) as i32;
+    let mut b = Batch32::zero(Representation::Ntt);
+    for (p, s) in slots.iter().enumerate() {
+        for j in 0..N {
+            let x = s[j] as i32;
+            b.v[j][p] = if x > half { (x - Q as i32) as i16 } else { x as i16 };
+        }
+    }
+    b
+}
+
+/// `intt_quad_gen_batch32` against the scalar [`limbs::intt_quad`], slot for slot, on random
+/// transforms fed in the centered form the fold produces.
+fn inverse_kernel<const Q: u16>() {
+    let mut rng = Rng::new(0x11D5 ^ Q as u64);
+    let half = ((Q - 1) / 2) as i32;
+    for _ in 0..6 {
+        let coeffs: Vec<Coeffs> = (0..32).map(|_| random_coeffs(&mut rng, Q)).collect();
+        let slots: Vec<Coeffs> = coeffs.iter().map(scalar::ntt_quad::<Q>).collect();
+        let mut b = centered_slots::<Q>(&slots);
+        unsafe { vgq::intt_quad_gen_batch32::<Q>(&mut b) };
+        assert_eq!(b.representation, Representation::Coefficients);
+        for p in 0..32 {
+            let want = limbs::intt_quad::<Q>(&slots[p]);
+            assert_eq!(want, coeffs[p], "q={Q} the scalar inverse is not the inverse");
+            for j in 0..N {
+                let got = b.v[j][p] as i32;
+                assert!(got.abs() <= half, "q={Q} coefficient {j} lane {p}: |{got}| not centered");
+                assert_eq!(
+                    got.rem_euclid(Q as i32) as u32,
+                    want[j],
+                    "q={Q} coefficient {j} lane {p}"
+                );
+            }
+        }
+    }
+    println!(
+        "q={Q} inverse: reductions {:?}, per-level bound {:?}, input {:.3} q",
+        vgq::inv_flags(Q),
+        vgq::inv_bound(Q),
+        vgq::in_bound(Q) as f64 / Q as f64
+    );
+}
+
+#[test]
+fn vectorised_inverse_matches_the_scalar_one() {
+    inverse_kernel::<2917>();
+    inverse_kernel::<4861>();
+    inverse_kernel::<12637>();
+}
+
+/// The same on a lazily reduced transform: the binary kernel's output, inverted straight back to
+/// the bits.
+fn inverse_at_the_declared_bound<const Q: u16>() {
+    let bound = vgq::in_bound(Q);
+    let half = ((Q - 1) / 2) as i32;
+    for polys in batches(3, 0x5EED ^ Q as u64) {
+        let mut b = Batch32::zero(Representation::Ntt);
+        unsafe { vq::ntt_quad_bin_batch32::<Q>(&idx_of(&polys), &mut b) };
+        for j in 0..N {
+            for p in 0..32 {
+                let x = b.v[j][p] as i32;
+                assert!(x.abs() <= bound, "q={Q} row {j} lane {p}: |{x}| over the input bound");
+            }
+        }
+        unsafe { vgq::intt_quad_gen_batch32::<Q>(&mut b) };
+        for j in 0..N {
+            for p in 0..32 {
+                let got = b.v[j][p] as i32;
+                assert!(got.abs() <= half, "q={Q} coefficient {j} lane {p} not centered");
+                assert_eq!(got, polys[p][j] as i32, "q={Q} coefficient {j} lane {p}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_inverse_takes_a_lazily_reduced_transform() {
+    inverse_at_the_declared_bound::<2917>();
+    inverse_at_the_declared_bound::<4861>();
+    inverse_at_the_declared_bound::<12637>();
+}
+
+#[test]
+fn generic_round_trip() {
+    fn go<const Q: u16>() {
+        let mut rng = Rng::new(0x3C3C ^ Q as u64);
+        let half = ((Q - 1) / 2) as i16;
+        let mut b = Batch32::zero(Representation::Coefficients);
+        for j in 0..N {
+            for p in 0..32 {
+                b.v[j][p] = rng.below(Q as u32) as i16 - half;
+            }
+        }
+        let want = b.clone();
+        unsafe {
+            vgq::ntt_quad_gen_batch32::<Q>(&mut b);
+            vgq::intt_quad_gen_batch32::<Q>(&mut b);
+        }
+        assert_eq!(b.v, want.v, "q={Q}");
+    }
+    go::<2917>();
+    go::<4861>();
+    go::<12637>();
+}
+
+/// A folding challenge enters `R_648` as `c(-X^4)`, a polynomial in `X^4`; modulo the leaf
+/// `X^2 - psi'^u` that is `X^4 = psi'^{2u}`, a scalar, so the transform's odd rows vanish. This is
+/// what lets the fold multiply a quadratic-slot base row by row instead of leaf by leaf.
+fn subring_element_is_a_leaf_scalar<const Q: u16>() {
+    let mut rng = Rng::new(0x4A4A ^ Q as u64);
+    for _ in 0..4 {
+        let mut a = [0u32; N];
+        for m in 0..162 {
+            a[4 * m] = rng.below(Q as u32);
+        }
+        let y = scalar::ntt_quad::<Q>(&a);
+        for j in 0..QUAD_SLOTS {
+            assert_eq!(y[2 * j + 1], 0, "q={Q} leaf {j} has an X coefficient");
+        }
+    }
+}
+
+#[test]
+fn an_embedded_subring_element_has_no_x_coefficient() {
+    subring_element_is_a_leaf_scalar::<2917>();
+    subring_element_is_a_leaf_scalar::<4861>();
+    subring_element_is_a_leaf_scalar::<12637>();
 }

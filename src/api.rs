@@ -1,7 +1,7 @@
 //! The commitment key, the commitment, and the height-4 view of its output over the 243-rd
 //! cyclotomic ring. This is the engine room of [`crate::scheme`], not the surface a caller uses.
 //!
-//! * [`CommitmentKey`] holds the Ajtai matrix `A` for the base prime [`BASE_PRIME`] and for each
+//! * [`CommitmentKey`] holds the Ajtai matrix `A` for the base [`Modulus`] and for each other
 //!   [`Modulus`] the key was built with, in the NTT domain, centered, in the layout the
 //!   AVX-512 kernel streams.
 //! * [`CommitmentKey::commit_into_aux`] maps a witness — a plain `&[F162]`, read as binary ring
@@ -59,8 +59,8 @@
 //! primitive 243-rd root of unity. Outputs are centered into `[-(q-1)/2, (q-1)/2]`; note the `4^-1`
 //! factor above, which is already applied.
 use crate::params::{
-    inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS, QS_LARGE, QS_QUAD,
-    QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
+    inv_mod, pow_mod, quadratic_slots, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS,
+    QS_LARGE, QS_QUAD, QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
 };
 use crate::rng::Rng;
 use crate::simd::commit as cm;
@@ -68,59 +68,72 @@ use crate::types::{Batch32, Representation};
 use bin_fields::scalar::F162;
 use core::arch::x86_64::*;
 
-/// The primes of the default limb list: the base and [`Modulus::Q9721`]. Both are
+/// The primes of the default limb list: the default base and [`Modulus::Q9721_FS_S`]. Both are
 /// `1 mod 1944`, so `R_q` splits into 648 linear factors and the transform is complete.
 pub const PRIMES: [u16; 2] = QS;
 
-/// The base limb, present in every key: the only prime below `2^13` for which `R_648` splits
-/// completely, and the limb the folded witness lives in.
+/// The default base limb, the one every existing configuration uses: the only prime below `2^13`
+/// for which `R_648` splits completely. Any [`Modulus`] can take its place
+/// ([`crate::Params::with_base`]); the base is the limb whose transform a commitment keeps and
+/// whose domain the fold runs in.
 pub const BASE_PRIME: u16 = QS[0];
 
-/// A limb a [`CommitmentKey`] can carry on top of [`BASE_PRIME`].
+/// A limb a [`CommitmentKey`] can carry, as its base or on top of it.
 ///
-/// `Q9721`, `Q17497` and `Q19441` are splitting primes (648 linear slots): `Q9721` runs the
-/// hand-scheduled `vertical_bin_asm`, the two above `2^14` the reduce-at-every-level
+/// `Q3889_FS_S`, `Q9721_FS_S`, `Q17497_FS_L` and `Q19441_FS_L` are splitting primes (648 linear slots): the first two
+/// run the hand-scheduled `vertical_bin_asm`, the two above `2^14` the reduce-at-every-level
 /// `vertical_bin_large`. The other three are the *quadratic-slot* primes of
 /// [`crate::params::QS_QUAD`] — `q = 1 mod 972` but not mod 1944, so `Phi_1944` factors into 324
 /// irreducible quadratics and the transform ends at `Z_q[X]/(X^2 - psi'^u)` leaves
 /// (`vertical_bin_quad`). All three kinds produce the same public output: four elements of
 /// `R_162`, 162 slots each, in the [`POW3_SLOT_EXP`] order.
+///
+/// The suffix names the family, so a call site reads the trade-off off the name: `_FS_S` fully
+/// splitting below `2^14`, `_Q_S` quadratic-slot, `_FS_L` fully splitting above `2^14`.
+#[allow(non_camel_case_types)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Modulus {
-    Q2917,
-    Q4861,
-    Q9721,
-    Q12637,
-    Q17497,
-    Q19441,
+    Q2917_Q_S,
+    Q3889_FS_S,
+    Q4861_Q_S,
+    Q9721_FS_S,
+    Q12637_Q_S,
+    Q17497_FS_L,
+    Q19441_FS_L,
 }
 
 impl Modulus {
-    /// Every limb, cheapest first (the order of the ranking in the README).
-    pub const ALL: [Modulus; 6] = [
-        Modulus::Q2917,
-        Modulus::Q4861,
-        Modulus::Q9721,
-        Modulus::Q12637,
-        Modulus::Q17497,
-        Modulus::Q19441,
+    /// Every limb, in ascending order of modulus — which is the README's cost ranking except
+    /// that the base 3889 sits one place later there, behind 4861.
+    pub const ALL: [Modulus; 7] = [
+        Modulus::Q2917_Q_S,
+        Modulus::Q3889_FS_S,
+        Modulus::Q4861_Q_S,
+        Modulus::Q9721_FS_S,
+        Modulus::Q12637_Q_S,
+        Modulus::Q17497_FS_L,
+        Modulus::Q19441_FS_L,
     ];
+
+    /// The default base limb, [`BASE_PRIME`].
+    pub const BASE: Modulus = Modulus::Q3889_FS_S;
 
     /// The prime.
     pub const fn prime(self) -> u16 {
         match self {
-            Modulus::Q2917 => QS_QUAD[0],
-            Modulus::Q4861 => QS_QUAD[1],
-            Modulus::Q9721 => QS[1],
-            Modulus::Q12637 => QS_QUAD[2],
-            Modulus::Q17497 => QS_LARGE[0],
-            Modulus::Q19441 => QS_LARGE[1],
+            Modulus::Q2917_Q_S => QS_QUAD[0],
+            Modulus::Q3889_FS_S => QS[0],
+            Modulus::Q4861_Q_S => QS_QUAD[1],
+            Modulus::Q9721_FS_S => QS[1],
+            Modulus::Q12637_Q_S => QS_QUAD[2],
+            Modulus::Q17497_FS_L => QS_LARGE[0],
+            Modulus::Q19441_FS_L => QS_LARGE[1],
         }
     }
 
     /// Does `R_648` end in 324 quadratic leaves for this prime (rather than 648 linear slots)?
     pub const fn is_quadratic(self) -> bool {
-        matches!(self, Modulus::Q2917 | Modulus::Q4861 | Modulus::Q12637)
+        quadratic_slots(self.prime())
     }
 
     /// The limb of a prime, if it is one.
@@ -128,6 +141,8 @@ impl Modulus {
         Modulus::ALL.into_iter().find(|l| l.prime() == q)
     }
 }
+
+const _: () = assert!(Modulus::BASE.prime() == BASE_PRIME);
 
 /// Degree of the small ring `R_162 = Z_q[Z]/Phi_243(Z)`; `Phi_243(Z) = Z^162 + Z^81 + 1`.
 pub const N162: usize = 162;
@@ -456,7 +471,7 @@ impl Default for PowerOfThreeRingElement {
 }
 
 /// One element of `R_162` given by its residues modulo the key's limbs: `limbs[0]` is the residue
-/// modulo [`BASE_PRIME`] and `limbs[1 + i]` the one modulo the key's `i`-th
+/// modulo the key's base limb and `limbs[1 + i]` the one modulo the key's `i`-th additional
 /// [`Modulus`], in the order the key was built with.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PowerOfThreeRingElementWithLimbs {
@@ -470,7 +485,7 @@ impl PowerOfThreeRingElementWithLimbs {
             limbs: vec![PowerOfThreeRingElement::zero(); n],
         }
     }
-    /// The residue modulo [`BASE_PRIME`].
+    /// The residue modulo the key's base limb.
     pub fn base(&self) -> &PowerOfThreeRingElement {
         &self.limbs[0]
     }
@@ -549,36 +564,37 @@ const F162_PER_BATCH: usize = 128;
 /// every limb of the key. Opaque: the layout is the vertical one the AVX-512 kernels stream
 /// ([`crate::simd::commit`]).
 ///
-/// Limb 0 is [`BASE_PRIME`]; limb `1 + i` is the `i`-th [`Modulus`] the key was built with.
+/// Limb 0 is the base [`Modulus`]; limb `1 + i` is the `i`-th additional one.
 /// A split limb's rows are the 648 tree-order slots, a quadratic limb's are the 648 rows of the
 /// quadratic tree (the two coefficients of each of the 324 leaves); in both cases every row is
 /// uniform in `[-(q-1)/2, (q-1)/2]`.
 pub struct CommitmentKey {
     a: Vec<Vec<Batch32>>,
+    base: Modulus,
     additional: Vec<Modulus>,
     len_f162: usize,
 }
 
 impl CommitmentKey {
-    /// A uniformly random key for `len_f162` witness elements over the base limb and
-    /// `additional`, deterministically from `seed`. `len_f162` must be a multiple of 128
-    /// (= 32 ring elements, one `Batch32` per limb).
+    /// A uniformly random key for `len_f162` witness elements over `base` and `additional`,
+    /// deterministically from `seed`. `len_f162` must be a multiple of 128 (= 32 ring elements,
+    /// one `Batch32` per limb).
     ///
     /// Costs `(1 + additional.len()) * len_f162 / 128 * 41472` bytes: 85 MB per limb for
     /// `len_f162 = 2^18`.
-    pub fn random(len_f162: usize, seed: u64, additional: &[Modulus]) -> Self {
+    pub fn random(len_f162: usize, seed: u64, base: Modulus, additional: &[Modulus]) -> Self {
         assert!(
             len_f162 > 0 && len_f162 % F162_PER_BATCH == 0,
             "len_f162 must be a multiple of 128"
         );
         assert_eq!(core::mem::size_of::<F162>(), 24, "F162 is not 24 bytes");
-        let mut seen = Vec::new();
+        let mut seen = vec![base];
         for l in additional {
             assert!(!seen.contains(l), "the limb {l:?} is listed twice");
             seen.push(*l);
         }
         let nb = len_f162 / F162_PER_BATCH;
-        let primes: Vec<u16> = core::iter::once(BASE_PRIME)
+        let primes: Vec<u16> = core::iter::once(base.prime())
             .chain(additional.iter().map(|l| l.prime()))
             .collect();
         let a = primes
@@ -602,6 +618,7 @@ impl CommitmentKey {
             .collect();
         CommitmentKey {
             a,
+            base,
             additional: additional.to_vec(),
             len_f162,
         }
@@ -627,18 +644,29 @@ impl CommitmentKey {
         &self.additional
     }
 
-    /// The prime of limb `k` (limb 0 is [`BASE_PRIME`]).
-    pub fn prime(&self, k: usize) -> u16 {
+    /// The base limb: limb 0, whose transform a commitment keeps and whose domain the fold runs
+    /// in.
+    pub fn base(&self) -> Modulus {
+        self.base
+    }
+
+    /// The limb at index `k` (limb 0 is [`base`](Self::base)).
+    pub fn limb(&self, k: usize) -> Modulus {
         if k == 0 {
-            BASE_PRIME
+            self.base
         } else {
-            self.additional[k - 1].prime()
+            self.additional[k - 1]
         }
+    }
+
+    /// The prime of limb `k`.
+    pub fn prime(&self, k: usize) -> u16 {
+        self.limb(k).prime()
     }
 
     /// Does limb `k` use the quadratic-slot tree?
     pub fn is_quadratic(&self, k: usize) -> bool {
-        k > 0 && self.additional[k - 1].is_quadratic()
+        self.limb(k).is_quadratic()
     }
 
     /// The matrix itself, for limb `k`, in the vertical layout [`crate::simd::commit`] streams:
@@ -764,7 +792,7 @@ fn uninit_batches(n: usize) -> Vec<Batch32> {
 // =============================================================================================
 
 /// Everything a commitment leaves behind that the folding step ([`crate::fold`]) needs, and
-/// nothing a caller has to look inside: the witness's transform modulo [`BASE_PRIME`] in the
+/// nothing a caller has to look inside: the witness's transform modulo the base limb in the
 /// layout the kernel produced it, and the raw 648-row commitments of the `r` chunks for every
 /// limb of the key.
 ///
@@ -772,7 +800,7 @@ fn uninit_batches(n: usize) -> Vec<Batch32> {
 /// 2^16 ring elements it holds 2048 `Batch32` = 85 MB, whatever the limb list is: only the base
 /// limb's transform is kept.
 pub struct AuxData {
-    /// The transform modulo [`BASE_PRIME`], `batches[b].v[u][p]` = slot `u` of ring element
+    /// The transform modulo the base limb, `batches[b].v[u][p]` = row `u` of ring element
     /// `32 b + p`, lazily reduced (`|v| <= 7.5 q`, the binary kernel's declared output bound).
     pub(crate) batches: Vec<Batch32>,
     /// `raw[k][j]` = the commitment of chunk `j` for limb `k`, 648 rows in `[0, q)`.

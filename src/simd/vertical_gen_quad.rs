@@ -544,3 +544,549 @@ pub unsafe fn ntt_quad_gen_batch32<const Q: u16>(b: &mut Batch32) {
     }
     b.representation = Representation::Ntt;
 }
+
+// =============================================================================================
+// the inverse transform
+// =============================================================================================
+//
+// `Ntt -> Coefficients` on the same tree, the five passes in the opposite order — level 5 and
+// level 4 per 18-block, then levels 3 + 2 per 162-block, then levels 1 + 0 over the whole batch —
+// with Gentleman-Sande butterflies, the transposes of the forward ones, which cost exactly what
+// the forward ones cost: `u = omega (y2 - y1)`, then `(y0+y1+y2, (y0-y1+u) zeta^-1,
+// (y0-y2-u) zeta^-2)`, 3 Montgomery products and 7 add/sub for radix 3, and
+// `(y0+y1, (y0-y1) zeta^-1)` for radix 2.
+//
+// The per-level `1/3` and `1/2` are *not* applied: every value reaching level 0 is the true one
+// times `2 * 3^4 = 162` — one factor 3 less than the splitting tree's 324, because the tree has
+// one radix-2 level fewer — and the whole `1/324` corrected by the Phi_6 determinant sits in the
+// three level-0 constants `TwQI::KA`, `KB`, `KC`, exactly as `crate::simd::vertical_gen` folds
+// `1/648` into its own. The output is fully reduced and centered in `[-(q-1)/2, (q-1)/2]`.
+//
+// The reduction is again the shuffle-port lookup Barrett — this kernel has no multiply-port slack
+// either — and its placement is a `const` search over one flag per level, `inv_flags`, for the
+// cheapest schedule that keeps every intermediate inside i16 and leaves level 0 inside `3q/2`,
+// which is what the two-conditional centering needs. `inv_model` replays it, and `inv_bound` is
+// the per-level table it produces; `tests/quad.rs` replays the same schedule on data.
+//
+//     q         input     reduced levels               reductions   cycles/poly (forward)
+//     2917      7.94 q    the level-5 inputs, 5, 3           1080     540 (393)
+//     4861      3.26 q    the level-5 inputs, 4, 2           1080     540 (406)
+//     12637     1.94 q    the level-5 inputs, every level    1836     602 (469)
+//
+// The declared input is the widest transform of this tree the crate produces — the forward
+// kernel's own output, which is wider than the binary kernel's — so the three loaded values of a
+// level-5 butterfly are reduced in every schedule: `y1 + y2` alone is 16 q at 2917 and leaves i16
+// before anything can be done about it. What the inverse pays over its forward is what the linear
+// pair pays: the Phi_6 inverse is a general 2x2 (3 Montgomery products per level-0 butterfly
+// against pass A's 1), the untwiddled sums have to be reduced level after level because a sum
+// cannot absorb a constant the way a Montgomery product does, and the 648 outputs are centered.
+
+/// `|barrett_lut(a)| <= barrett_lut_max(q)`, and the reduction never grows a lane.
+const fn red_bound(b: i32, q: u16) -> i32 {
+    let r = barrett_lut_max(q);
+    if r < b {
+        r
+    } else {
+        b
+    }
+}
+
+/// Declared input bound of [`intt_quad_gen_batch32`]: the largest transform of this tree the
+/// crate produces, the wider of the binary kernel's lazily reduced output and this module's own
+/// (7.94 q / 3.26 q / 1.94 q — the generic one, in all three cases). The fold's centered
+/// `(q-1)/2` is far inside it.
+pub const fn in_bound(q: u16) -> i32 {
+    let bin = crate::simd::vertical_bin_quad::output_bound(q);
+    let gen = output_bound(q);
+    if bin > gen {
+        bin
+    } else {
+        gen
+    }
+}
+
+/// The inverse schedule replayed on bounds, position by position, with exactly the kernel's
+/// reduction placement: `[after level 5, 4, 3, 2, 1, 0 before centering]` and the largest
+/// intermediate the pass ever forms (which is what has to stay inside i16).
+///
+/// `f = [inputs of level 5, sums of level 5, of level 4, of level 3, of level 2, of level 1]`.
+pub const fn inv_model(q: u16, f: [bool; 6]) -> ([i32; 6], i32) {
+    let mut v = [in_bound(q); N];
+    let mut lm = [0i32; 6];
+    let mut peak = 0i32;
+    macro_rules! ir3 {
+        ($i0:expr, $i1:expr, $i2:expr, $bar:expr, $inb:expr) => {{
+            let (mut y0, mut y1, mut y2) = (v[$i0], v[$i1], v[$i2]);
+            if $inb {
+                y0 = red_bound(y0, q);
+                y1 = red_bound(y1, q);
+                y2 = red_bound(y2, q);
+            }
+            let u = mont_bound(y1 + y2, q);
+            let s = y0 + y1 + y2;
+            let x1 = y0 + y1 + u;
+            let x2 = y0 + y2 + u;
+            if y1 + y2 > peak {
+                peak = y1 + y2;
+            }
+            if s > peak {
+                peak = s;
+            }
+            if x1 > peak {
+                peak = x1;
+            }
+            if x2 > peak {
+                peak = x2;
+            }
+            v[$i0] = if $bar { red_bound(s, q) } else { s };
+            v[$i1] = mont_bound(x1, q);
+            v[$i2] = mont_bound(x2, q);
+        }};
+    }
+    macro_rules! ir2 {
+        ($i0:expr, $i1:expr, $bar:expr) => {{
+            let s = v[$i0] + v[$i1];
+            if s > peak {
+                peak = s;
+            }
+            v[$i0] = if $bar { red_bound(s, q) } else { s };
+            v[$i1] = mont_bound(s, q);
+        }};
+    }
+    macro_rules! level_max {
+        ($l:expr) => {{
+            let mut i = 0;
+            while i < N {
+                if v[i] > lm[$l] {
+                    lm[$l] = v[i];
+                }
+                i += 1;
+            }
+        }};
+    }
+    let mut k4 = 0;
+    while k4 < 36 {
+        let base = 18 * k4;
+        let mut g = 0;
+        while g < 3 {
+            let mut i = 0;
+            while i < 2 {
+                let b = base + 6 * g + i;
+                ir3!(b, b + 2, b + 4, f[1], f[0]);
+                i += 1;
+            }
+            g += 1;
+        }
+        k4 += 1;
+    }
+    level_max!(0);
+    let mut k4 = 0;
+    while k4 < 36 {
+        let base = 18 * k4;
+        let mut i = 0;
+        while i < 6 {
+            ir3!(base + i, base + i + 6, base + i + 12, f[2], false);
+            i += 1;
+        }
+        k4 += 1;
+    }
+    level_max!(1);
+    let mut blk = 0;
+    while blk < 4 {
+        let base = 162 * blk;
+        let mut i0 = 0;
+        while i0 < 18 {
+            let mut s = 0;
+            while s < 3 {
+                let b = base + 54 * s + i0;
+                ir3!(b, b + 18, b + 36, f[3], false);
+                s += 1;
+            }
+            i0 += 1;
+        }
+        blk += 1;
+    }
+    level_max!(2);
+    let mut blk = 0;
+    while blk < 4 {
+        let base = 162 * blk;
+        let mut i0 = 0;
+        while i0 < 18 {
+            let mut a = 0;
+            while a < 3 {
+                let b = base + i0 + 18 * a;
+                ir3!(b, b + 54, b + 108, f[4], false);
+                a += 1;
+            }
+            i0 += 1;
+        }
+        blk += 1;
+    }
+    level_max!(3);
+    let mut i = 0;
+    while i < 162 {
+        ir2!(i, i + 162, f[5]);
+        ir2!(i + 324, i + 486, f[5]);
+        i += 1;
+    }
+    level_max!(4);
+    // level 0: a1 = mont(Y0-Y1), a0 = mont(Y0+Y1) + mont(Y0-Y1); then centered.
+    let mut i = 0;
+    while i < 324 {
+        let s = v[i] + v[i + 324];
+        if s > peak {
+            peak = s;
+        }
+        let m = mont_bound(s, q);
+        if 2 * m > peak {
+            peak = 2 * m;
+        }
+        if 2 * m > lm[5] {
+            lm[5] = 2 * m;
+        }
+        i += 1;
+    }
+    (lm, peak)
+}
+
+/// Reductions one flag buys, per batch of 32: 648 for the three loaded inputs of the 216
+/// level-5 butterflies, 216 for the untwiddled output of each radix-3 level, 324 for the 324
+/// radix-2 ones of level 1.
+const fn inv_cost(f: [bool; 6]) -> i32 {
+    let mut c = 0;
+    if f[0] {
+        c += 648;
+    }
+    let mut l = 1;
+    while l < 5 {
+        if f[l] {
+            c += 216;
+        }
+        l += 1;
+    }
+    if f[5] {
+        c += 324;
+    }
+    c
+}
+
+/// The cheapest reduction placement that keeps every intermediate inside i16 and level 0 inside
+/// `3q/2` — the range the two-conditional centering of [`centre`] inverts — by exhaustive `const`
+/// search over the 64 flag combinations.
+const fn inv_flags_search(q: u16) -> [bool; 6] {
+    let mut best = [true; 6];
+    let mut best_cost = i32::MAX;
+    let mut mask = 0usize;
+    while mask < 64 {
+        let mut f = [false; 6];
+        let mut l = 0;
+        while l < 6 {
+            f[l] = mask & (1 << l) != 0;
+            l += 1;
+        }
+        let (lm, peak) = inv_model(q, f);
+        let cost = inv_cost(f);
+        if peak <= 32767 && lm[5] <= q as i32 + (q as i32 - 1) / 2 && cost < best_cost {
+            best = f;
+            best_cost = cost;
+        }
+        mask += 1;
+    }
+    best
+}
+
+const INV_SCHED: [([bool; 6], [i32; 6]); 3] = [
+    inv_sched(QS_QUAD[0]),
+    inv_sched(QS_QUAD[1]),
+    inv_sched(QS_QUAD[2]),
+];
+
+const fn inv_sched(q: u16) -> ([bool; 6], [i32; 6]) {
+    let f = inv_flags_search(q);
+    (f, inv_model(q, f).0)
+}
+
+/// The reduction placement [`intt_quad_gen_batch32`] uses for `q`.
+pub const fn inv_flags(q: u16) -> [bool; 6] {
+    INV_SCHED[qi(q)].0
+}
+
+/// `[after level 5, 4, 3, 2, 1, 0 before centering]` for `q`.
+pub const fn inv_bound(q: u16) -> [i32; 6] {
+    INV_SCHED[qi(q)].1
+}
+
+const _: () = {
+    let mut i = 0;
+    while i < 3 {
+        let q = QS_QUAD[i];
+        let (lm, peak) = inv_model(q, inv_flags(q));
+        assert!(peak <= 32767);
+        assert!(lm[5] <= q as i32 + (q as i32 - 1) / 2);
+        i += 1;
+    }
+};
+
+/// Compile-time inverse-twiddle tables, the level-0 recombination constants and the centering
+/// pair, in the same duplicated-u32 broadcast form and the same per-level layout as [`TwQ`], so
+/// a Gentleman-Sande butterfly reads its constants exactly where the forward one does.
+pub struct TwQI<const Q: u16>;
+
+impl<const Q: u16> TwQI<Q> {
+    const fn inv(x: u16) -> u16 {
+        inv_mod(x as u64, Q as u64) as u16
+    }
+    const fn r2i<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+        let mut t = [0u32; M];
+        let mut k = 0;
+        while k < nk {
+            let p = TwQ::<Q>::pair(Self::inv(ParamsQ::<Q>::zeta(level, k)));
+            t[2 * k] = p[0];
+            t[2 * k + 1] = p[1];
+            k += 1;
+        }
+        t
+    }
+    const fn r3i<const M: usize>(level: usize, nk: usize) -> [u32; M] {
+        let mut t = [0u32; M];
+        let mut k = 0;
+        while k < nk {
+            let z = Self::inv(ParamsQ::<Q>::zeta(level, k));
+            let z2 = (z as u64 * z as u64 % Q as u64) as u16;
+            let a = TwQ::<Q>::pair(z);
+            let b = TwQ::<Q>::pair(z2);
+            t[4 * k] = a[0];
+            t[4 * k + 1] = a[1];
+            t[4 * k + 2] = b[0];
+            t[4 * k + 3] = b[1];
+            k += 1;
+        }
+        t
+    }
+    pub const IL1: [u32; 4] = Self::r2i::<4>(1, 2);
+    pub const IL2: [u32; 16] = Self::r3i::<16>(2, 4);
+    pub const IL3: [u32; 48] = Self::r3i::<48>(3, 12);
+    pub const IL4: [u32; 144] = Self::r3i::<144>(4, 36);
+    pub const IL5: [u32; 432] = Self::r3i::<432>(5, 108);
+
+    /// `d = (2 zeta6 - 1)^-1`, the determinant of the Phi_6 split.
+    const DET: u16 =
+        Self::inv(((2 * ParamsQ::<Q>::ZETA6 as u32 + Q as u32 - 1) % Q as u32) as u16);
+    /// The whole normalisation, folded into the three level-0 constants. Levels 5..1 run
+    /// un-normalised, so every value reaching level 0 carries the factor `2 * 3^4 = 162`; with
+    /// `Y = 162 y`, `a1 = d (y0 - y1)` and `a0 = (y0+y1)/2 - a1/2` (using
+    /// `zeta6 + zeta6^-1 = 1`) become
+    ///
+    /// ```text
+    ///     a1 = KA (Y0 - Y1),   a0 = KB (Y0 + Y1) + KC (Y0 - Y1)
+    ///     KA = d / 162,        KB = 1 / 324,      KC = -d / 324 = -KA / 2.
+    /// ```
+    pub const KA: [u32; 2] =
+        TwQ::<Q>::pair((Self::DET as u64 * inv_mod(162, Q as u64) % Q as u64) as u16);
+    pub const KB: [u32; 2] = TwQ::<Q>::pair(inv_mod(324, Q as u64) as u16);
+    pub const KC: [u32; 2] = TwQ::<Q>::pair(
+        ((Q as u64 - Self::DET as u64 * inv_mod(324, Q as u64) % Q as u64) % Q as u64) as u16,
+    );
+    /// `(q-1)/2` and `-(q-1)/2`, the centering constants of the output.
+    pub const HALF: u32 = dup(((Q - 1) / 2) as i16);
+    pub const NHALF: u32 = dup(-(((Q - 1) / 2) as i16));
+
+    /// The reduction placement, `[level-5 inputs, sums of levels 5, 4, 3, 2, 1]`.
+    pub const BAR: [bool; 6] = inv_flags(Q);
+    pub const IN_BOUND: i32 = in_bound(Q);
+    pub const OUT_BOUND: i32 = ((Q - 1) / 2) as i32;
+}
+
+/// Inverse radix-3 (Gentleman-Sande) butterfly, the exact transpose of [`r3`] with the level's
+/// normalisation deferred: `u = omega (y2 - y1)`, `(y0+y1+y2, (y0-y1+u) zeta^-1,
+/// (y0-y2-u) zeta^-2)` = `3 * (a0, a1, a2)`. `IN` reduces the three loaded values, `BAR` the
+/// untwiddled sum, both where the bound search asked for them.
+#[inline(always)]
+unsafe fn ir3<const IN: bool, const BAR: bool>(
+    c: &C,
+    y0: __m512i,
+    y1: __m512i,
+    y2: __m512i,
+    tw: *const u32,
+) -> (__m512i, __m512i, __m512i) {
+    let (y0, y1, y2) = if IN {
+        (barrett_lut(y0, c), barrett_lut(y1, c), barrett_lut(y2, c))
+    } else {
+        (y0, y1, y2)
+    };
+    let u = mont(sub(y2, y1), c.omp, c.om, c.q);
+    let s = add(y0, add(y1, y2));
+    let a1 = mont(add(sub(y0, y1), u), bc(tw), bc(tw.add(1)), c.q);
+    let a2 = mont(sub(sub(y0, y2), u), bc(tw.add(2)), bc(tw.add(3)), c.q);
+    (if BAR { barrett_lut(s, c) } else { s }, a1, a2)
+}
+
+/// Inverse radix-2 butterfly, normalisation deferred: `(y0+y1, (y0-y1) zeta^-1)` = `2 (a0, a1)`.
+#[inline(always)]
+unsafe fn ir2<const BAR: bool>(
+    c: &C,
+    y0: __m512i,
+    y1: __m512i,
+    zp: __m512i,
+    z: __m512i,
+) -> (__m512i, __m512i) {
+    let s = add(y0, y1);
+    (
+        if BAR { barrett_lut(s, c) } else { s },
+        mont(sub(y0, y1), zp, z, c.q),
+    )
+}
+
+/// Exact centered representative for `|x| <= 3q/2`: one conditional subtract and one conditional
+/// add of q, which is all the output needs.
+#[inline(always)]
+unsafe fn centre(x: __m512i, q: __m512i, half: __m512i, nhalf: __m512i) -> __m512i {
+    let hi = _mm512_cmpgt_epi16_mask(x, half);
+    let x = _mm512_mask_sub_epi16(x, hi, x, q);
+    let lo = _mm512_cmplt_epi16_mask(x, nhalf);
+    _mm512_mask_add_epi16(x, lo, x, q)
+}
+
+/// Level 5 (the first inverse level) for one 18-block: 3 groups of 6 vectors, 2 butterflies each.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
+unsafe fn ipass_l5<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
+    let base = 18 * k4;
+    for g in 0..3 {
+        let t5 = TwQI::<Q>::IL5.as_ptr().add(4 * (3 * k4 + g));
+        for i in 0..2 {
+            let b = base + 6 * g + i;
+            let (y0, y1, y2) = (ld(p, b), ld(p, b + 2), ld(p, b + 4));
+            let (s, a1, a2) = match (TwQI::<Q>::BAR[0], TwQI::<Q>::BAR[1]) {
+                (false, false) => ir3::<false, false>(c, y0, y1, y2, t5),
+                (false, true) => ir3::<false, true>(c, y0, y1, y2, t5),
+                (true, false) => ir3::<true, false>(c, y0, y1, y2, t5),
+                (true, true) => ir3::<true, true>(c, y0, y1, y2, t5),
+            };
+            st(p, b, s);
+            st(p, b + 2, a1);
+            st(p, b + 4, a2);
+        }
+    }
+}
+
+/// Level 4 for one 18-block: 6 butterflies, one per position class of the 6-block.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
+unsafe fn ipass_l4<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
+    let t4 = TwQI::<Q>::IL4.as_ptr().add(4 * k4);
+    let base = 18 * k4;
+    for i in 0..6 {
+        let b = base + i;
+        let (y0, y1, y2) = (ld(p, b), ld(p, b + 6), ld(p, b + 12));
+        let (s, a1, a2) = if TwQI::<Q>::BAR[2] {
+            ir3::<false, true>(c, y0, y1, y2, t4)
+        } else {
+            ir3::<false, false>(c, y0, y1, y2, t4)
+        };
+        st(p, b, s);
+        st(p, b + 6, a1);
+        st(p, b + 12, a2);
+    }
+}
+
+/// Levels 3 and 2 for one 162-block, the mirror of [`pass_b`]: 18 groups of 9 vectors, 3 inverse
+/// radix-3 butterflies (level 3) followed by 3 more (level 2).
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
+unsafe fn ipass_b<const Q: u16>(p: *mut __m512i, c: &C, blk: usize) {
+    let t2 = TwQI::<Q>::IL2.as_ptr().add(4 * blk);
+    let base = 162 * blk;
+    for i0 in 0..18 {
+        let mut y = [_mm512_setzero_si512(); 9];
+        for s in 0..3 {
+            let tw = TwQI::<Q>::IL3.as_ptr().add(4 * (3 * blk + s));
+            let b = base + 54 * s + i0;
+            let (u0, u1, u2) = if TwQI::<Q>::BAR[3] {
+                ir3::<false, true>(c, ld(p, b), ld(p, b + 18), ld(p, b + 36), tw)
+            } else {
+                ir3::<false, false>(c, ld(p, b), ld(p, b + 18), ld(p, b + 36), tw)
+            };
+            y[3 * s] = u0;
+            y[3 * s + 1] = u1;
+            y[3 * s + 2] = u2;
+        }
+        for a in 0..3 {
+            let (v0, v1, v2) = if TwQI::<Q>::BAR[4] {
+                ir3::<false, true>(c, y[a], y[3 + a], y[6 + a], t2)
+            } else {
+                ir3::<false, false>(c, y[a], y[3 + a], y[6 + a], t2)
+            };
+            let b = base + i0 + 18 * a;
+            st(p, b, v0);
+            st(p, b + 54, v1);
+            st(p, b + 108, v2);
+        }
+    }
+}
+
+/// Levels 1 and 0 fused into one radix-4 pass over the 648 vectors, the mirror of [`pass_a`]:
+/// the two inverse radix-2 butterflies of level 1, then the two Phi_6 recombinations, which
+/// carry the whole normalisation ([`TwQI::KA`]) and center their four outputs.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
+unsafe fn ipass_a<const Q: u16>(p: *mut __m512i, c: &C) {
+    let half = _mm512_set1_epi32(TwQI::<Q>::HALF as i32);
+    let nhalf = _mm512_set1_epi32(TwQI::<Q>::NHALF as i32);
+    let l1 = TwQI::<Q>::IL1.as_ptr();
+    let (zap, za) = (bc(l1), bc(l1.add(1)));
+    let (zbp, zb) = (bc(l1.add(2)), bc(l1.add(3)));
+    let ka = TwQI::<Q>::KA.as_ptr();
+    let kb = TwQI::<Q>::KB.as_ptr();
+    let kc = TwQI::<Q>::KC.as_ptr();
+    for i in 0..162 {
+        let ((c0, c1), (c2, c3)) = if TwQI::<Q>::BAR[5] {
+            (
+                ir2::<true>(c, ld(p, i), ld(p, i + 162), zap, za),
+                ir2::<true>(c, ld(p, i + 324), ld(p, i + 486), zbp, zb),
+            )
+        } else {
+            (
+                ir2::<false>(c, ld(p, i), ld(p, i + 162), zap, za),
+                ir2::<false>(c, ld(p, i + 324), ld(p, i + 486), zbp, zb),
+            )
+        };
+        let d0 = sub(c0, c2);
+        let a1 = mont(d0, bc(ka), bc(ka.add(1)), c.q);
+        let a0 = add(
+            mont(add(c0, c2), bc(kb), bc(kb.add(1)), c.q),
+            mont(d0, bc(kc), bc(kc.add(1)), c.q),
+        );
+        let d1 = sub(c1, c3);
+        let b1 = mont(d1, bc(ka), bc(ka.add(1)), c.q);
+        let b0 = add(
+            mont(add(c1, c3), bc(kb), bc(kb.add(1)), c.q),
+            mont(d1, bc(kc), bc(kc.add(1)), c.q),
+        );
+        st(p, i, centre(a0, c.q, half, nhalf));
+        st(p, i + 162, centre(b0, c.q, half, nhalf));
+        st(p, i + 324, centre(a1, c.q, half, nhalf));
+        st(p, i + 486, centre(b1, c.q, half, nhalf));
+    }
+}
+
+/// Inverse quadratic-slot NTT of a batch of 32 polynomials in place: `Ntt -> Coefficients`, the
+/// exact inverse of [`ntt_quad_gen_batch32`].
+///
+/// Requires `|b.v[j][p]| <= in_bound(Q)`, the binary kernel's lazily reduced output — every
+/// transform of this tree the crate produces. The output is **fully reduced and centered**,
+/// `|b.v[j][p]| <= (q-1)/2`.
+///
+/// # Safety
+/// The host must have AVX-512 F/BW/VL/VBMI; `b` must be 64-byte aligned (`Batch32` is).
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi")]
+pub unsafe fn intt_quad_gen_batch32<const Q: u16>(b: &mut Batch32) {
+    debug_assert_eq!(b.representation, Representation::Ntt);
+    let p = b.v.as_mut_ptr() as *mut __m512i;
+    let c = C::new::<Q>();
+    for blk in 0..4 {
+        for k4 in 9 * blk..9 * blk + 9 {
+            ipass_l5::<Q>(p, &c, k4);
+            ipass_l4::<Q>(p, &c, k4);
+        }
+        ipass_b::<Q>(p, &c, blk);
+    }
+    ipass_a::<Q>(p, &c);
+    b.representation = Representation::Coefficients;
+}

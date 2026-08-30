@@ -64,7 +64,16 @@ impl Round {
 }
 
 fn small() -> Params {
-    Params::new(11, 3, vec![Q9721], false).unwrap()
+    Params::new(11, 3, vec![Q9721_FS_S], false).unwrap()
+}
+
+/// A limb that is not `base`, so that every round below has two of them.
+fn second(base: Modulus) -> Modulus {
+    if base == Q9721_FS_S {
+        Q3889_FS_S
+    } else {
+        Q9721_FS_S
+    }
 }
 
 #[test]
@@ -150,4 +159,68 @@ fn the_folded_commitment_is_bound_to_the_challenges() {
         ),
         Err(VerificationError::Rejected)
     );
+}
+
+// =============================================================================================
+// the base limb
+// =============================================================================================
+
+/// Every modulus can be the base — the limb the witness transform is kept in, the fold
+/// accumulates over and the folded witness comes back from. One honest round each, over a second
+/// limb that is not the base, and one with no second limb at all.
+#[test]
+fn any_modulus_can_be_the_base() {
+    for base in Modulus::ALL {
+        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        assert_eq!(params.primes(), vec![base.prime(), second(base).prime()]);
+        let r = round(params);
+        assert_eq!(r.verify(), Ok(()), "base {base:?}");
+        let half = ((base.prime() - 1) / 2) as i16;
+        let max = r
+            .folded_witness
+            .elements()
+            .iter()
+            .flat_map(|e| e.v.iter())
+            .map(|x| x.unsigned_abs())
+            .max()
+            .unwrap();
+        assert!(max as i16 <= half, "base {base:?}: the fold left the centered range");
+        assert!(max < 400, "base {base:?}: the fold is unexpectedly large: {max}");
+
+        let alone = Params::with_base(11, 3, base, vec![], false).unwrap();
+        assert_eq!(round(alone).verify(), Ok(()), "base {base:?} alone");
+    }
+}
+
+/// The centring check reads the base's own `(q-1)/2`, not 3889's.
+#[test]
+fn the_centred_range_is_the_base_modulus() {
+    for base in [Q2917_Q_S, Q17497_FS_L] {
+        let half = ((base.prime() - 1) / 2) as i16;
+        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let mut r = round(params);
+        r.folded_witness.elements_mut()[0].v[0] = half + 1;
+        assert_eq!(r.verify(), Err(VerificationError::Rejected), "base {base:?}");
+    }
+}
+
+/// A tampered fold is caught over a quadratic-slot and a large base as well as over 3889.
+#[test]
+fn a_corrupted_fold_is_rejected_whatever_the_base() {
+    for base in Modulus::ALL {
+        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let mut r = round(params);
+        r.folded_witness.elements_mut()[2].v[7] += 1;
+        assert_eq!(r.verify(), Err(VerificationError::Rejected), "base {base:?}");
+    }
+}
+
+/// 64 columns, so that every base's fold-back period fires at least once inside the
+/// accumulation (64 for 2917 down to 4 for the two primes above `2^14`).
+#[test]
+fn the_fold_back_period_fires_for_every_base() {
+    for base in Modulus::ALL {
+        let params = Params::with_base(14, 6, base, vec![second(base)], false).unwrap();
+        assert_eq!(round(params).verify(), Ok(()), "base {base:?}");
+    }
 }

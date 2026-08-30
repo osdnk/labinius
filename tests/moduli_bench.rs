@@ -15,13 +15,16 @@
 //!
 //! One transform and one base multiplication are a batch of 32 ring elements; one fold-down is a
 //! column, which at this shape is 256.
+//!
+//! `the_fold_per_base` is the wall clock of `Prover::fold` at the same shape with each modulus in
+//! turn as the base limb.
 use bin_ntt::api::{AuxData, CommitmentKey, BASE_PRIME};
 use bin_ntt::params::N;
 use bin_ntt::simd::commit as cm;
 use bin_ntt::simd::transpose_f162::{slice_f162_into, BinaryIndex32};
 use bin_ntt::simd::{vertical_bin_asm as vb, vertical_bin_large as vl, vertical_bin_quad as vq};
 use bin_ntt::types::{Batch32, Representation};
-use bin_ntt::{Modulus, F162};
+use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness, F162};
 use std::time::Instant;
 
 const COLUMNS: usize = 256;
@@ -55,7 +58,7 @@ fn transform_once(idx: &BinaryIndex32, out: &mut Batch32, q: u16, quad: bool) {
 
 fn commit_ms(extra: &[Modulus]) -> f64 {
     let w = witness(COLUMNS * F162_PER_COLUMN);
-    let key = CommitmentKey::random(F162_PER_COLUMN, 0xA11CE, extra);
+    let key = CommitmentKey::random(F162_PER_COLUMN, 0xA11CE, Modulus::BASE, extra);
     let mut aux = AuxData::new(RING_PER_COLUMN, COLUMNS, key.limbs());
     let mut best = f64::INFINITY;
     for _ in 0..15 {
@@ -67,15 +70,19 @@ fn commit_ms(extra: &[Modulus]) -> f64 {
     best
 }
 
+/// Every modulus that is not the default base, i.e. every one it can be given as an extra limb.
+fn extras() -> Vec<Modulus> {
+    Modulus::ALL.into_iter().filter(|l| *l != Modulus::BASE).collect()
+}
+
 #[test]
 fn the_moduli_quantified() {
     let base = commit_ms(&[]);
     println!("\n  {BASE_PRIME} (base) alone: {base:.2} ms");
-    for l in Modulus::ALL {
+    for l in extras() {
         println!("  + {:>5}: {:+.2} ms", l.prime(), commit_ms(&[l]) - base);
     }
-    let all: Vec<Modulus> = Modulus::ALL.to_vec();
-    println!("  all six extra moduli together: {:.1} ms", commit_ms(&all) - base);
+    println!("  all six extra moduli together: {:.1} ms", commit_ms(&extras()) - base);
 }
 
 fn transform(reps: usize, q: u16, quad: bool) {
@@ -164,8 +171,8 @@ fn cycles_probe() {
 fn kernel_fingerprints() {
     let idx = index();
     let mut out = Batch32::zero(Representation::Ntt);
-    let mut primes: Vec<(u16, bool)> = vec![(BASE_PRIME, false)];
-    primes.extend(Modulus::ALL.iter().map(|l| (l.prime(), l.is_quadratic())));
+    let mut primes: Vec<(u16, bool)> =
+        Modulus::ALL.iter().map(|l| (l.prime(), l.is_quadratic())).collect();
     primes.sort();
     for (q, quad) in primes {
         transform_once(&idx, &mut out, q, quad);
@@ -176,5 +183,42 @@ fn kernel_fingerprints() {
             }
         }
         println!("  {q}: {h:016x}");
+    }
+}
+
+/// One fold at the `Params::basic()` shape over `base`, best of `reps`, in milliseconds.
+fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
+    let params = Params::with_base(18, 8, base, extra, false).unwrap();
+    let pp = PublicParameters::from_seed(params.clone(), [0x5A; 32]);
+    let mut prover = Prover::new(&pp);
+    let verifier = Verifier::new(&pp);
+    let w = Witness::random(&params, [0xC7; 32]);
+    let mut best = f64::INFINITY;
+    for _ in 0..reps {
+        let (commitment, opening) = prover.commit(&w);
+        let mut transcript = Transcript::new(b"bin-ntt/bench/fold");
+        let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
+        let row = w.row_evaluate(&point);
+        let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
+        let start = Instant::now();
+        let folded = prover.fold(opening, &challenges);
+        best = best.min(start.elapsed().as_secs_f64() * 1e3);
+        core::hint::black_box(folded.elements()[0].v[0]);
+    }
+    best
+}
+
+/// The fold's wall clock at the basic shape with each modulus as the base limb. The 85 MB stream
+/// and the one `vpmaddwd` per slot vector are the same for all seven; what separates them is the
+/// fold-back period their `|W| |c|` allows.
+#[test]
+fn the_fold_per_base() {
+    println!();
+    println!(
+        "  3889 with the basic limb list: {:.2} ms",
+        fold_ms(Modulus::Q3889_FS_S, vec![Modulus::Q9721_FS_S], 5)
+    );
+    for base in Modulus::ALL {
+        println!("  base {:>5} alone: {:.2} ms", base.prime(), fold_ms(base, vec![], 5));
     }
 }

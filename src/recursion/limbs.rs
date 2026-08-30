@@ -2,14 +2,15 @@
 //!
 //! The key rows and the RNS residues reach this module in the NTT domain and are inverted into
 //! the `Z`-basis of `S`. The key rows go once per key through the scalar [`crate::scalar::intt`]
-//! or [`intt_quad`]; the residues are per commitment and go 32 columns at a time through the
-//! recombination table of [`recombination`] and the vectorised [`intt_gen_batch32`], with the
-//! scalar route left for the quadratic-slot limbs, which have no batched inverse transform.
+//! or [`intt_quad`]; the residues are per commitment and go 32 columns at a time through their
+//! limb's recombination — the table of [`recombination`] for a splitting limb, the class
+//! butterfly `y mod (X^2 -+ psi'^v) = Y_k -+ psi'^v Y_{k+2}` for a quadratic-slot one — and that
+//! tree's batched inverse transform.
 //! For output component `m` the multiplier of `v_{i,l}` is `F_{i,(m-l) mod 4}`, twisted by `-Z`
 //! when `l > m`.
 use super::chain::{At, Carries, Chain, Product};
 use super::setup::Setup;
-use super::{centre, chunk, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
+use super::{centre, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
 use crate::api::{
     PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
     POW3_SLOT_EXP, SLOT_648,
@@ -23,6 +24,7 @@ use crate::scheme::PublicParameters;
 use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::intt_gen_batch32;
 use crate::simd::vertical_gen_large as vgl;
+use crate::simd::vertical_gen_quad::intt_quad_gen_batch32;
 use crate::types::{Batch32, Representation, RingElement};
 
 /// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the two
@@ -142,59 +144,6 @@ pub fn transform(q: u16, quad: bool, coefficients: &[i64; N]) -> [u32; N] {
     }
 }
 
-/// The 648 slots of the `R_648` element whose four `R_162` components are `c`: the inverse of
-/// [`crate::api::decompose_648_to_4x162`], `E_t = sum_k psi^{v k} i^{t k} Y_k(v)`.
-fn slots_split<const Q: u16>(c: &[PowerOfThreeRingElement; 4]) -> [u32; N] {
-    let q = Q as u64;
-    let psi = Params::<Q>::PSI as u64;
-    let i4 = pow_mod(psi, (CONDUCTOR / 4) as u64, q);
-    let mut y = [0u32; N];
-    for s in 0..N162 {
-        let v = POW3_SLOT_EXP[s] as u64;
-        for t in 0..4u64 {
-            let mut acc = 0u64;
-            for k in 0..4u64 {
-                let yk = (c[k as usize].v[s] as i64).rem_euclid(q as i64) as u64;
-                let e = pow_mod(psi, v * k % CONDUCTOR as u64, q) * pow_mod(i4, t * k % 4, q) % q;
-                acc = (acc + e * yk) % q;
-            }
-            y[SLOT_648[t as usize][s] as usize] = acc as u32;
-        }
-    }
-    y
-}
-
-/// The same for a quadratic-slot limb: `y mod (X^2 -+ psi'^v) = [Y_k -+ psi'^v Y_{k+2}]`.
-fn slots_quad<const Q: u16>(c: &[PowerOfThreeRingElement; 4]) -> [u32; N] {
-    let q = Q as u64;
-    let mut y = [0u32; N];
-    for s in 0..N162 {
-        let pv = ParamsQ::<Q>::psi_pow(QUAD_POW3_CLASS[s] as u32) as u64;
-        let jp = QUAD_CLASS_SLOT[0][s] as usize;
-        let jm = QUAD_CLASS_SLOT[1][s] as usize;
-        for k in 0..2 {
-            let y0 = (c[k].v[s] as i64).rem_euclid(q as i64) as u64;
-            let y2 = pv * (c[k + 2].v[s] as i64).rem_euclid(q as i64) as u64 % q;
-            y[2 * jp + k] = ((y0 + y2) % q) as u32;
-            y[2 * jm + k] = ((y0 + q - y2) % q) as u32;
-        }
-    }
-    y
-}
-
-fn slots_of(q: u16, quad: bool, c: &[PowerOfThreeRingElement; 4]) -> [u32; N] {
-    match (q, quad) {
-        (3889, false) => slots_split::<3889>(c),
-        (9721, false) => slots_split::<9721>(c),
-        (17497, false) => slots_split::<17497>(c),
-        (19441, false) => slots_split::<19441>(c),
-        (2917, true) => slots_quad::<2917>(c),
-        (4861, true) => slots_quad::<4861>(c),
-        (12637, true) => slots_quad::<12637>(c),
-        _ => unreachable!("no limb with q = {q}"),
-    }
-}
-
 // =============================================================================================
 // the coefficient form of the public and committed data
 // =============================================================================================
@@ -302,8 +251,7 @@ impl<const Q: u16> Inv<Q> {
 
 /// The residues of one splitting limb, 32 columns at a time: the recombination above out of a
 /// table, then the crate's vectorised inverse transform on the whole batch — [`intt_gen_batch32`]
-/// below `2^14`, `vertical_gen_large`'s above it — then the four `S`-components read straight out
-/// of the batch in chunk order.
+/// below `2^14`, `vertical_gen_large`'s above it.
 fn columns_split<const Q: u16>(
     matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
     limb: usize,
@@ -338,40 +286,65 @@ fn columns_split<const Q: u16>(
                 intt_gen_batch32::<Q>(&mut batch);
             }
         }
-        for p in 0..cols {
-            for (l, vector) in out.iter_mut().enumerate() {
-                for b in 0..CHUNKS {
-                    let poly = &mut vector[b * r + first + p];
-                    for (u, x) in poly.iter_mut().take(CHUNK).enumerate() {
-                        let m = CHUNK * b + u;
-                        let c = batch.v[4 * m + l][p];
-                        *x = if m % 2 == 0 { c } else { -c };
-                    }
+        drain_batch(&batch, first, cols, r, out);
+    }
+}
+
+/// The four `S`-components of one column read straight out of an inverted batch, in chunk order.
+fn drain_batch(batch: &Batch32, first: usize, cols: usize, r: usize, out: &mut [Vec<Poly>]) {
+    for p in 0..cols {
+        for (l, vector) in out.iter_mut().enumerate() {
+            for b in 0..CHUNKS {
+                let poly = &mut vector[b * r + first + p];
+                for (u, x) in poly.iter_mut().take(CHUNK).enumerate() {
+                    let m = CHUNK * b + u;
+                    let c = batch.v[4 * m + l][p];
+                    *x = if m % 2 == 0 { c } else { -c };
                 }
             }
         }
     }
 }
 
-/// The same for a quadratic-slot limb, which has no vectorised inverse transform: the 648 slots
-/// are rebuilt column by column and inverted by [`intt_quad`].
-fn columns_scalar(
-    q: u16,
-    quad: bool,
+/// The residues of one quadratic-slot limb, 32 columns at a time: the class butterfly
+/// `y mod (X^2 -+ psi'^v) = Y_k -+ psi'^v Y_{k+2}` — the inverse of
+/// [`crate::scalar::decompose_quad_648_to_4x162`] — out of a table of the 162 `psi'^v`, then the
+/// tree's own vectorised inverse transform on the whole batch.
+fn columns_quad<const Q: u16>(
     matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
     limb: usize,
     r: usize,
     out: &mut [Vec<Poly>],
 ) {
-    for j in 0..r {
-        let c: [PowerOfThreeRingElement; 4] =
-            core::array::from_fn(|m| matrix.get(m, j).limbs[limb]);
-        let components = split(&coefficients(q, quad, &slots_of(q, quad, &c)));
-        for (m, vector) in out.iter_mut().enumerate() {
-            for (b, p) in chunk::chunks(&components[m]).into_iter().enumerate() {
-                vector[b * r + j] = p;
+    let q = Q as i32;
+    let half = (q - 1) / 2;
+    let pv: [i32; N162] =
+        core::array::from_fn(|s| ParamsQ::<Q>::psi_pow(QUAD_POW3_CLASS[s] as u32) as i32);
+    let mut batch = Batch32::zero(Representation::Ntt);
+    for first in (0..r).step_by(32) {
+        let cols = (r - first).min(32);
+        batch.v.iter_mut().for_each(|row| *row = [0i16; 32]);
+        batch.representation = Representation::Ntt;
+        for p in 0..cols {
+            let c: [&PowerOfThreeRingElement; 4] =
+                core::array::from_fn(|k| &matrix.get(k, first + p).limbs[limb]);
+            for s in 0..N162 {
+                let (jp, jm) = (QUAD_CLASS_SLOT[0][s] as usize, QUAD_CLASS_SLOT[1][s] as usize);
+                for k in 0..2 {
+                    let y0 = (c[k].v[s] as i32).rem_euclid(q);
+                    let y2 = (pv[s] as i64 * (c[k + 2].v[s] as i32).rem_euclid(q) as i64
+                        % q as i64) as i32;
+                    let plus = (y0 + y2) % q;
+                    let minus = (y0 + q - y2) % q;
+                    batch.v[2 * jp + k][p] =
+                        if plus > half { (plus - q) as i16 } else { plus as i16 };
+                    batch.v[2 * jm + k][p] =
+                        if minus > half { (minus - q) as i16 } else { minus as i16 };
+                }
             }
         }
+        unsafe { intt_quad_gen_batch32::<Q>(&mut batch) };
+        drain_batch(&batch, first, cols, r, out);
     }
 }
 
@@ -391,7 +364,10 @@ pub fn residues(
             (9721, false) => columns_split::<9721>(matrix, limb, r, &mut out),
             (17497, false) => columns_split::<17497>(matrix, limb, r, &mut out),
             (19441, false) => columns_split::<19441>(matrix, limb, r, &mut out),
-            _ => columns_scalar(q, quad, matrix, limb, r, &mut out),
+            (2917, true) => columns_quad::<2917>(matrix, limb, r, &mut out),
+            (4861, true) => columns_quad::<4861>(matrix, limb, r, &mut out),
+            (12637, true) => columns_quad::<12637>(matrix, limb, r, &mut out),
+            _ => unreachable!("no limb with q = {q}"),
         }
         vectors.append(&mut out);
     }

@@ -19,6 +19,10 @@ fn small(extra: Vec<Modulus>) -> Params {
     Params::new(9, 2, extra, true).unwrap()
 }
 
+fn small_based(base: Modulus, extra: Vec<Modulus>) -> Params {
+    Params::with_base(9, 2, base, extra, true).unwrap()
+}
+
 /// A round driven up to the point where the opening is due.
 struct Round {
     setup: Arc<Setup>,
@@ -112,7 +116,7 @@ impl Round {
 
 #[test]
 fn an_honest_recursive_round_is_accepted() {
-    for extra in [vec![Modulus::Q9721], vec![Modulus::Q4861], vec![Modulus::Q19441]] {
+    for extra in [vec![Modulus::Q9721_FS_S], vec![Modulus::Q4861_Q_S], vec![Modulus::Q19441_FS_L]] {
         let mut round = Round::new(&small(extra.clone()), b"bin-ntt/test/opening");
         let proof = round.prove().expect("the honest fold is within its cap");
         assert!(round.verify(&proof), "{extra:?}");
@@ -121,10 +125,36 @@ fn an_honest_recursive_round_is_accepted() {
     }
 }
 
+/// A recursive round over a quadratic-slot base and over one above `2^14`: the fold runs in that
+/// limb's domain and comes back through its own inverse transform, and the relation the recursion
+/// encodes is the same one. At this shape there are four challenges, so the fold's norm is far
+/// from concentrated and the cap of the plan's D5 is hit often; the loop is the protocol's own
+/// retry with fresh challenges.
+#[test]
+fn a_recursive_round_takes_any_base() {
+    for (base, extra) in [
+        (Modulus::Q2917_Q_S, vec![Modulus::Q9721_FS_S]),
+        (Modulus::Q17497_FS_L, vec![Modulus::Q3889_FS_S]),
+    ] {
+        let params = small_based(base, extra.clone());
+        assert_eq!(params.primes()[0], base.prime());
+        let mut accepted = false;
+        for attempt in 0..8u8 {
+            let mut round = Round::new(&params, &[b"bin-ntt/test/opening/base/"[..].to_vec(), vec![attempt]].concat());
+            let Ok(proof) = round.prove() else { continue };
+            assert!(round.verify(&proof), "base {base:?}");
+            assert!(proof.norms().iter().zip(&round.setup.caps).all(|(n, c)| n <= c));
+            accepted = true;
+            break;
+        }
+        assert!(accepted, "no attempt cleared the fold cap for base {base:?}");
+    }
+}
+
 /// The non-recursive round is untouched by the flag.
 #[test]
 fn an_honest_plain_round_is_accepted() {
-    let params = Params::new(9, 2, vec![Modulus::Q9721], false).unwrap();
+    let params = Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
@@ -150,7 +180,7 @@ fn an_honest_plain_round_is_accepted() {
 
 #[test]
 fn the_prover_and_the_verifier_encode_the_same_relation() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/same");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/same");
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let proof = round.prove().expect("honest opening");
     let folded = {
@@ -197,7 +227,7 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
 
 #[test]
 fn a_wrong_norm_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/norm");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/norm");
     let proof = round.prove().expect("honest opening");
     assert!(round.verify(&proof));
 
@@ -212,7 +242,7 @@ fn a_wrong_norm_is_rejected() {
 
 #[test]
 fn a_modified_left_expansion_commitment_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/left");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/left");
     let proof = round.prove().expect("honest opening");
     let other = {
         let mut row = round.row.clone();
@@ -227,11 +257,11 @@ fn a_modified_left_expansion_commitment_is_rejected() {
 /// does not verify against the commitment to another.
 #[test]
 fn a_commitment_to_other_residues_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/residue");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/residue");
     let proof = round.prove().expect("honest opening");
     let mut other = round.witness.elements().to_vec();
     other[0] += F162::ONE;
-    let other = Witness::from_elements(&small(vec![Modulus::Q9721]), other).unwrap();
+    let other = Witness::from_elements(&small(vec![Modulus::Q9721_FS_S]), other).unwrap();
     let (commitment, opening) = round.prover.commit(&other);
     assert_ne!(commitment.t_y(), round.commitment.t_y());
     assert_ne!(
@@ -245,7 +275,7 @@ fn a_commitment_to_other_residues_is_rejected() {
 /// constraints, so it is the one thing that tests them.
 #[test]
 fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/zero");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/zero");
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let opening = round.opening.take().unwrap();
     let folded = round.prover.fold(opening, &round.challenges);
@@ -289,7 +319,7 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
 
 #[test]
 fn a_wrong_challenge_set_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721]), b"bin-ntt/test/opening/challenges");
+    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/challenges");
     let proof = round.prove().expect("honest opening");
     let mut other = Transcript::new(b"bin-ntt/test/opening/challenges/other");
     let challenges = round.verifier.derive_folding_challenges(&mut other, &round.left);
@@ -304,7 +334,7 @@ fn a_wrong_challenge_set_is_rejected() {
 /// able to say no and be given fresh challenges.
 #[test]
 fn a_long_fold_is_refused_and_the_retry_succeeds() {
-    let params = small(vec![Modulus::Q9721]);
+    let params = small(vec![Modulus::Q9721_FS_S]);
     let mut long = Round::new(&params, b"cap/1");
     match long.prove() {
         Err(OpeningError::FoldTooLong { normsq, cap }) => assert!(normsq > cap),

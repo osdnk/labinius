@@ -23,7 +23,7 @@ fn the_encoding_at_the_basic_parameters() {
                 .map(|q| Modulus::from_prime(q.parse().unwrap()).unwrap())
                 .collect()
         })
-        .unwrap_or_else(|_| vec![Modulus::Q9721]);
+        .unwrap_or_else(|_| vec![Modulus::Q9721_FS_S]);
     let params = Params::new(18, 8, extra, true).unwrap();
     let t = Instant::now();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);

@@ -11,7 +11,7 @@ const MATRIX_SEED: [u8; 32] = [7u8; 32];
 const WITNESS_SEED: [u8; 32] = [11u8; 32];
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Q9721], false).unwrap()
+    Params::new(9, 2, vec![Q9721_FS_S], false).unwrap()
 }
 
 /// One round, returning whether both checks passed.
@@ -42,8 +42,9 @@ fn round(prover: &mut Prover, verifier: &Verifier, witness: &Witness) -> bool {
 fn params_shape() {
     let basic = Params::basic();
     assert_eq!(basic.witness_log_len, 18);
+    assert_eq!(basic.base, Q3889_FS_S);
     assert_eq!(basic.column_log_len, 8);
-    assert_eq!(basic.extra_moduli, vec![Q9721]);
+    assert_eq!(basic.extra_moduli, vec![Q9721_FS_S]);
     assert_eq!(basic.witness_len(), 1 << 18);
     assert_eq!(basic.columns(), 256);
 }
@@ -59,10 +60,40 @@ fn params_rejects_more_columns_than_elements() {
 #[test]
 fn params_rejects_duplicate_moduli() {
     assert_eq!(
-        Params::new(12, 2, vec![Q4861, Q9721, Q4861], false),
-        Err(ParamError::DuplicateModulus(Q4861))
+        Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S, Q4861_Q_S], false),
+        Err(ParamError::DuplicateModulus(Q4861_Q_S))
     );
-    assert!(Params::new(12, 2, vec![Q4861, Q9721], false).is_ok());
+    assert!(Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S], false).is_ok());
+}
+
+#[test]
+fn params_default_to_the_base_modulus_3889() {
+    assert_eq!(Params::basic().primes(), vec![3889, 9721]);
+    assert_eq!(Params::new(12, 2, vec![Q2917_Q_S], false).unwrap().base, Q3889_FS_S);
+}
+
+/// Any modulus can be the base, and `primes()` still lists it first.
+#[test]
+fn params_take_any_base() {
+    for base in Modulus::ALL {
+        let extra = if base == Q9721_FS_S { Q3889_FS_S } else { Q9721_FS_S };
+        let params = Params::with_base(12, 2, base, vec![extra], false).unwrap();
+        assert_eq!(params.base, base);
+        assert_eq!(params.primes(), vec![base.prime(), extra.prime()]);
+    }
+}
+
+#[test]
+fn params_reject_the_base_among_the_extra_moduli() {
+    assert_eq!(
+        Params::new(12, 2, vec![Q9721_FS_S, Q3889_FS_S], false),
+        Err(ParamError::BaseIsAlsoExtra(Q3889_FS_S))
+    );
+    assert_eq!(
+        Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q2917_Q_S], false),
+        Err(ParamError::BaseIsAlsoExtra(Q2917_Q_S))
+    );
+    assert!(Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q3889_FS_S], false).is_ok());
 }
 
 #[test]

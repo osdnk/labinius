@@ -30,12 +30,12 @@
 //! rebuilds from those same public values. Both identities above are inside the proof.
 use crate::api::{
     components_of, AuxData, CommitmentKey, Modulus, PowerOfThreeRingElement,
-    PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, BASE_PRIME, N162,
+    PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
 };
 use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
-use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb, Q1};
+use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb};
 use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
@@ -63,6 +63,8 @@ pub enum ParamError {
     ColumnTooShort,
     /// The same extra modulus twice.
     DuplicateModulus(Modulus),
+    /// The base modulus listed again among the extra ones.
+    BaseIsAlsoExtra(Modulus),
 }
 
 impl fmt::Display for ParamError {
@@ -75,6 +77,9 @@ impl fmt::Display for ParamError {
                 "a column must hold at least 2^{MIN_COLUMN_LOG_LEN} F162 elements"
             ),
             ParamError::DuplicateModulus(m) => write!(f, "the modulus {m:?} is listed twice"),
+            ParamError::BaseIsAlsoExtra(m) => {
+                write!(f, "the base modulus {m:?} is listed again as an extra one")
+            }
         }
     }
 }
@@ -82,11 +87,17 @@ impl fmt::Display for ParamError {
 impl std::error::Error for ParamError {}
 
 /// The shape of one round: a witness of `2^witness_log_len` `F162` read as `2^column_log_len`
-/// columns, committed modulo the base modulus 3889 and every entry of `extra_moduli`.
+/// columns, committed modulo `base` and every entry of `extra_moduli`.
+///
+/// `base` is the limb the round is anchored in: the commitment keeps the witness's transform
+/// there, the fold runs in its NTT domain and comes back through its inverse transform, and the
+/// folded witness is the centered integer vector modulo its prime. Any of the seven
+/// [`Modulus`]es can take the part; [`Params::new`] gives the default one, 3889.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Params {
     pub witness_log_len: u32,
     pub column_log_len: u32,
+    pub base: Modulus,
     pub extra_moduli: Vec<Modulus>,
     /// Recurse the folded opening into LaBRADOR: the commitment becomes `T_Y`, the left expansion
     /// `T_u`, and the fold a proof of [`crate::recursion`]'s relation instead of `v` itself.
@@ -94,10 +105,27 @@ pub struct Params {
 }
 
 impl Params {
-    /// The checked constructor.
+    /// The checked constructor over the default base modulus 3889.
     pub fn new(
         witness_log_len: u32,
         column_log_len: u32,
+        extra_moduli: Vec<Modulus>,
+        recursion: bool,
+    ) -> Result<Params, ParamError> {
+        Params::with_base(
+            witness_log_len,
+            column_log_len,
+            Modulus::BASE,
+            extra_moduli,
+            recursion,
+        )
+    }
+
+    /// The checked constructor over a chosen base modulus.
+    pub fn with_base(
+        witness_log_len: u32,
+        column_log_len: u32,
+        base: Modulus,
         extra_moduli: Vec<Modulus>,
         recursion: bool,
     ) -> Result<Params, ParamError> {
@@ -111,6 +139,9 @@ impl Params {
             return Err(ParamError::ColumnTooShort);
         }
         for (i, m) in extra_moduli.iter().enumerate() {
+            if *m == base {
+                return Err(ParamError::BaseIsAlsoExtra(*m));
+            }
             if extra_moduli[..i].contains(m) {
                 return Err(ParamError::DuplicateModulus(*m));
             }
@@ -118,6 +149,7 @@ impl Params {
         Ok(Params {
             witness_log_len,
             column_log_len,
+            base,
             extra_moduli,
             recursion,
         })
@@ -126,7 +158,7 @@ impl Params {
     /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
     /// the folded opening in the clear.
     pub fn basic() -> Params {
-        Params::new(18, 8, vec![Modulus::Q9721], false).expect("the basic parameters are valid")
+        Params::new(18, 8, vec![Modulus::Q9721_FS_S], false).expect("the basic parameters are valid")
     }
 
     /// Witness length in `F162` elements.
@@ -151,7 +183,7 @@ impl Params {
 
     /// The primes in index order: the base modulus first, then `extra_moduli`.
     pub fn primes(&self) -> Vec<u16> {
-        core::iter::once(BASE_PRIME)
+        core::iter::once(self.base.prime())
             .chain(self.extra_moduli.iter().map(|m| m.prime()))
             .collect()
     }
@@ -171,7 +203,8 @@ impl PublicParameters {
     pub fn from_seed(params: Params, matrix_seed: [u8; 32]) -> PublicParameters {
         let digest = blake3::hash(&matrix_seed);
         let seed = u64::from_le_bytes(digest.as_bytes()[..8].try_into().unwrap());
-        let key = CommitmentKey::random(params.column_len(), seed, &params.extra_moduli);
+        let key =
+            CommitmentKey::random(params.column_len(), seed, params.base, &params.extra_moduli);
         let mut pp = PublicParameters {
             params,
             matrix_seed,
@@ -801,6 +834,8 @@ impl Prover {
             &opening.aux,
             &challenges.challenges,
             self.key.len_ring() / 32,
+            self.key.prime(0),
+            self.key.is_quadratic(0),
         );
         self.workspace = Some(opening.aux);
         FoldedWitness { elements }
@@ -1046,7 +1081,7 @@ impl Verifier {
         folded_row_value: &F162,
     ) -> Result<(), VerificationError> {
         let v = &folded_witness.elements;
-        let half = (Q1 as i16 - 1) / 2;
+        let half = ((self.key.prime(0) - 1) / 2) as i16;
         if v.len() != self.key.len_ring()
             || folded_commitment.primes != self.params.primes()
             || v.iter().any(|e| {
