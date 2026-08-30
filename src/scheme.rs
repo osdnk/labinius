@@ -13,6 +13,21 @@
 //!
 //! and the verifier accepts when `u . eq(p1) = t`, `v` is short, `A v = sum_j c_j C_j` modulo
 //! every modulus, and `eq(p0) . (v mod 2) = sum_j u_j (c_j mod 2)` over `F162`.
+//!
+//! With [`Params::recursion`] the last three messages become one LaBRADOR proof of
+//! [`crate::recursion`]'s relation:
+//!
+//! ```text
+//!     (T_Y, opening) = prover.commit(w)
+//!     p              = verifier.derive_evaluation_point(transcript, T_Y)
+//!     T_u            = prover.commit_left_expansion(w.row_evaluate(p))
+//!     c              = verifier.derive_folding_challenges(transcript, T_u)
+//!     (T_R, eta, pi) = prover.prove_opening(transcript, opening, c, p, T_u, u, t, T_Y)
+//! ```
+//!
+//! and the verifier accepts when every `eta_i` is under its cap, the no-wraparound bound of
+//! [`crate::recursion::bound`] clears `Q / 2`, and LaBRADOR accepts `pi` against the statement it
+//! rebuilds from those same public values. Both identities above are inside the proof.
 use crate::api::{
     components_of, AuxData, CommitmentKey, Modulus, PowerOfThreeRingElement,
     PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, BASE_PRIME, N162,
@@ -21,6 +36,8 @@ use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
 use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb, Q1};
+use crate::labrador::{self, PolxBuf};
+use crate::recursion;
 use crate::types::{Batch32, Representation};
 use crate::{eval, RingElement162, RingElement648};
 use bin_fields::scalar::F162;
@@ -71,6 +88,9 @@ pub struct Params {
     pub witness_log_len: u32,
     pub column_log_len: u32,
     pub extra_moduli: Vec<Modulus>,
+    /// Recurse the folded opening into LaBRADOR: the commitment becomes `T_Y`, the left expansion
+    /// `T_u`, and the fold a proof of [`crate::recursion`]'s relation instead of `v` itself.
+    pub recursion: bool,
 }
 
 impl Params {
@@ -79,6 +99,7 @@ impl Params {
         witness_log_len: u32,
         column_log_len: u32,
         extra_moduli: Vec<Modulus>,
+        recursion: bool,
     ) -> Result<Params, ParamError> {
         if column_log_len > witness_log_len {
             return Err(ParamError::ColumnsExceedWitness);
@@ -98,12 +119,14 @@ impl Params {
             witness_log_len,
             column_log_len,
             extra_moduli,
+            recursion,
         })
     }
 
-    /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721.
+    /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
+    /// the folded opening in the clear.
     pub fn basic() -> Params {
-        Params::new(18, 8, vec![Modulus::Q9721]).expect("the basic parameters are valid")
+        Params::new(18, 8, vec![Modulus::Q9721], false).expect("the basic parameters are valid")
     }
 
     /// Witness length in `F162` elements.
@@ -117,7 +140,7 @@ impl Params {
     }
 
     /// log2 of one column in `F162`: the number of row variables of the evaluation point.
-    pub(crate) fn row_log_len(&self) -> u32 {
+    pub fn row_log_len(&self) -> u32 {
         self.witness_log_len - self.column_log_len
     }
 
@@ -127,7 +150,7 @@ impl Params {
     }
 
     /// The primes in index order: the base modulus first, then `extra_moduli`.
-    pub(crate) fn primes(&self) -> Vec<u16> {
+    pub fn primes(&self) -> Vec<u16> {
         core::iter::once(BASE_PRIME)
             .chain(self.extra_moduli.iter().map(|m| m.prime()))
             .collect()
@@ -137,19 +160,32 @@ impl Params {
 /// [`Params`] together with the public matrix `A` expanded from a seed.
 pub struct PublicParameters {
     params: Params,
+    matrix_seed: [u8; 32],
     key: Arc<CommitmentKey>,
+    recursion: Option<Arc<recursion::setup::Setup>>,
 }
 
 impl PublicParameters {
-    /// Expand `A` — one uniform row of `R_648` per modulus, in the NTT domain — from the seed.
+    /// Expand `A` — one uniform row of `R_648` per modulus, in the NTT domain — from the seed, and,
+    /// with recursion on, everything of [`recursion::setup`] that depends on it.
     pub fn from_seed(params: Params, matrix_seed: [u8; 32]) -> PublicParameters {
         let digest = blake3::hash(&matrix_seed);
         let seed = u64::from_le_bytes(digest.as_bytes()[..8].try_into().unwrap());
         let key = CommitmentKey::random(params.column_len(), seed, &params.extra_moduli);
-        PublicParameters {
+        let mut pp = PublicParameters {
             params,
+            matrix_seed,
             key: Arc::new(key),
+            recursion: None,
+        };
+        if pp.params.recursion {
+            let setup = recursion::setup::Setup::new(&pp, &pp.params.clone(), matrix_seed);
+            let rank: usize = setup.ranks.iter().sum();
+            let warm = labrador::warm_comkey(labrador::comkey_len_for_rank(rank));
+            pp.recursion = Some(Arc::new(setup));
+            let _ = warm.join();
         }
+        pp
     }
 
     pub fn params(&self) -> &Params {
@@ -157,8 +193,13 @@ impl PublicParameters {
     }
 
     /// The expanded matrix, for [`crate::recursion`], which needs `A` in coefficient form.
-    pub(crate) fn key(&self) -> &CommitmentKey {
+    pub fn key(&self) -> &CommitmentKey {
         &self.key
+    }
+
+    /// The key-time data of the recursion; `None` unless [`Params::recursion`] is set.
+    pub fn recursion(&self) -> Option<&Arc<recursion::setup::Setup>> {
+        self.recursion.as_ref()
     }
 }
 
@@ -265,16 +306,25 @@ impl Witness {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Commitment {
     primes: Vec<u16>,
-    matrix: VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
+    columns: usize,
+    value: CommitmentValue,
+}
+
+/// The two forms a commitment takes: the matrix itself, or the Ajtai commitment `T_Y` to the
+/// residues of its columns, which is a few `polx` and is what the recursion sends.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CommitmentValue {
+    Matrix(VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>),
+    Recursive(Arc<PolxBuf>),
 }
 
 impl Commitment {
     pub fn rows(&self) -> usize {
-        self.matrix.rows()
+        4
     }
 
     pub fn columns(&self) -> usize {
-        self.matrix.cols()
+        self.columns
     }
 
     /// The primes, in the index order [`element`](Self::element) takes: the base modulus first.
@@ -282,15 +332,59 @@ impl Commitment {
         &self.primes
     }
 
+    pub fn value(&self) -> &CommitmentValue {
+        &self.value
+    }
+
+    /// The matrix. Only a commitment made without recursion holds one.
+    pub fn matrix(&self) -> &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs> {
+        match &self.value {
+            CommitmentValue::Matrix(m) => m,
+            CommitmentValue::Recursive(_) => {
+                panic!("a recursive commitment is T_Y, not the matrix")
+            }
+        }
+    }
+
+    /// `T_Y`. Only a commitment made with recursion holds one.
+    pub fn t_y(&self) -> &Arc<PolxBuf> {
+        match &self.value {
+            CommitmentValue::Recursive(t) => t,
+            CommitmentValue::Matrix(_) => panic!("this commitment is the matrix, not T_Y"),
+        }
+    }
+
     pub fn element(&self, row: usize, column: usize, modulus_index: usize) -> &RingElement162 {
-        &self.matrix.get(row, column).limbs[modulus_index]
+        &self.matrix().get(row, column).limbs[modulus_index]
+    }
+
+    /// Bytes on the wire: `LOGQ`-bit coefficients for `T_Y`, `i16` slots for the matrix.
+    pub fn wire_bytes(&self) -> usize {
+        match &self.value {
+            CommitmentValue::Matrix(m) => 4 * m.cols() * self.primes.len() * N162 * 2,
+            CommitmentValue::Recursive(t) => t.len() * labrador::N * labrador::logq().div_ceil(8),
+        }
     }
 }
 
 /// What the prover keeps from a commitment and the fold consumes: the witness's transform modulo
-/// the base modulus, in the layout the kernel wrote it.
+/// the base modulus, in the layout the kernel wrote it, and — with recursion on — the residues
+/// `T_Y` opens, which the verifier no longer receives.
 pub struct CommitmentOpening {
     aux: AuxData,
+    residues: Option<recursion::limbs::Residues>,
+}
+
+impl CommitmentOpening {
+    /// The residues `T_Y` opens; `None` unless [`Params::recursion`] is set.
+    pub fn residues(&self) -> Option<&recursion::limbs::Residues> {
+        self.residues.as_ref()
+    }
+
+    /// Mutable access, so that a test can corrupt an opening.
+    pub fn residues_mut(&mut self) -> Option<&mut recursion::limbs::Residues> {
+        self.residues.as_mut()
+    }
 }
 
 /// A point of `F162^nu` split the way the witness is: `p0` over the row variables (the index
@@ -302,6 +396,11 @@ pub struct EvaluationPoint {
 }
 
 impl EvaluationPoint {
+    /// A point from its two halves, for the key-time layout of [`recursion::setup`].
+    pub fn of(p0: Vec<F162>, p1: Vec<F162>) -> EvaluationPoint {
+        EvaluationPoint { p0, p1 }
+    }
+
     pub fn p0(&self) -> &[F162] {
         &self.p0
     }
@@ -335,6 +434,11 @@ pub struct FoldingChallenges {
 }
 
 impl FoldingChallenges {
+    /// Challenges from a list, for the key-time layout of [`recursion::setup`].
+    pub fn of(challenges: Vec<ShortChallenge>) -> FoldingChallenges {
+        FoldingChallenges { challenges }
+    }
+
     pub fn len(&self) -> usize {
         self.challenges.len()
     }
@@ -344,7 +448,7 @@ impl FoldingChallenges {
     }
 
     /// The challenges themselves, for [`crate::recursion`], which needs them as `S`-elements.
-    pub(crate) fn challenges(&self) -> &[ShortChallenge] {
+    pub fn challenges(&self) -> &[ShortChallenge] {
         &self.challenges
     }
 }
@@ -393,6 +497,110 @@ impl FoldedCommitment {
     }
 }
 
+/// `T_u = Com_{H_u}(lift(u))`: what the prover sends in place of the left expansion, and what
+/// the folding challenges are derived from.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LeftExpansionCommitment {
+    t_u: Arc<PolxBuf>,
+}
+
+impl LeftExpansionCommitment {
+    pub fn t_u(&self) -> &Arc<PolxBuf> {
+        &self.t_u
+    }
+
+    pub fn wire_bytes(&self) -> usize {
+        self.t_u.len() * labrador::N * labrador::logq().div_ceil(8)
+    }
+}
+
+/// What the folding challenges are derived from: the left expansion in the clear, or `T_u`.
+pub trait FoldingSource {
+    fn absorb(&self, transcript: &mut Transcript);
+}
+
+impl FoldingSource for RowEvaluation {
+    fn absorb(&self, transcript: &mut Transcript) {
+        transcript.absorb_bytes(b"bin-ntt/row-evaluation");
+        let mut bytes = Vec::with_capacity(24 * self.values.len());
+        for x in &self.values {
+            for limb in x.0 {
+                bytes.extend_from_slice(&limb.to_le_bytes());
+            }
+        }
+        transcript.absorb_bytes(&bytes);
+    }
+}
+
+impl FoldingSource for LeftExpansionCommitment {
+    fn absorb(&self, transcript: &mut Transcript) {
+        transcript.absorb_bytes(b"bin-ntt/left-expansion-commitment");
+        transcript.absorb_bytes(self.t_u.as_bytes());
+    }
+}
+
+/// The recursive opening: `T_R`, the exact squared norms of every witness vector, and the
+/// LaBRADOR proof of [`crate::recursion`]'s relation.
+#[derive(Debug)]
+pub struct OpeningProof {
+    t_r: Arc<PolxBuf>,
+    norms: Vec<u64>,
+    proof: labrador::ProofHandle,
+}
+
+impl OpeningProof {
+    pub fn t_r(&self) -> &Arc<PolxBuf> {
+        &self.t_r
+    }
+
+    /// The LaBRADOR proof itself, for a caller that verifies it against a statement it holds.
+    pub fn handle(&self) -> &labrador::ProofHandle {
+        &self.proof
+    }
+
+    pub fn norms(&self) -> &[u64] {
+        &self.norms
+    }
+
+    /// Mutable access, so that a test can announce a wrong norm.
+    pub fn norms_mut(&mut self) -> &mut [u64] {
+        &mut self.norms
+    }
+
+    /// LaBRADOR's analytic proof size, in KB.
+    pub fn labrador_kb(&self) -> f64 {
+        self.proof.size_kb()
+    }
+
+    pub fn wire_bytes(&self) -> usize {
+        self.t_r.len() * labrador::N * labrador::logq().div_ceil(8)
+            + 8 * self.norms.len()
+            + (self.proof.size_kb() * 1024.0) as usize
+    }
+}
+
+/// Why the prover could not open.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum OpeningError {
+    /// `‖v‖^2` exceeded its cap; the caller retries the round with fresh challenges.
+    FoldTooLong { normsq: u64, cap: u64 },
+    /// LaBRADOR refused the statement or the witness.
+    Labrador(String),
+}
+
+impl fmt::Display for OpeningError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpeningError::FoldTooLong { normsq, cap } => {
+                write!(f, "the fold has squared norm {normsq}, above the cap {cap}")
+            }
+            OpeningError::Labrador(e) => write!(f, "LaBRADOR refused the opening: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for OpeningError {}
+
 /// The verifier rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VerificationError {
@@ -420,6 +628,7 @@ impl std::error::Error for VerificationError {}
 pub struct Prover {
     params: Params,
     key: Arc<CommitmentKey>,
+    setup: Option<Arc<recursion::setup::Setup>>,
     workspace: Option<AuxData>,
 }
 
@@ -430,12 +639,10 @@ impl Prover {
         let mut prover = Prover {
             params: pp.params.clone(),
             key: pp.key.clone(),
+            setup: pp.recursion.clone(),
             workspace: None,
         };
-        let verifier = Verifier {
-            params: pp.params.clone(),
-            key: pp.key.clone(),
-        };
+        let verifier = Verifier::new(pp);
         let witness = Witness {
             params: pp.params.clone(),
             elements: vec![F162::ZERO; pp.params.witness_len()],
@@ -446,7 +653,9 @@ impl Prover {
         let row_evaluation = witness.row_evaluate(&point);
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
         std::hint::black_box(prover.fold(opening, &challenges));
-        std::hint::black_box(verifier.fold_commitment(&commitment, &challenges));
+        if !prover.params.recursion {
+            std::hint::black_box(verifier.fold_commitment(&commitment, &challenges));
+        }
         prover
     }
 
@@ -461,13 +670,41 @@ impl Prover {
         let matrix = self
             .key
             .commit_into_aux(&witness.elements, self.params.columns(), &mut aux);
+        let columns = matrix.cols();
+        let primes = self.params.primes();
+        let (value, residues) = match &self.setup {
+            None => (CommitmentValue::Matrix(matrix), None),
+            Some(setup) => {
+                let residues = recursion::limbs::residues(&matrix, &primes);
+                let parts: Vec<&[i16]> =
+                    (0..setup.residues.len()).map(|k| residues.flat(k)).collect();
+                let t_y = Arc::new(setup.key_y.commit_blocks(&parts));
+                (CommitmentValue::Recursive(t_y), Some(residues))
+            }
+        };
         (
-            Commitment {
-                primes: self.params.primes(),
-                matrix,
-            },
-            CommitmentOpening { aux },
+            Commitment { primes, columns, value },
+            CommitmentOpening { aux, residues },
         )
+    }
+
+    /// `T_u = Com_{H_u}(lift(u))`, the message the folding challenges are derived from when the
+    /// left expansion is not sent.
+    pub fn commit_left_expansion(&self, row: &RowEvaluation) -> LeftExpansionCommitment {
+        let setup = self.setup.as_ref().expect("recursion is off");
+        let mut u = vec![0i16; setup.ranks[recursion::U] * labrador::N];
+        let lifts: Vec<[recursion::Poly; recursion::CHUNKS]> = row
+            .values
+            .iter()
+            .map(|x| recursion::chunk::chunks(&recursion::binary::lift(x)))
+            .collect();
+        for b in 0..recursion::CHUNKS {
+            for (j, l) in lifts.iter().enumerate() {
+                let at = (b * setup.r + j) * labrador::N;
+                u[at..at + labrador::N].copy_from_slice(&l[b]);
+            }
+        }
+        LeftExpansionCommitment { t_u: Arc::new(setup.key_u.commit_blocks(&[&u])) }
     }
 
     pub fn fold(
@@ -483,6 +720,76 @@ impl Prover {
         self.workspace = Some(opening.aux);
         FoldedWitness { elements }
     }
+
+    /// The fold, the encoding of [`crate::recursion`], `T_R`, the exact norms, the mask scalars,
+    /// and one LaBRADOR proof of the whole relation.
+    pub fn prove_opening(
+        &mut self,
+        transcript: &mut Transcript,
+        opening: CommitmentOpening,
+        challenges: &FoldingChallenges,
+        point: &EvaluationPoint,
+        left: &LeftExpansionCommitment,
+        row: &RowEvaluation,
+        claimed_value: &F162,
+        commitment: &Commitment,
+    ) -> Result<OpeningProof, OpeningError> {
+        let setup = self.setup.clone().expect("recursion is off");
+        let CommitmentOpening { aux, residues } = opening;
+        let residues = residues.expect("the opening holds no residues");
+        let folded = self.fold(CommitmentOpening { aux, residues: None }, challenges);
+        let normsq: u64 =
+            folded.elements.iter().flat_map(|e| e.v).map(|x| (x as i64 * x as i64) as u64).sum();
+        let cap = setup.fold_cap as u64;
+        if normsq > cap {
+            return Err(OpeningError::FoldTooLong { normsq, cap });
+        }
+
+        let instance =
+            recursion::Instance::new(&setup, &residues, &folded, row, challenges, point, claimed_value);
+        let witness = instance.witness();
+        let norms: Vec<u64> = instance.vectors.iter().map(|v| v.betasq()).collect();
+        let rest: Vec<&[i16]> = setup.rest.iter().map(|&i| witness.vectors[i].as_slice()).collect();
+        let t_r = Arc::new(setup.key_r.commit_blocks(&rest));
+
+        absorb_opening(transcript, claimed_value, &t_r, &norms);
+        let masks = recursion::statement::Masks::squeeze(&setup, transcript);
+        let digest = statement_digest(transcript);
+        let phi = recursion::statement::ProofPhi::new(&setup, &instance);
+        let opening = recursion::statement::Opening {
+            t_y: commitment.t_y(),
+            t_u: &left.t_u,
+            t_r: &t_r,
+            norms: &norms,
+        };
+        let statement =
+            recursion::statement::build(&setup, &instance, &phi, opening, masks, digest);
+        let proof = labrador::prove(&statement, &labrador::Witness::new(witness.vectors))
+            .map_err(OpeningError::Labrador)?;
+        Ok(OpeningProof { t_r, norms, proof })
+    }
+}
+
+/// The claimed value, `T_R` and the announced norms, in the transcript position `v` had.
+fn absorb_opening(transcript: &mut Transcript, claim: &F162, t_r: &PolxBuf, norms: &[u64]) {
+    transcript.absorb_bytes(b"bin-ntt/claim");
+    for limb in claim.0 {
+        transcript.absorb_u64(limb);
+    }
+    transcript.absorb_bytes(b"bin-ntt/rest-commitment");
+    transcript.absorb_bytes(t_r.as_bytes());
+    transcript.absorb_bytes(b"bin-ntt/norms");
+    for &n in norms {
+        transcript.absorb_u64(n);
+    }
+}
+
+/// The LaBRADOR statement is a deterministic function of everything absorbed so far, so its
+/// digest is one derivation of the transcript rather than a hash of the constraints.
+fn statement_digest(transcript: &mut Transcript) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    transcript.fill(b"bin-ntt/recursion/statement", &mut digest);
+    digest
 }
 
 // =============================================================================================
@@ -492,15 +799,35 @@ impl Prover {
 /// The verifier: the public parameters and nothing else.
 pub struct Verifier {
     params: Params,
+    matrix_seed: [u8; 32],
     key: Arc<CommitmentKey>,
+    setup: Option<Arc<recursion::setup::Setup>>,
 }
 
 impl Verifier {
     pub fn new(pp: &PublicParameters) -> Verifier {
         Verifier {
             params: pp.params.clone(),
+            matrix_seed: pp.matrix_seed,
             key: pp.key.clone(),
+            setup: pp.recursion.clone(),
         }
+    }
+
+    /// The shape, the moduli, the key seed and — with recursion on — LaBRADOR's modulus, absorbed
+    /// before anything the prover chooses.
+    fn absorb_parameters(&self, transcript: &mut Transcript) {
+        transcript.absorb_bytes(b"bin-ntt/parameters");
+        transcript.absorb_u64(self.params.witness_log_len as u64);
+        transcript.absorb_u64(self.params.column_log_len as u64);
+        for q in self.params.primes() {
+            transcript.absorb_u64(q as u64);
+        }
+        transcript.absorb_u64(u64::from(self.params.recursion));
+        if self.params.recursion {
+            transcript.absorb_u64(labrador::logq() as u64);
+        }
+        transcript.absorb_bytes(&self.matrix_seed);
     }
 
     /// Absorb the commitment, then derive `p = (p0, p1)`: one uniform `F162` per variable from a
@@ -510,10 +837,16 @@ impl Verifier {
         transcript: &mut Transcript,
         commitment: &Commitment,
     ) -> EvaluationPoint {
+        self.absorb_parameters(transcript);
         transcript.absorb_bytes(b"bin-ntt/commitment");
         transcript.absorb_u64(commitment.columns() as u64);
-        for j in 0..commitment.columns() {
-            transcript.absorb_elements(commitment.matrix.column(j));
+        match commitment.value() {
+            CommitmentValue::Matrix(m) => {
+                for j in 0..commitment.columns() {
+                    transcript.absorb_elements(m.column(j));
+                }
+            }
+            CommitmentValue::Recursive(t) => transcript.absorb_bytes(t.as_bytes()),
         }
         let (rows, cols) = (
             self.params.row_log_len() as usize,
@@ -541,16 +874,9 @@ impl Verifier {
     pub fn derive_folding_challenges(
         &self,
         transcript: &mut Transcript,
-        row_evaluation: &RowEvaluation,
+        source: &impl FoldingSource,
     ) -> FoldingChallenges {
-        transcript.absorb_bytes(b"bin-ntt/row-evaluation");
-        let mut bytes = Vec::with_capacity(24 * row_evaluation.values.len());
-        for x in &row_evaluation.values {
-            for limb in x.0 {
-                bytes.extend_from_slice(&limb.to_le_bytes());
-            }
-        }
-        transcript.absorb_bytes(&bytes);
+        source.absorb(transcript);
         FoldingChallenges {
             challenges: (0..self.params.columns())
                 .map(|_| sample_short_challenge(transcript, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
@@ -580,7 +906,7 @@ impl Verifier {
             for (row, out) in rows.iter_mut().enumerate() {
                 let mut acc = [0i64; N162];
                 for (j, c) in chi.iter().enumerate() {
-                    let e = &commitment.matrix.get(row, j).limbs[k].v;
+                    let e = &commitment.matrix().get(row, j).limbs[k].v;
                     for s in 0..N162 {
                         acc[s] += c[s] as i64 * e[s] as i64;
                     }
@@ -670,5 +996,58 @@ impl Verifier {
         } else {
             Err(VerificationError::Rejected)
         }
+    }
+
+    /// The recursive opening check: the announced norms against their caps, the no-wraparound
+    /// bound of [`recursion::bound`] against `Q / 2`, and one LaBRADOR verification of the
+    /// statement rebuilt from public data alone.
+    pub fn verify_opening(
+        &self,
+        transcript: &mut Transcript,
+        commitment: &Commitment,
+        left: &LeftExpansionCommitment,
+        point: &EvaluationPoint,
+        claimed_value: &F162,
+        challenges: &FoldingChallenges,
+        proof: &OpeningProof,
+    ) -> Result<(), VerificationError> {
+        let statement =
+            self.opening_statement(transcript, commitment, left, point, claimed_value, challenges, proof)?;
+        labrador::verify(&statement, &proof.proof).map_err(|_| VerificationError::Rejected)
+    }
+
+    /// The statement [`verify_opening`](Self::verify_opening) hands to LaBRADOR: the same
+    /// function of public data that the prover ran, and what a test compares against.
+    pub fn opening_statement(
+        &self,
+        transcript: &mut Transcript,
+        commitment: &Commitment,
+        left: &LeftExpansionCommitment,
+        point: &EvaluationPoint,
+        claimed_value: &F162,
+        challenges: &FoldingChallenges,
+        proof: &OpeningProof,
+    ) -> Result<labrador::Statement, VerificationError> {
+        let setup = self.setup.as_ref().ok_or(VerificationError::Rejected)?;
+        if proof.norms.len() != setup.caps.len()
+            || proof.norms.iter().zip(&setup.caps).any(|(n, c)| n > c)
+        {
+            return Err(VerificationError::Rejected);
+        }
+        absorb_opening(transcript, claimed_value, &proof.t_r, &proof.norms);
+        let masks = recursion::statement::Masks::squeeze(setup, transcript);
+        let digest = statement_digest(transcript);
+        let layout = recursion::Instance::layout(setup, challenges, point, claimed_value);
+        if !layout.clears() {
+            return Err(VerificationError::Rejected);
+        }
+        let phi = recursion::statement::ProofPhi::new(setup, &layout);
+        let opening = recursion::statement::Opening {
+            t_y: commitment.t_y(),
+            t_u: &left.t_u,
+            t_r: &proof.t_r,
+            norms: &proof.norms,
+        };
+        Ok(recursion::statement::build(setup, &layout, &phi, opening, masks, digest))
     }
 }

@@ -422,15 +422,9 @@ fn bench_comkey_warmup() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn rejects_degree_zero_and_out_of_range_blocks() {
+fn rejects_out_of_range_blocks() {
     let mut xof = Xof::new("bin-ntt/labrador_ffi/validate");
     let wit = Witness::new(vec![xof.ternary(64 * N)]);
-
-    let stmt = Statement::new(
-        vec![VectorSpec::norm_bounded(64, wit.normsq(0))],
-        vec![Constraint::new(0, vec![Block::new(0, 0, 64)], PhiSource::Int64(xof.uniform_polys(64)), None)],
-    );
-    assert!(labrador::prove(&stmt, &wit).unwrap_err().contains("degree 0"));
 
     let stmt = Statement::new(
         vec![VectorSpec::norm_bounded(64, wit.normsq(0))],
@@ -444,4 +438,86 @@ fn rejects_degree_zero_and_out_of_range_blocks() {
         vec![Constraint::new(8, vec![Block::new(0, 60, 3)], PhiSource::Int64(xof.uniform_polys(8)), None)],
     );
     assert!(labrador::prove(&stmt, &wit).unwrap_err().contains("spans"));
+}
+
+// ---------------------------------------------------------------------------------------
+// (e) degree 0, 1 and kappa in one statement, as the recursion mixes them
+// ---------------------------------------------------------------------------------------
+
+const MIXED_N: usize = 64;
+const MIXED_KAPPA: usize = 8;
+/// Coefficients at and above this position are zero, and only the degree-0 constraints say so.
+const MIXED_SUPPORT: usize = 32;
+
+/// Two vectors whose top coefficients are zero, three constraint degrees interleaved, and the
+/// zero-part test of the recursion: `phi = sum_j rho_j X^{-j}` over the positions that must
+/// vanish, so the constant coefficient of the linear form is `sum_j rho_j s_j = 0`.
+fn mixed_setup(tamper: bool) -> (Statement, Witness) {
+    let mut xof = Xof::new("bin-ntt/labrador_ffi/mixed");
+    let mut vectors: Vec<Vec<i16>> = (0..2)
+        .map(|_| {
+            let mut v = xof.ternary(MIXED_N * N);
+            for p in 0..MIXED_N {
+                v[p * N + MIXED_SUPPORT..(p + 1) * N].fill(0);
+            }
+            v
+        })
+        .collect();
+    if tamper {
+        vectors[1][MIXED_SUPPORT + 3] = 1;
+    }
+    let wit = Witness::new(vectors);
+    let sx = wit.to_sx();
+    let key = CommitmentKey::expand(MIXED_N, MIXED_KAPPA, &[19u8; 16], 5);
+
+    let mut constraints = Vec::new();
+    for c in 0..3 {
+        constraints.push(Constraint::new(
+            0,
+            (0..2).map(|i| Block::new(i, 0, MIXED_N)).collect(),
+            PhiSource::Int64(
+                (0..2 * MIXED_N)
+                    .map(|_| {
+                        let mut e = [0i64; N];
+                        for j in MIXED_SUPPORT..N {
+                            e[N - j] = xof.zq();
+                        }
+                        e
+                    })
+                    .collect(),
+            ),
+            None,
+        ));
+
+        let mut linear = Constraint::new(
+            1,
+            vec![Block::new(c % 2, 0, MIXED_N)],
+            PhiSource::Int64(xof.uniform_polys(MIXED_N)),
+            None,
+        );
+        linear.b = Some(BSource::Polx(Arc::new(linear.eval(&sx))));
+        constraints.push(linear);
+
+        constraints.push(Constraint::new(
+            MIXED_KAPPA,
+            vec![Block::new(c % 2, 0, MIXED_N)],
+            PhiSource::polx(key.buf_arc()),
+            Some(BSource::Polx(Arc::new(key.commit_sx(&sx, c % 2, 0)))),
+        ));
+    }
+    let vectors = (0..2).map(|i| VectorSpec::norm_bounded(MIXED_N, wit.normsq(i))).collect();
+    (Statement::new(vectors, constraints), wit)
+}
+
+#[test]
+fn mixed_degrees() {
+    let (stmt, wit) = mixed_setup(false);
+    let proof = labrador::prove(&stmt, &wit).expect("prove");
+    labrador::verify(&stmt, &proof).expect("verify");
+    println!("--- (e) degrees 0/1/{MIXED_KAPPA} interleaved: {:.2} KB", proof.size_kb());
+
+    let (bad, wit) = mixed_setup(true);
+    let err = labrador::prove(&bad, &wit).expect_err("a coefficient outside the support");
+    println!("--- (e) coefficient outside its support: {err}");
+    assert!(err.contains("simple_verify"), "unexpected error: {err}");
 }

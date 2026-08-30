@@ -11,7 +11,7 @@ const MATRIX_SEED: [u8; 32] = [7u8; 32];
 const WITNESS_SEED: [u8; 32] = [11u8; 32];
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Q9721]).unwrap()
+    Params::new(9, 2, vec![Q9721], false).unwrap()
 }
 
 /// One round, returning whether both checks passed.
@@ -51,7 +51,7 @@ fn params_shape() {
 #[test]
 fn params_rejects_more_columns_than_elements() {
     assert_eq!(
-        Params::new(4, 6, vec![]),
+        Params::new(4, 6, vec![], false),
         Err(ParamError::ColumnsExceedWitness)
     );
 }
@@ -59,17 +59,17 @@ fn params_rejects_more_columns_than_elements() {
 #[test]
 fn params_rejects_duplicate_moduli() {
     assert_eq!(
-        Params::new(12, 2, vec![Q4861, Q9721, Q4861]),
+        Params::new(12, 2, vec![Q4861, Q9721, Q4861], false),
         Err(ParamError::DuplicateModulus(Q4861))
     );
-    assert!(Params::new(12, 2, vec![Q4861, Q9721]).is_ok());
+    assert!(Params::new(12, 2, vec![Q4861, Q9721], false).is_ok());
 }
 
 #[test]
 fn params_rejects_a_column_below_one_batch() {
-    assert_eq!(Params::new(9, 3, vec![]), Err(ParamError::ColumnTooShort));
-    assert_eq!(Params::new(9, 0, vec![]), Err(ParamError::TooFewColumns));
-    assert!(Params::new(9, 2, vec![]).is_ok());
+    assert_eq!(Params::new(9, 3, vec![], false), Err(ParamError::ColumnTooShort));
+    assert_eq!(Params::new(9, 0, vec![], false), Err(ParamError::TooFewColumns));
+    assert!(Params::new(9, 2, vec![], false).is_ok());
 }
 
 #[test]

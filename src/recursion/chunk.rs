@@ -1,6 +1,7 @@
 //! `S = Z[Z]/(Z^162 + Z^81 + 1)` over the integers, and the chunk encoding of one element.
-use super::{Blocks, Poly, SElem, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, SUB};
+use super::{Blocks, Poly, SElem, BLOCKS, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, SUB};
 use crate::api::N162;
+use std::sync::LazyLock;
 
 /// `p mod Phi_243`, using `Z^162 = -Z^81 - 1`.
 pub fn reduce(p: &[i64]) -> SElem {
@@ -80,4 +81,41 @@ pub fn decode(c: &[Poly; CHUNKS]) -> SElem {
 /// Does every chunk keep to positions `0 .. CHUNK`?
 pub fn supported(c: &[Poly; CHUNKS]) -> bool {
     c.iter().all(|q| q[CHUNK..].iter().all(|&x| x == 0))
+}
+
+/// The windows of `g` that make up sub-chunk `a` of its block `b`, with signs.
+///
+/// `Z^{CHUNK b} g mod Phi_243` reduces through `Z^t = -Z^{t-81} - Z^{t-162}` and, above `Z^243`,
+/// through `Z^t = Z^{t-243}`; every one of those shifts is a multiple of [`SUB`], so the map from
+/// the coefficients of `g` to one sub-chunk of one block is a signed sum of whole `SUB`-windows of
+/// `g`. `taps()[b][a]` is that sum, as `(window, sign)` pairs, read off the unit elements.
+pub fn taps() -> &'static [[Vec<(u16, i8)>; BLOCKS]; CHUNKS] {
+    static TAPS: LazyLock<[[Vec<(u16, i8)>; BLOCKS]; CHUNKS]> = LazyLock::new(|| {
+        let windows = N162 / SUB;
+        let mut t: [[Vec<(u16, i8)>; BLOCKS]; CHUNKS] =
+            core::array::from_fn(|_| core::array::from_fn(|_| Vec::new()));
+        for w in 0..windows {
+            for u in 0..SUB {
+                let mut g = [0i64; N162];
+                g[SUB * w + u] = 1;
+                let block = blocks(&g);
+                for (b, row) in t.iter_mut().enumerate() {
+                    for (a, taps) in row.iter_mut().enumerate() {
+                        let sign = block[b][a][u];
+                        assert!(
+                            block[b][a].iter().enumerate().all(|(x, &c)| x == u || c == 0),
+                            "block {b} diagonal {a} mixes window positions"
+                        );
+                        match taps.iter().find(|e| e.0 as usize == w) {
+                            Some(e) => assert_eq!(e.1 as i16, sign, "window {w} is not uniform"),
+                            None if sign != 0 => taps.push((w as u16, sign as i8)),
+                            None => {}
+                        }
+                    }
+                }
+            }
+        }
+        t
+    });
+    &TAPS
 }

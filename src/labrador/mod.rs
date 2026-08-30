@@ -1,6 +1,6 @@
 //! LaBRADOR (Dachshund) backend: statements, witnesses, `composite_prove_simple` and
 //! `composite_verify_simple`, over the fork in the `labrador/` submodule built at
-//! `LOGQ = 40`.
+//! `LOGQ = 48`.
 //!
 //! # Shape of a statement
 //!
@@ -60,7 +60,10 @@ pub mod polx;
 use std::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-pub use polx::{comkey_len, compiled_q, extlen, logq, sizeof_polx, CommitmentKey, PolxBuf, Sx, N};
+pub use polx::{
+    comkey_len, compiled_q, extlen, logq, philen, sis_rank, sizeof_polx, CommitmentKey, PolxBuf,
+    Sx, N,
+};
 
 /// The largest witness coefficient magnitude LaBRADOR's `polyvec_sprodz` can square without
 /// overflowing its `int32` accumulator lanes (`4 * 23170^2 < 2^31`).
@@ -121,6 +124,9 @@ pub enum PhiSource {
     Int64(Vec<[i64; N]>),
     Int16(Vec<[i16; N]>),
     Polx(std::sync::Arc<PolxBuf>, usize),
+    /// One `(buffer, offset)` per block, so that blocks of the same constraint can alias
+    /// buffers that were converted independently and are shared with other constraints.
+    Blocks(Vec<(std::sync::Arc<PolxBuf>, usize)>),
 }
 
 impl PhiSource {
@@ -133,6 +139,7 @@ impl PhiSource {
             PhiSource::Int64(v) => v.len(),
             PhiSource::Int16(v) => v.len(),
             PhiSource::Polx(buf, base) => buf.len().saturating_sub(*base),
+            PhiSource::Blocks(_) => usize::MAX,
         }
     }
 }
@@ -158,10 +165,9 @@ impl BSource {
 /// Build with [`Constraint::new`]; the remaining field is a cache for the converted `phi`.
 #[derive(Debug)]
 pub struct Constraint {
-    /// Extension degree. Must be at least 1: LaBRADOR's `collaps_sparsecnst` and
-    /// `aggregate_sparsecnst` both fail to advance their constraint cursor over the
-    /// constraints they skip, so a statement mixing `deg == 0` with `deg > 0` silently
-    /// drops constraints. Degree-0 (constant-coefficient) constraints are therefore refused.
+    /// Extension degree. `0` is a constant-coefficient constraint: only the constant
+    /// coefficient of the linear form has to match `b`, and `phi` is one ring element per
+    /// witness polynomial.
     pub deg: usize,
     pub blocks: Vec<Block>,
     pub phi: PhiSource,
@@ -174,14 +180,14 @@ impl Constraint {
         Self { deg, blocks, phi, b, phi_cache: OnceLock::new() }
     }
 
-    /// Total `phi` length: the blocks' lengths, each padded to `extlen(len, deg)`.
+    /// Total `phi` length: the blocks' lengths, each padded to `philen(len, deg)`.
     pub fn phi_len(&self) -> usize {
-        self.blocks.iter().map(|blk| extlen(blk.len, self.deg)).sum()
+        self.blocks.iter().map(|blk| philen(blk.len, self.deg)).sum()
     }
 
     /// Offset of block `j` within `phi`.
     pub fn phi_offset(&self, j: usize) -> usize {
-        self.blocks[..j].iter().map(|blk| extlen(blk.len, self.deg)).sum()
+        self.blocks[..j].iter().map(|blk| philen(blk.len, self.deg)).sum()
     }
 
     /// The `phi` buffer, converting and caching the owned forms on first use.
@@ -190,6 +196,7 @@ impl Constraint {
             PhiSource::Int64(v) => self.phi_cache.get_or_init(|| PolxBuf::from_int64(v)),
             PhiSource::Int16(v) => self.phi_cache.get_or_init(|| PolxBuf::from_int16(v)),
             PhiSource::Polx(buf, _) => buf,
+            PhiSource::Blocks(_) => unreachable!("a per-block phi has no single buffer"),
         }
     }
 
@@ -200,8 +207,11 @@ impl Constraint {
         }
     }
 
-    /// Pointers to each block's `phi`, aliased into the (cached or borrowed) buffer.
+    /// Pointers to each block's `phi`, aliased into the (cached or borrowed) buffers.
     fn phi_ptrs(&self) -> Vec<*const c_void> {
+        if let PhiSource::Blocks(parts) = &self.phi {
+            return parts.iter().map(|(buf, off)| buf.ptr_at(*off)).collect();
+        }
         let buf = self.phi_buf();
         let base = self.phi_base();
         (0..self.blocks.len()).map(|j| buf.ptr_at(base + self.phi_offset(j))).collect()
@@ -209,7 +219,9 @@ impl Constraint {
 
     /// Force the `phi` conversion now, so that it is not charged to the first proof.
     pub fn precompute(&self) {
-        let _ = self.phi_buf();
+        if !matches!(self.phi, PhiSource::Blocks(_)) {
+            let _ = self.phi_buf();
+        }
     }
 
     /// Evaluate this constraint's linear form against a witness already in `polx` form.
@@ -254,6 +266,17 @@ impl Statement {
         let mut st = Self { vectors, constraints, digest: [0u8; 32] };
         st.digest = st.content_digest();
         st
+    }
+
+    /// The same with a digest the caller derives instead: for a statement that is already a
+    /// deterministic function of a transcript, hashing hundreds of megabytes of `phi` again
+    /// binds nothing new and costs more than the proof.
+    pub fn with_digest(
+        vectors: Vec<VectorSpec>,
+        constraints: Vec<Constraint>,
+        digest: [u8; 32],
+    ) -> Self {
+        Self { vectors, constraints, digest }
     }
 
     /// Total rank over all vectors.
@@ -309,6 +332,15 @@ impl Statement {
                     let end = (base + c.phi_len()) * sizeof_polx();
                     let bytes = buf.as_bytes();
                     h.update(&bytes[start.min(bytes.len())..end.min(bytes.len())]);
+                }
+                PhiSource::Blocks(parts) => {
+                    h.update(b"blk");
+                    for ((buf, off), blk) in parts.iter().zip(&c.blocks) {
+                        let start = off * sizeof_polx();
+                        let end = (off + philen(blk.len, c.deg)) * sizeof_polx();
+                        let bytes = buf.as_bytes();
+                        h.update(&bytes[start.min(bytes.len())..end.min(bytes.len())]);
+                    }
                 }
             }
             match &c.b {
@@ -388,7 +420,7 @@ pub fn comkey_len_for_rank(total_rank: usize) -> usize {
 /// Expand the global commitment key to at least `len` `polx`, if it is not already.
 pub fn ensure_comkey(len: usize) {
     let _guard = labrador_lock();
-    unsafe { ffi::labrador40_init_comkey(len) };
+    unsafe { ffi::labrador48_init_comkey(len) };
 }
 
 /// Expand the commitment key on a background thread; returns the time it took.
@@ -406,7 +438,7 @@ pub fn warm_comkey(len: usize) -> std::thread::JoinHandle<std::time::Duration> {
 /// Release the global commitment key. Not safe to call while a proof is in flight.
 pub fn free_comkey() {
     let _guard = labrador_lock();
-    unsafe { ffi::labrador40_free_comkey() };
+    unsafe { ffi::labrador48_free_comkey() };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -418,7 +450,7 @@ struct RawStatement(*mut c_void);
 impl Drop for RawStatement {
     fn drop(&mut self) {
         unsafe {
-            ffi::labrador40_free_smplstmnt(self.0);
+            ffi::labrador48_free_smplstmnt(self.0);
             ffi::bn_free(self.0);
         }
     }
@@ -429,7 +461,7 @@ struct RawWitness(*mut c_void);
 impl Drop for RawWitness {
     fn drop(&mut self) {
         unsafe {
-            ffi::labrador40_free_witness(self.0);
+            ffi::labrador48_free_witness(self.0);
             ffi::bn_free(self.0);
         }
     }
@@ -440,7 +472,7 @@ struct RawComposite(*mut c_void);
 impl Drop for RawComposite {
     fn drop(&mut self) {
         unsafe {
-            ffi::labrador40_free_composite(self.0);
+            ffi::labrador48_free_composite(self.0);
             ffi::bn_free(self.0);
         }
     }
@@ -451,7 +483,7 @@ struct RawCommitment(*mut c_void);
 impl Drop for RawCommitment {
     fn drop(&mut self) {
         unsafe {
-            ffi::labrador40_free_commitment(self.0);
+            ffi::labrador48_free_commitment(self.0);
             ffi::bn_free(self.0);
         }
     }
@@ -477,9 +509,9 @@ impl ProofHandle {
 impl Drop for ProofHandle {
     fn drop(&mut self) {
         unsafe {
-            ffi::labrador40_free_composite(self.composite);
+            ffi::labrador48_free_composite(self.composite);
             ffi::bn_free(self.composite);
-            ffi::labrador40_free_commitment(self.commitment);
+            ffi::labrador48_free_commitment(self.commitment);
             ffi::bn_free(self.commitment);
         }
     }
@@ -509,12 +541,6 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
         }
     }
     for (ci, c) in stmt.constraints.iter().enumerate() {
-        if c.deg == 0 {
-            return Err(format!(
-                "constraint {ci}: extension degree 0 is not supported (LaBRADOR's \
-                 collaps_sparsecnst/aggregate_sparsecnst drop constraints when degrees are mixed)"
-            ));
-        }
         if c.blocks.is_empty() {
             return Err(format!("constraint {ci}: no blocks"));
         }
@@ -527,7 +553,7 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
             }
             let end = blk
                 .off
-                .checked_add(extlen(blk.len, c.deg))
+                .checked_add(extlen(blk.len, c.deg.max(1)))
                 .ok_or_else(|| format!("constraint {ci}: block {j} off+extlen overflowed usize"))?;
             if end > stmt.vectors[blk.idx].n {
                 return Err(format!(
@@ -537,8 +563,22 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
                     blk.idx,
                     stmt.vectors[blk.idx].n,
                     c.deg,
-                    extlen(blk.len, c.deg)
+                    extlen(blk.len, c.deg.max(1))
                 ));
+            }
+        }
+        if let PhiSource::Blocks(parts) = &c.phi {
+            if parts.len() != c.blocks.len() {
+                return Err(format!(
+                    "constraint {ci}: {} phi blocks for {} witness blocks",
+                    parts.len(),
+                    c.blocks.len()
+                ));
+            }
+            for (j, ((buf, off), blk)) in parts.iter().zip(&c.blocks).enumerate() {
+                if off + philen(blk.len, c.deg) > buf.len() {
+                    return Err(format!("constraint {ci}: phi block {j} runs past its buffer"));
+                }
             }
         }
         let want = c.phi_len();
@@ -626,7 +666,7 @@ fn build_raw_statement(stmt: &Statement) -> Result<RawStatement, String> {
     }
     let raw = RawStatement(ptr);
     let ret = unsafe {
-        ffi::labrador40_init_smplstmnt_raw(raw.0, n.len(), n.as_ptr(), betasq.as_ptr(), stmt.constraints.len())
+        ffi::labrador48_init_smplstmnt_raw(raw.0, n.len(), n.as_ptr(), betasq.as_ptr(), stmt.constraints.len())
     };
     if ret != 0 {
         return Err(format!("init_smplstmnt_raw failed with code {ret}"));
@@ -675,7 +715,7 @@ fn build_raw_witness(stmt: &Statement, wit: &Witness) -> Result<RawWitness, Stri
         return Err("out of memory allocating witness".into());
     }
     let raw = RawWitness(ptr);
-    unsafe { ffi::labrador40_init_witness_raw(raw.0, n.len(), n.as_ptr()) };
+    unsafe { ffi::labrador48_init_witness_raw(raw.0, n.len(), n.as_ptr()) };
     for (i, (v, coeffs)) in stmt.vectors.iter().zip(wit.vectors.iter()).enumerate() {
         let ret = unsafe { ffi::bn_set_witness_i16(raw.0, i, v.n, coeffs.as_ptr()) };
         if ret != 0 {
@@ -707,7 +747,7 @@ pub fn prove(stmt: &Statement, wit: &Witness) -> Result<ProofHandle, String> {
     let raw_stmt = build_raw_statement(stmt)?;
     let raw_wit = build_raw_witness(stmt, wit)?;
 
-    let ret = unsafe { ffi::labrador40_simple_verify(raw_stmt.0, raw_wit.0) };
+    let ret = unsafe { ffi::labrador48_simple_verify(raw_stmt.0, raw_wit.0) };
     if ret != 0 {
         return Err(format!("simple_verify: FAIL (code {ret})"));
     }
@@ -724,7 +764,7 @@ pub fn prove(stmt: &Statement, wit: &Witness) -> Result<ProofHandle, String> {
     let composite_guard = RawComposite(composite);
     let commitment_guard = RawCommitment(commitment);
     let ret = unsafe {
-        ffi::labrador40_composite_prove_simple(composite_guard.0, commitment_guard.0, raw_stmt.0, raw_wit.0)
+        ffi::labrador48_composite_prove_simple(composite_guard.0, commitment_guard.0, raw_stmt.0, raw_wit.0)
     };
     if ret != 0 {
         return Err(format!("composite_prove_simple: FAIL (code {ret})"));
@@ -745,7 +785,7 @@ pub fn verify(stmt: &Statement, proof: &ProofHandle) -> Result<(), String> {
     let _guard = labrador_lock();
     let raw_stmt = build_raw_statement(stmt)?;
     let ret =
-        unsafe { ffi::labrador40_composite_verify_simple(proof.composite, proof.commitment, raw_stmt.0) };
+        unsafe { ffi::labrador48_composite_verify_simple(proof.composite, proof.commitment, raw_stmt.0) };
     if ret != 0 {
         return Err(format!("composite_verify_simple: FAIL (code {ret})"));
     }

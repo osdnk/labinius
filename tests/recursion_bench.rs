@@ -1,6 +1,6 @@
-//! Wall clock of the honest prover's recursion arithmetic at `Params::basic()`.
-//! `cargo test --release --offline --test recursion_bench -- --nocapture`.
-use bin_ntt::recursion::{limbs, Cap, Instance, BLOCKS, DEG, Q};
+//! The shape of the encoded relation at `Params::basic()`: sizes, norms, carries and the
+//! no-wraparound margins. `cargo test --release --offline --test recursion_bench -- --nocapture`.
+use bin_ntt::recursion::{Cap, Instance, BLOCKS, DEG, Q};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
@@ -16,34 +16,32 @@ fn row(name: &str, milliseconds: f64) {
 }
 
 #[test]
-fn the_prover_side_at_the_basic_parameters() {
-    let params = Params::new(18, 8, vec![Modulus::Q9721]).unwrap();
+fn the_encoding_at_the_basic_parameters() {
+    let params = Params::new(18, 8, vec![Modulus::Q9721], true).unwrap();
+    let t = Instant::now();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+    let setup_ms = ms(t);
+    let setup = pp.recursion().expect("recursion is on").clone();
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
+    let residues = opening.residues().expect("recursion is on").clone();
     let mut transcript = Transcript::new(b"bin-ntt/bench/recursion");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claim = witness.mle_evaluate(&point);
     let evaluation = witness.row_evaluate(&point);
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &evaluation);
+    let left = prover.commit_left_expansion(&evaluation);
+    let challenges = verifier.derive_folding_challenges(&mut transcript, &left);
     let folded = prover.fold(opening, &challenges);
 
-    println!("\n{:?}, {} columns, limbs {:?}", params.witness_log_len, params.columns(), commitment.moduli());
-    for limb in 0..commitment.moduli().len() {
-        let q = commitment.moduli()[limb];
-        let t = Instant::now();
-        let rows = std::hint::black_box(limbs::key_rows(&pp, limb));
-        row(&format!("key rows in coefficients [{q}]"), ms(t));
-        let t = Instant::now();
-        std::hint::black_box(limbs::residues(&commitment, limb));
-        row(&format!("residues in coefficients [{q}]"), ms(t));
-        assert_eq!(rows.rows.len(), folded.elements().len());
-    }
+    println!("\n2^{}, {} columns, limbs {:?}", params.witness_log_len, params.columns(), commitment.moduli());
+    row("public parameters", setup_ms);
+    println!("  key-time buffers {} MB", setup.footprint() / (1 << 20));
 
     let t = Instant::now();
-    let instance = Instance::new(&pp, &commitment, &folded, &evaluation, &challenges, &point, &claim);
+    let instance =
+        Instance::new(&setup, &residues, &folded, &evaluation, &challenges, &point, &claim);
     row("whole instance", ms(t));
 
     let t = Instant::now();
@@ -83,7 +81,7 @@ fn the_prover_side_at_the_basic_parameters() {
     println!("\n  no-wrap bound, Q/2 = 2^{:.2}", ((Q as f64) / 2.0).log2());
     for b in &bound {
         println!(
-            "  {:<28}2^{:>6.2}  margin {:>5.2}x  worst {} ({:.0}%)",
+            "  {:<28}2^{:>6.2}  margin {:>7.0}x  worst {} ({:.0}%)",
             b.name,
             b.value.log2(),
             b.margin(),
@@ -94,7 +92,8 @@ fn the_prover_side_at_the_basic_parameters() {
     }
 
     let polys: usize = instance.chains.iter().map(|c| c.products.len() + c.scaled.len() + c.carries.at.len() * BLOCKS).sum::<usize>() * BLOCKS;
-    let mut tight = Instance::new(&pp, &commitment, &folded, &evaluation, &challenges, &point, &claim);
+    let mut tight =
+        Instance::new(&setup, &residues, &folded, &evaluation, &challenges, &point, &claim);
     for v in tight.vectors.iter_mut() {
         if let Cap::PerCoefficient(_) = v.cap {
             if v.name.starts_with('e') || v.name.starts_with('k') || v.name.starts_with('w') {
@@ -104,14 +103,13 @@ fn the_prover_side_at_the_basic_parameters() {
     }
     println!("\n  the same with every digit level capped at twice its honest betasq");
     for b in tight.bound() {
-        println!("  {:<28}2^{:>6.2}  margin {:>5.2}x  worst {}", b.name, b.value.log2(), b.margin(), b.worst);
+        println!("  {:<28}2^{:>6.2}  margin {:>7.0}x  worst {}", b.name, b.value.log2(), b.margin(), b.worst);
     }
 
     println!(
-        "\n  {} constraints, {} phi elements, {} MB of i64 phi",
+        "\n  {} constraints, {} phi elements",
         instance.chains.len() * BLOCKS,
-        polys,
-        polys * DEG * 8 / (1 << 20)
+        polys
     );
     println!(
         "  {} witness polys, {} KB of i16 witness",

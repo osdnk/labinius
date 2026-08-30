@@ -30,13 +30,14 @@
 //! - [`limbs`]  : the key in coefficient form, the residues, and `F v - y = q k` per limb.
 //! - [`binary`] : the two lifted binary identities of the plan's section 2c.
 //! - [`bound`]  : the no-wraparound bound of the plan's section 5.
-//! - [`export`] : the statement and witness handed to the LaBRADOR front end.
+//! - [`export`] : the witness handed to the LaBRADOR front end.
+//! - [`setup`]  : everything that depends on the commitment key alone, built once.
+//! - [`statement`]: the LaBRADOR statement, built the same way by prover and verifier.
 use crate::api::N162;
-use crate::scheme::{
-    Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, PublicParameters, RowEvaluation,
-};
+use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
 use chain::{At, Carries, Chain, Product, Scaled};
 use bin_fields::scalar::F162;
+use setup::Setup;
 
 pub mod binary;
 pub mod bound;
@@ -44,6 +45,8 @@ pub mod chain;
 pub mod chunk;
 pub mod export;
 pub mod limbs;
+pub mod setup;
+pub mod statement;
 
 /// Degree of LaBRADOR's ring `Z_Q[X]/(X^DEG + 1)`.
 pub const DEG: usize = 64;
@@ -66,8 +69,16 @@ const _: () = assert!(81 % SUB == 0 && 81 / SUB == BLOCKS / 2);
 const _: () = assert!(CARRY + 81 < N162);
 const _: () = assert!(SUB * (BLOCKS - 1) + CHUNK + SUB - 1 - N162 == CARRY);
 
-/// The modulus of the LaBRADOR instance, `2^40 - 195`.
-pub const Q: i128 = (1i128 << 40) - 195;
+/// The modulus of the LaBRADOR instance, `2^48 - 59`.
+pub const Q: i128 = (1i128 << 48) - 59;
+
+/// Witness ranks are rounded up to a multiple of this, so that a commitment constraint of any
+/// rank the keys reach reads `extlen(len, kappa) = len` polynomials of every block it spans.
+pub const PAD: usize = 32;
+
+/// The cap on `‖v‖^2` per ring element and challenge, the plan's D5: the 95th percentile of the
+/// honest fold, so about one fold in twenty is retried with fresh challenges.
+pub const FOLD_CAP: f64 = 47.2;
 
 /// Largest public sub-chunk coefficient, and largest witness coefficient, the `i16` dot product of
 /// [`chain`] tolerates: `8 * 2 * BLOCK_LIMIT * COEFF_LIMIT < 2^31`.
@@ -130,6 +141,9 @@ pub enum Cap {
 pub struct Vector {
     pub name: String,
     pub polys: Vec<Poly>,
+    /// Polynomials a constraint reads; the rest pad the rank to a multiple of [`PAD`] and are
+    /// zero at every position.
+    pub used: usize,
     pub cap: Cap,
     /// Coefficients of one poly that the encoding claims may be nonzero.
     pub support: usize,
@@ -138,14 +152,14 @@ pub struct Vector {
 
 impl Vector {
     fn new(name: String, cap: Cap, support: usize, binary: bool) -> Vector {
-        Vector { name, polys: Vec::new(), cap, support, binary }
+        Vector { name, polys: Vec::new(), used: 0, cap, support, binary }
     }
 
     /// The `l2` cap the verifier enforces on `‖s‖`.
     pub fn cap(&self) -> f64 {
         match self.cap {
             Cap::Betasq(b) => b.sqrt(),
-            Cap::PerCoefficient(c) => c * ((self.polys.len() * self.support) as f64).sqrt(),
+            Cap::PerCoefficient(c) => c * ((self.used * self.support) as f64).sqrt(),
         }
     }
     fn push(&mut self, p: Poly) -> usize {
@@ -162,6 +176,12 @@ impl Vector {
         self.polys.push(p);
         self.polys.len() - 1
     }
+    /// Append `count` zero polynomials: the layout of a witness the verifier does not hold.
+    fn zeros(&mut self, count: usize) -> usize {
+        let at = self.polys.len();
+        self.polys.resize(at + count, [0i16; DEG]);
+        at
+    }
     fn push_s(&mut self, x: &SElem) -> usize {
         let c = chunk::chunks(x);
         let at = self.polys.len();
@@ -176,14 +196,35 @@ impl Vector {
     }
 }
 
-/// Where the LaBRADOR-side commitments of the plan's sections 1 and 2c bite: the FFI layer adds the
-/// degree-`kappa` constraints over exactly these witness vectors.
+/// How a run of public multipliers becomes `polx`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// Rows of the commitment key: converted once at key time and aliased by every proof.
+    Key { limb: usize, part: usize },
+    /// The negated folding challenges, shared by every chain of the round.
+    Challenge,
+    /// Binary lifts, whose blocks are signed sums of nine-bit windows of the lifted element.
+    Lift,
+    /// Anything else. Only [`Instance::of_identity`] makes these.
+    Loose,
+}
+
+/// A run of public elements whose blocks are converted together and aliased as one `phi`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Group {
+    pub kind: Kind,
+    pub first: usize,
+    pub len: usize,
+}
+
+/// Where the three pre-commitments bite: [`statement`] adds one degree-`kappa` constraint over
+/// each of these groups of witness vectors.
 pub struct Hooks {
-    /// `T_C`: the RNS residues, one vector per limb.
+    /// `T_Y`: the RNS residues, four vectors per limb.
     pub residues: Vec<usize>,
     /// `T_u`: the lifted left expansion.
     pub left_expansion: usize,
-    /// `T_R`: everything the zero-part masks must bind — `v`, the quotients, the carries.
+    /// `T_R`: everything else — `v`, the quotients, the carries.
     pub rest: Vec<usize>,
 }
 
@@ -192,9 +233,13 @@ pub struct Hooks {
 pub struct Instance {
     pub vectors: Vec<Vector>,
     pub public: Vec<Blocks>,
-    /// Whether a public entry is a function of the commitment key alone.
-    pub key_time: Vec<bool>,
+    pub groups: Vec<Group>,
+    /// The group every public entry belongs to.
+    pub group_of: Vec<usize>,
+    /// For a [`Kind::Lift`] group, the `SUB`-bit windows of each of its elements; empty otherwise.
+    pub windows: Vec<Vec<u16>>,
     pub chains: Vec<chain::Chain>,
+    /// The term-major public sub-chunks of every chain; empty in a layout-only instance.
     pub prepared: Vec<chain::Prepared>,
     pub limbs: Vec<limbs::Shape>,
     pub hooks: Hooks,
@@ -204,25 +249,47 @@ impl Instance {
     /// Encode one honest round: the per-limb chains of [`limbs`] and the two binary chains of
     /// [`binary`], with every quotient and carry computed exactly over `Z`.
     pub fn new(
-        pp: &PublicParameters,
-        commitment: &Commitment,
+        setup: &Setup,
+        residues: &limbs::Residues,
         folded: &FoldedWitness,
         row: &RowEvaluation,
         challenges: &FoldingChallenges,
         point: &EvaluationPoint,
         claim: &F162,
     ) -> Instance {
-        let mut build = Build::new(folded, row);
-        for limb in 0..commitment.moduli().len() {
-            limbs::encode(&mut build, pp, commitment, folded, challenges, limb);
+        Instance::build(setup, Some((residues, folded, row)), challenges, point, claim)
+    }
+
+    /// The same relation with every witness vector left zero: what the verifier can rebuild from
+    /// public data alone, and the only thing [`statement`] reads.
+    pub fn layout(
+        setup: &Setup,
+        challenges: &FoldingChallenges,
+        point: &EvaluationPoint,
+        claim: &F162,
+    ) -> Instance {
+        Instance::build(setup, None, challenges, point, claim)
+    }
+
+    fn build(
+        setup: &Setup,
+        witness: Option<(&limbs::Residues, &FoldedWitness, &RowEvaluation)>,
+        challenges: &FoldingChallenges,
+        point: &EvaluationPoint,
+        claim: &F162,
+    ) -> Instance {
+        let mut build = Build::new(setup, challenges, witness.map(|(_, f, r)| (f, r)));
+        for limb in 0..setup.limbs.len() {
+            limbs::encode(&mut build, setup, witness.map(|(r, _, _)| r), limb);
         }
-        binary::encode(&mut build, folded, row, challenges, point, claim);
+        binary::encode(&mut build, point, claim);
         build.finish()
     }
 
     /// The exact left-hand side of every block equation, over `Z`, reduced negacyclically in
     /// `X^DEG + 1` exactly as LaBRADOR would: the reference checker.
     pub fn residuals(&self) -> Vec<[[i128; DEG]; BLOCKS]> {
+        assert!(!self.prepared.is_empty(), "a layout-only instance has no witness to check");
         (0..self.chains.len())
             .map(|c| self.chains[c].residuals(&self.prepared[c], &self.vectors))
             .collect()
@@ -242,7 +309,7 @@ impl Instance {
         for e in x {
             build.vectors[xs].push_s(e);
         }
-        let public: Vec<usize> = g.iter().map(|e| build.blocks(e, false)).collect();
+        let public: Vec<usize> = g.iter().map(|e| build.group(Kind::Loose, &[*e])).collect();
         let mut output = [0i64; N162];
         for (a, b) in g.iter().zip(x) {
             for (i, v) in chunk::mul(a, b).iter().enumerate() {
@@ -286,11 +353,19 @@ impl Instance {
 pub struct Build {
     pub vectors: Vec<Vector>,
     pub public: Vec<Blocks>,
-    pub key_time: Vec<bool>,
+    pub groups: Vec<Group>,
+    pub group_of: Vec<usize>,
+    pub windows: Vec<Vec<u16>>,
     pub chains: Vec<chain::Chain>,
+    pub prepared: Vec<chain::Prepared>,
     pub limbs: Vec<limbs::Shape>,
-    /// The `S`-components of the folded witness, `v[(l * CHUNKS + b) * n + i]` in vector order.
-    pub v: Vec<[SElem; 4]>,
+    /// Ring elements of the folded witness, and columns of the commitment.
+    pub n: usize,
+    pub r: usize,
+    /// The first public entry of the challenge group, shared by every chain.
+    pub challenges: usize,
+    /// Whether the witness is filled in: a layout-only build sizes every vector and leaves it zero.
+    pub witness: bool,
     /// `residues` and `rest` of [`Hooks`], filled as the vectors are created.
     pub residues: Vec<usize>,
     pub left_expansion: usize,
@@ -308,41 +383,88 @@ impl Build {
         Build {
             vectors: Vec::new(),
             public: Vec::new(),
-            key_time: Vec::new(),
+            groups: Vec::new(),
+            group_of: Vec::new(),
+            windows: Vec::new(),
             chains: Vec::new(),
+            prepared: Vec::new(),
             limbs: Vec::new(),
-            v: Vec::new(),
+            n: 0,
+            r: 0,
+            challenges: 0,
+            witness: true,
             residues: Vec::new(),
             left_expansion: U,
             rest: Vec::new(),
         }
     }
 
-    fn new(folded: &FoldedWitness, row: &RowEvaluation) -> Build {
-        let n = folded.elements().len();
-        let v: Vec<[SElem; 4]> = folded.elements().iter().map(limbs::components).collect();
-        let mut vv = Vector::new("v".into(), Cap::Betasq((2f64).powf(30.9)), CHUNK, false);
-        for l in 0..4 {
-            for b in 0..CHUNKS {
-                for i in 0..n {
-                    let mut p = [0i16; DEG];
-                    for j in 0..CHUNK {
-                        p[j] = v[i][l][CHUNK * b + j] as i16;
+    fn new(
+        setup: &Setup,
+        challenges: &FoldingChallenges,
+        witness: Option<(&FoldedWitness, &RowEvaluation)>,
+    ) -> Build {
+        let (n, r) = (setup.n, setup.r);
+        assert_eq!(challenges.len(), r, "one folding challenge per column");
+        let mut vv = Vector::new("v".into(), Cap::Betasq(setup.fold_cap), CHUNK, false);
+        match witness {
+            Some((folded, _)) => {
+                assert_eq!(folded.elements().len(), n, "the fold does not match the key");
+                let v: Vec<[SElem; 4]> = folded.elements().iter().map(limbs::components).collect();
+                for l in 0..4 {
+                    for b in 0..CHUNKS {
+                        for i in 0..n {
+                            let mut p = [0i16; DEG];
+                            for j in 0..CHUNK {
+                                p[j] = v[i][l][CHUNK * b + j] as i16;
+                            }
+                            vv.push(p);
+                        }
                     }
-                    vv.push(p);
                 }
+            }
+            None => {
+                vv.zeros(4 * CHUNKS * n);
             }
         }
         let mut uu = Vector::new("u".into(), Cap::PerCoefficient(1.0), CHUNK, true);
-        for x in row.values() {
-            uu.push_s(&binary::lift(x));
+        match witness {
+            Some((_, row)) => {
+                let lifts: Vec<[Poly; CHUNKS]> =
+                    row.values().iter().map(|x| chunk::chunks(&binary::lift(x))).collect();
+                for b in 0..CHUNKS {
+                    for l in lifts.iter() {
+                        uu.push(l[b]);
+                    }
+                }
+            }
+            None => {
+                uu.zeros(CHUNKS * r);
+            }
         }
-        Build { vectors: vec![vv, uu], v, rest: vec![V], ..Build::bare() }
+        let mut build = Build {
+            vectors: vec![vv, uu],
+            n,
+            r,
+            witness: witness.is_some(),
+            rest: vec![V],
+            ..Build::bare()
+        };
+        let negated: Vec<SElem> = challenges
+            .challenges()
+            .iter()
+            .map(|c| {
+                let k = c.coeffs();
+                core::array::from_fn(|m| -(k[m] as i64))
+            })
+            .collect();
+        build.challenges = build.group(Kind::Challenge, &negated);
+        build
     }
 
     /// The poly of `v` holding chunk `b` of component `l` of ring element `i`.
     pub fn v_at(&self, l: usize, b: usize, i: usize) -> chain::At {
-        chain::At { vector: V, off: (l * CHUNKS + b) * self.v.len() + i }
+        chain::At { vector: V, off: (l * CHUNKS + b) * self.n + i }
     }
 
     pub fn vector(&mut self, name: String, cap: Cap, support: usize, binary: bool) -> usize {
@@ -350,10 +472,38 @@ impl Build {
         self.vectors.len() - 1
     }
 
-    pub fn blocks(&mut self, g: &SElem, key_time: bool) -> usize {
-        self.public.push(chunk::blocks(g));
-        self.key_time.push(key_time);
-        self.public.len() - 1
+    /// One run of public elements, converted to blocks; returns its first public index.
+    pub fn group(&mut self, kind: Kind, items: &[SElem]) -> usize {
+        self.group_blocks(kind, &items.iter().map(chunk::blocks).collect::<Vec<_>>())
+    }
+
+    /// The same over blocks that are already computed — the key rows of [`setup`].
+    pub fn group_blocks(&mut self, kind: Kind, items: &[Blocks]) -> usize {
+        let first = self.public.len();
+        self.groups.push(Group { kind, first, len: items.len() });
+        self.windows.push(Vec::new());
+        self.group_of.resize(first + items.len(), self.groups.len() - 1);
+        self.public.extend_from_slice(items);
+        first
+    }
+
+    /// A run of binary lifts, which also records the `SUB`-bit windows [`setup`] assembles their
+    /// `phi` from.
+    pub fn group_lifts(&mut self, items: &[SElem]) -> usize {
+        let first = self.group(Kind::Lift, items);
+        self.windows[self.groups.len() - 1] = items
+            .iter()
+            .flat_map(|g| {
+                (0..N162 / SUB).map(move |w| {
+                    (0..SUB).fold(0u16, |acc, u| {
+                        let c = g[SUB * w + u];
+                        assert!(c == 0 || c == 1, "a lift holds the coefficient {c}");
+                        acc | ((c as u16) << u)
+                    })
+                })
+            })
+            .collect();
+        first
     }
 
     /// One witness vector per carry level of `gadget`.
@@ -397,10 +547,27 @@ impl Build {
         quotient: (Gadget, &[usize]),
         carry: &[usize],
     ) {
+        let (gadget, levels) = quotient;
+        if !self.witness {
+            for (d, &vector) in levels.iter().enumerate() {
+                let off = self.vectors[vector].zeros(CHUNKS);
+                for b in 0..CHUNKS {
+                    chain.scaled.push(Scaled {
+                        factor: -divisor * gadget.base.pow(d as u32),
+                        chunk: b,
+                        at: At { vector, off: off + b },
+                    });
+                }
+            }
+            for &vector in carry {
+                chain.carries.at.push(At { vector, off: self.vectors[vector].zeros(BLOCKS) });
+            }
+            self.chains.push(chain);
+            return;
+        }
         let prep = chain.prepare(&self.public);
         let mut sums = chain.sums(&prep, &self.vectors);
         let value = Chain::value(&sums);
-        let (gadget, levels) = quotient;
         let k: SElem = core::array::from_fn(|t| {
             let x = value[t] - chain.output[t];
             assert_eq!(x % divisor, 0, "{}: the left side is not a multiple of {divisor}", chain.name);
@@ -432,17 +599,23 @@ impl Build {
                 self.vectors[vector].push(p);
             }
         }
+        self.prepared.push(prep);
         self.chains.push(chain);
     }
 
-    fn finish(self) -> Instance {
-        let prepared = self.chains.iter().map(|c| c.prepare(&self.public)).collect();
+    fn finish(mut self) -> Instance {
+        for v in self.vectors.iter_mut() {
+            v.used = v.polys.len();
+            v.zeros(v.used.next_multiple_of(PAD) - v.used);
+        }
         Instance {
             vectors: self.vectors,
             public: self.public,
-            key_time: self.key_time,
+            groups: self.groups,
+            group_of: self.group_of,
+            windows: self.windows,
             chains: self.chains,
-            prepared,
+            prepared: self.prepared,
             limbs: self.limbs,
             hooks: Hooks {
                 residues: self.residues,

@@ -1,7 +1,7 @@
 //! `polx` buffers owned by Rust.
 //!
 //! `polx` is LaBRADOR's working representation: one ring element held as `K` NTT images,
-//! one per RNS prime (`K = 7` at `LOGQ = 40`, so `sizeof(polx) = 896`). Constraints are
+//! one per RNS prime (`K = 8` at `LOGQ = 48`, so `sizeof(polx) = 1024`). Constraints are
 //! consumed by the prover in exactly this form, so everything the caller can hoist out of
 //! the proving loop -- constraint coefficients, commitment keys, commitments -- is built
 //! once as a [`PolxBuf`] and afterwards only ever aliased by pointer.
@@ -36,6 +36,24 @@ pub fn compiled_q() -> u64 {
 /// block of `len` witness polynomials needs `extlen(len, deg)` coefficient polynomials.
 pub fn extlen(len: usize, deg: usize) -> usize {
     unsafe { ffi::bn_extlen(len, deg) }
+}
+
+/// The `phi` length one block of `len` witness polynomials needs in a degree-`deg` constraint.
+/// A degree-0 (constant-coefficient) constraint reads one `phi` per witness polynomial.
+pub fn philen(len: usize, deg: usize) -> usize {
+    if deg == 0 {
+        len
+    } else {
+        extlen(len, deg)
+    }
+}
+
+/// The smallest commitment rank LaBRADOR's own SIS rule calls secure for a commitment to
+/// vectors of total norm `norm`, with LaBRADOR's slack `6 T SLACK` already applied.
+pub fn sis_rank(norm: f64) -> usize {
+    (1..=32)
+        .find(|&k| unsafe { ffi::bn_sis_secure(k, norm) } != 0)
+        .expect("no commitment rank at or below 32 is SIS-secure for this norm")
 }
 
 /// Length of LaBRADOR's global commitment key, in `polx`.
@@ -94,6 +112,19 @@ impl PolxBuf {
     pub fn expand(len: usize, seed: &[u8; 16], nonce: u64) -> Self {
         let buf = Self::alloc(len);
         unsafe { ffi::bn_polx_expand(buf.ptr, len, seed.as_ptr(), nonce) };
+        buf
+    }
+
+    /// `out[i] = sum_k sign[k] table[idx[i * terms + k]]`: the sparse assembly that replaces a
+    /// transform when a coefficient polynomial is a signed sum of tabulated ones.
+    pub fn table_sum(len: usize, table: &PolxBuf, terms: usize, idx: &[u16], sign: &[i8]) -> Self {
+        assert_eq!(idx.len(), len * terms, "one table index per term and element");
+        assert_eq!(sign.len(), terms, "one sign per term");
+        assert!(idx.iter().all(|&i| (i as usize) < table.len), "table index out of range");
+        let buf = Self::alloc(len);
+        unsafe {
+            ffi::bn_polx_table_sum(buf.ptr, len, table.ptr, terms, idx.as_ptr(), sign.as_ptr())
+        };
         buf
     }
 
@@ -240,6 +271,23 @@ impl CommitmentKey {
         assert_eq!(s.len(), self.n * N, "expected {} coefficients", self.n * N);
         let out = PolxBuf::alloc(self.kappa);
         unsafe { ffi::bn_commit_i16(out.ptr, self.buf.ptr, s.as_ptr(), self.n, self.kappa) };
+        out
+    }
+
+    /// `u = sum_j <key_j, s_j>` over several witness vectors at once, with block `j` reading the
+    /// key at the offset `sum_{i<j} philen(len_i, kappa)` that [`super::Constraint`] gives it.
+    pub fn commit_blocks(&self, parts: &[&[i16]]) -> PolxBuf {
+        let len: Vec<usize> = parts.iter().map(|p| p.len() / N).collect();
+        assert_eq!(
+            len.iter().map(|&l| extlen(l, self.kappa)).sum::<usize>(),
+            self.n,
+            "the blocks do not cover the key"
+        );
+        let ptrs: Vec<*const i16> = parts.iter().map(|p| p.as_ptr()).collect();
+        let out = PolxBuf::alloc(self.kappa);
+        unsafe {
+            ffi::bn_commit_blocks(out.ptr, self.buf.ptr, self.kappa, len.len(), len.as_ptr(), ptrs.as_ptr())
+        };
         out
     }
 

@@ -1,7 +1,7 @@
-//! Raw declarations for `liblabrador.a` (built at `LOGQ = 40`, symbol prefix `labrador40_`)
+//! Raw declarations for `liblabrador.a` (built at `LOGQ = 48`, symbol prefix `labrador48_`)
 //! and for the `csrc/bn_labrador.c` shim.
 //!
-//! Only the symbols LaBRADOR marks `visibility("default")` carry the `labrador40_` prefix;
+//! Only the symbols LaBRADOR marks `visibility("default")` carry the `labrador48_` prefix;
 //! everything else (`init_sparsecnst_half`, `polxvec_*`, `sparsecnst_eval`, ...) keeps its
 //! plain name and is reached through the shim rather than from here.
 
@@ -9,28 +9,28 @@ use std::ffi::c_void;
 use std::os::raw::c_int;
 
 extern "C" {
-    pub fn labrador40_init_comkey(n: usize);
-    pub fn labrador40_free_comkey();
-    pub fn labrador40_init_witness_raw(wt: *mut c_void, r: usize, n: *const usize);
-    pub fn labrador40_free_witness(wt: *mut c_void);
-    pub fn labrador40_init_smplstmnt_raw(
+    pub fn labrador48_init_comkey(n: usize);
+    pub fn labrador48_free_comkey();
+    pub fn labrador48_init_witness_raw(wt: *mut c_void, r: usize, n: *const usize);
+    pub fn labrador48_free_witness(wt: *mut c_void);
+    pub fn labrador48_init_smplstmnt_raw(
         st: *mut c_void,
         r: usize,
         n: *const usize,
         betasq: *const u64,
         k: usize,
     ) -> c_int;
-    pub fn labrador40_free_smplstmnt(st: *mut c_void);
-    pub fn labrador40_free_commitment(com: *mut c_void);
-    pub fn labrador40_free_composite(p: *mut c_void);
-    pub fn labrador40_simple_verify(st: *const c_void, wt: *const c_void) -> c_int;
-    pub fn labrador40_composite_prove_simple(
+    pub fn labrador48_free_smplstmnt(st: *mut c_void);
+    pub fn labrador48_free_commitment(com: *mut c_void);
+    pub fn labrador48_free_composite(p: *mut c_void);
+    pub fn labrador48_simple_verify(st: *const c_void, wt: *const c_void) -> c_int;
+    pub fn labrador48_composite_prove_simple(
         p: *mut c_void,
         com: *mut c_void,
         st: *const c_void,
         wt: *const c_void,
     ) -> c_int;
-    pub fn labrador40_composite_verify_simple(
+    pub fn labrador48_composite_verify_simple(
         p: *const c_void,
         com: *const c_void,
         st: *const c_void,
@@ -59,6 +59,23 @@ extern "C" {
 
     pub fn bn_commit_polx(out: *mut c_void, key: *const c_void, s: *const c_void, len: usize, deg: usize);
     pub fn bn_commit_i16(out: *mut c_void, key: *const c_void, s: *const i16, len: usize, deg: usize);
+    pub fn bn_commit_blocks(
+        out: *mut c_void,
+        key: *const c_void,
+        deg: usize,
+        nb: usize,
+        len: *const usize,
+        s: *const *const i16,
+    );
+    pub fn bn_polx_table_sum(
+        out: *mut c_void,
+        len: usize,
+        table: *const c_void,
+        terms: usize,
+        idx: *const u16,
+        sign: *const i8,
+    );
+    pub fn bn_sis_secure(rank: usize, norm: f64) -> c_int;
 
     pub fn bn_eval_blocks(
         out: *mut c_void,

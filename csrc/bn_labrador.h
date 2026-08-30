@@ -57,6 +57,19 @@ int bn_smplstmnt_set_constraint(void *st, size_t ci, size_t deg, size_t nz,
 int bn_set_witness_i16(void *wt, size_t i, size_t n, const int16_t *s);
 uint64_t bn_witness_normsq(const void *wt, size_t i);
 
+/* LaBRADOR's own SIS rule, for choosing the rank of a commitment key. */
+int bn_sis_secure(size_t rank, double norm);
+
+/* Ajtai commitment over several witness vectors at once: out[deg] = sum_j <key_j, s_j>,
+ * key block j starting at extlen-padded offset sum_{i<j} extlen(len_i, deg). */
+void bn_commit_blocks(void *out, const void *key, size_t deg, size_t nb, const size_t *len,
+                      const int16_t *const *s);
+
+/* out[i] = sum_k sign[k] * table[idx[i*terms + k]], the sparse polx assembly the encoding's
+ * binary lifts use in place of a transform. */
+void bn_polx_table_sum(void *out, size_t len, const void *table, size_t terms,
+                       const uint16_t *idx, const int8_t *sign);
+
 double bn_composite_size(const void *composite);
 
 #endif

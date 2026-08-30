@@ -14,21 +14,24 @@ const WITNESS_SEED: [u8; 32] = [29u8; 32];
 /// One round of the real pipeline, encoded.
 fn round(params: &Params) -> Instance {
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+    let setup = pp.recursion().expect("recursion is on").clone();
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
+    let residues = opening.residues().expect("recursion is on").clone();
     let mut transcript = Transcript::new(b"bin-ntt/test/recursion");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claim = witness.mle_evaluate(&point);
     let row = witness.row_evaluate(&point);
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
+    let left = prover.commit_left_expansion(&row);
+    let challenges = verifier.derive_folding_challenges(&mut transcript, &left);
     let folded = prover.fold(opening, &challenges);
-    Instance::new(&pp, &commitment, &folded, &row, &challenges, &point, &claim)
+    Instance::new(&setup, &residues, &folded, &row, &challenges, &point, &claim)
 }
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Modulus::Q9721]).unwrap()
+    Params::new(9, 2, vec![Modulus::Q9721], true).unwrap()
 }
 
 // =============================================================================================
@@ -182,7 +185,7 @@ fn the_instance_holds_over_z() {
 fn the_instance_holds_on_every_limb() {
     for extra in [vec![], vec![Modulus::Q2917], vec![Modulus::Q2917, Modulus::Q4861, Modulus::Q12637]] {
         let n = extra.len() + 1;
-        let i = round(&Params::new(9, 2, extra.clone()).unwrap());
+        let i = round(&Params::new(9, 2, extra.clone(), true).unwrap());
         assert!(i.holds(), "{extra:?}: {:?}", i.failure());
         assert!(i.clears(), "{extra:?}: the no-wrap bound");
         assert_eq!(i.chains.len(), 4 * n + 2);
@@ -205,7 +208,7 @@ fn one_tampered_coefficient_breaks_an_equation() {
     let base = round(&small());
     for v in 0..base.vectors.len() {
         let support = base.vectors[v].support;
-        let polys = base.vectors[v].polys.len();
+        let polys = base.vectors[v].used;
         for (p, c) in [(0, 0), (polys / 2, support / 2), (polys - 1, support - 1)] {
             let mut i = round(&small());
             i.vectors[v].polys[p][c] += 1;

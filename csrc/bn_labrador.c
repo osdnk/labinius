@@ -191,6 +191,45 @@ uint64_t bn_witness_normsq(const void *wtp, size_t i) {
   return ((const witness*)wtp)->normsq[i];
 }
 
+int bn_sis_secure(size_t rank, double norm) { return sis_secure(rank,norm); }
+
+void bn_commit_blocks(void *out, const void *key, size_t deg, size_t nb, const size_t *len,
+                      const int16_t *const *s)
+{
+  size_t j,mx = 0,off = 0;
+  polx *o = out;
+  polx *sx;
+  polx t[deg];
+
+  for(j=0;j<nb;j++)
+    mx = MAX(mx,len[j]);
+  sx = _aligned_alloc(64,MAX(mx,1)*sizeof(polx));
+  polxvec_setzero(o,deg);
+  for(j=0;j<nb;j++) {
+    bn_polx_from_int16(sx,len[j],s[j]);
+    polxvec_mul_extension(t,(const polx*)key + off,sx,len[j],deg,1);
+    polxvec_add(o,o,t,deg);
+    off += extlen(len[j],deg);
+  }
+  free(sx);
+}
+
+void bn_polx_table_sum(void *out, size_t len, const void *table, size_t terms,
+                       const uint16_t *idx, const int8_t *sign)
+{
+  size_t i,k;
+  polx *o = out;
+  const polx *t = table;
+
+  for(i=0;i<len;i++) {
+    polxvec_setzero(&o[i],1);
+    for(k=0;k<terms;k++) {
+      if(sign[k] > 0) polx_add(&o[i],&o[i],&t[idx[i*terms+k]]);
+      else if(sign[k] < 0) polx_sub(&o[i],&o[i],&t[idx[i*terms+k]]);
+    }
+  }
+}
+
 double bn_composite_size(const void *cp) {
   return ((const composite*)cp)->size;
 }

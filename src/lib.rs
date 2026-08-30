@@ -40,8 +40,9 @@ pub use api::PowerOfThreeRingElement as RingElement162;
 pub use bin_fields::scalar::F162;
 pub use challenge::Transcript;
 pub use scheme::{
-    Commitment, CommitmentOpening, EvaluationPoint, FoldedCommitment, FoldedWitness,
-    FoldingChallenges, ParamError, Params, Prover, PublicParameters, RowEvaluation,
-    VerificationError, Verifier, Witness, WitnessError,
+    Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
+    FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, OpeningError,
+    OpeningProof, ParamError, Params, Prover, PublicParameters, RowEvaluation, VerificationError,
+    Verifier, Witness, WitnessError,
 };
 pub use types::RingElement as RingElement648;

@@ -5,14 +5,18 @@
 //! and read in the `Z`-basis of `S`. For output component `m` the multiplier of `v_{i,l}` is
 //! `F_{i,(m-l) mod 4}`, twisted by `-Z` when `l > m`.
 use super::chain::{At, Carries, Chain, Product};
-use super::{centre, chunk, Build, Cap, Gadget, SElem, CHUNK, CHUNKS};
-use crate::api::{PowerOfThreeRingElement, N162, POW3_SLOT_EXP, SLOT_648};
+use super::setup::Setup;
+use super::{centre, chunk, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS};
+use crate::api::{
+    PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
+    POW3_SLOT_EXP, SLOT_648,
+};
 use crate::params::{
     inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, DEGREE_Q, N, QUAD_CLASS_SLOT,
     QUAD_POW3_CLASS, RADIX_Q, SUBRINGS_Q,
 };
 use crate::scalar;
-use crate::scheme::{Commitment, FoldedWitness, FoldingChallenges, PublicParameters};
+use crate::scheme::PublicParameters;
 use crate::types::RingElement;
 
 /// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the two
@@ -234,16 +238,50 @@ pub fn key_slots(pp: &PublicParameters, limb: usize, i: usize) -> [u32; N] {
     core::array::from_fn(|j| (row[i / 32].v[j][i % 32] as i32).rem_euclid(q as i32) as u32)
 }
 
-/// The RNS residues `C_j` of one limb in coefficient form, four `S`-components per column.
-pub fn residues(commitment: &Commitment, limb: usize) -> Vec<[SElem; 4]> {
-    let Shape { q, quad, .. } = Shape::of(commitment.moduli()[limb]);
-    (0..commitment.columns())
-        .map(|j| {
-            let c: [PowerOfThreeRingElement; 4] =
-                core::array::from_fn(|m| *commitment.element(m, j, limb));
-            split(&coefficients(q, quad, &slots_of(q, quad, &c)))
-        })
-        .collect()
+/// The RNS residues the recursion commits to, chunked in the order the encoding stores them:
+/// `vectors[limb * 4 + m][b * columns + j]` is chunk `b` of component `m` of column `j`.
+#[derive(Clone)]
+pub struct Residues {
+    pub vectors: Vec<Vec<Poly>>,
+}
+
+impl Residues {
+    /// The coefficients of one vector, as the commitment and the witness export want them.
+    pub fn flat(&self, vector: usize) -> &[i16] {
+        self.vectors[vector].as_flattened()
+    }
+}
+
+/// The residues of every limb of one commitment, in coefficient form.
+pub fn residues(
+    matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
+    primes: &[u16],
+) -> Residues {
+    let r = matrix.cols();
+    let mut vectors = Vec::with_capacity(4 * primes.len());
+    for (limb, &prime) in primes.iter().enumerate() {
+        let Shape { q, quad, .. } = Shape::of(prime);
+        let columns: Vec<[SElem; 4]> = (0..r)
+            .map(|j| {
+                let c: [PowerOfThreeRingElement; 4] =
+                    core::array::from_fn(|m| matrix.get(m, j).limbs[limb]);
+                split(&coefficients(q, quad, &slots_of(q, quad, &c)))
+            })
+            .collect();
+        for m in 0..4 {
+            let chunks: Vec<[Poly; CHUNKS]> =
+                columns.iter().map(|c| chunk::chunks(&c[m])).collect();
+            let mut v = Vec::with_capacity(CHUNKS * r);
+            for b in 0..CHUNKS {
+                for c in chunks.iter() {
+                    v.push(c[b]);
+                }
+            }
+            v.resize((CHUNKS * r).next_multiple_of(super::PAD), [0i16; super::DEG]);
+            vectors.push(v);
+        }
+    }
+    Residues { vectors }
 }
 
 // =============================================================================================
@@ -251,42 +289,17 @@ pub fn residues(commitment: &Commitment, limb: usize) -> Vec<[SElem; 4]> {
 // =============================================================================================
 
 /// Append the four component identities of one limb to `build`.
-pub fn encode(
-    build: &mut Build,
-    pp: &PublicParameters,
-    commitment: &Commitment,
-    folded: &FoldedWitness,
-    challenges: &FoldingChallenges,
-    limb: usize,
-) {
-    let shape = Shape::of(commitment.moduli()[limb]);
+pub fn encode(build: &mut Build, setup: &Setup, residues: Option<&Residues>, limb: usize) {
+    let shape = setup.limbs[limb];
     let q = shape.q as i64;
-    let n = folded.elements().len();
-    let r = commitment.columns();
+    let (n, r) = (build.n, build.r);
     build.limbs.push(shape);
 
-    let key = key_rows(pp, limb);
-    assert_eq!(key.rows.len(), n, "the key and the folded witness disagree");
     let base_key = build.public.len();
-    for k in 0..4 {
-        for twist in 0..2 {
-            for i in 0..n {
-                let mut g = key.rows[i][k];
-                if twist == 1 {
-                    g = chunk::shift(&g, 1);
-                    g.iter_mut().for_each(|x| *x = -*x);
-                }
-                build.blocks(&g, true);
-            }
-        }
-    }
-    let base_challenge = build.public.len();
-    for c in challenges.challenges() {
-        let coefficients = c.coeffs();
-        build.blocks(&core::array::from_fn(|m| -(coefficients[m] as i64)), false);
+    for part in 0..8 {
+        build.group_blocks(Kind::Key { limb, part }, setup.key_blocks(limb, part));
     }
 
-    let res = residues(commitment, limb);
     let residues_vector: Vec<usize> = (0..4)
         .map(|m| {
             let v = build.vector(
@@ -295,8 +308,15 @@ pub fn encode(
                 CHUNK,
                 false,
             );
-            for c in res.iter() {
-                build.vectors[v].push_s(&c[m]);
+            match residues {
+                Some(res) => {
+                    for &p in res.vectors[limb * 4 + m].iter().take(CHUNKS * r) {
+                        build.vectors[v].push(p);
+                    }
+                }
+                None => {
+                    build.vectors[v].zeros(CHUNKS * r);
+                }
             }
             build.residues.push(v);
             v
@@ -320,12 +340,12 @@ pub fn encode(
                 }
             }
         }
-        for j in 0..r {
-            for b in 0..CHUNKS {
+        for b in 0..CHUNKS {
+            for j in 0..r {
                 products.push(Product {
-                    blocks: base_challenge + j,
+                    blocks: build.challenges + j,
                     chunk: b,
-                    at: At { vector: residues_vector[m], off: j * CHUNKS + b },
+                    at: At { vector: residues_vector[m], off: b * r + j },
                 });
             }
         }

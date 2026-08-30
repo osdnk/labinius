@@ -27,7 +27,7 @@ fn round(
     Result<(), VerificationError>,
     Result<(), VerificationError>,
 ) {
-    let params = Params::new(10, 2, extra_moduli.to_vec()).unwrap();
+    let params = Params::new(10, 2, extra_moduli.to_vec(), false).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);

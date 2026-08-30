@@ -64,7 +64,7 @@ impl Round {
 }
 
 fn small() -> Params {
-    Params::new(11, 3, vec![Q9721]).unwrap()
+    Params::new(11, 3, vec![Q9721], false).unwrap()
 }
 
 #[test]

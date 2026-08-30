@@ -246,6 +246,14 @@ against `Q/2 = 2^39` at `LOGQ = 40`: margins 4.6× and 2×; honest values are �
 Carries get 3 base-1024 digits for 3889 and 4 base-256 digits for 9721 (honest maxima
 ≈ 2^28.2 and 2^29.5); `k` 2 base-512 digits (honest maxima ≈ 2^15 and 2^16.3).
 
+**Measured (2026-08-30): `LOGQ = 48`.** With the residues committed as they are (§11) the
+witness's total squared norm is `2^40.4`, dominated by the four 9721 residue vectors at `2^38.3`
+each; Dachshund's exact-norm proof wants that below `2^(LOGQ-3)`, which `LOGQ = 40` (`2^37`) misses
+and `LOGQ = 48` (`2^45`) clears, and digit-decomposing the residues to fit 40 costs more than the
+wider modulus. At 48 (`QOFF = 59`, `K = 8`, `L = 4`, `LIFTS = 3`, `sizeof(polx) = 1024`) the bound
+below is `2^36.04` on 3889 and `2^37.89` on 9721 against `Q/2 = 2^47`, margins of 1992x and 552x;
+`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8` from `sis_secure` on the caps.
+
 **Why `LOGQ = 40` is the smallest table entry that works.** At `LOGQ = 32`, `Q/2 = 2^31` is
 below the 2^35 that the `A`-part alone reaches at the *honest* norm, so the proof would only
 certify `A_q v ≡ y_q + Q·m (mod q)` for some small unknown `m` — a relaxed relation under
@@ -309,13 +317,13 @@ projection (AES expansion of 33 MB plus 268M adds, ≈ 15 ms) and its four lifte
 (≈ 30 ms), aggregation of our sparse constraints (≈ 0.8M `polx` MACs, ≈ 10 ms), and the
 recursion levels, which start from an amortised opening of 3072 polys (≈ 2× level one).
 
-Expected numbers (to be measured in step 1, not promised): proof ≈ `T_C` 3 KB + `u` 5.2 KB +
-`z` 0.7 KB + `T_R` 3 KB + LaBRADOR 40–70 KB ≈ 55–80 KB (today 875 KB); prover ≈ 150–200 ms,
-dominated by LaBRADOR's JL/lift machinery (rokoblador's 0.4 s for 20k polys is not
-comparable: its 330 constraints are each dense over the whole witness and its `r = 2` keeps
-the first recursion level large); verifier of the same order (aggregation plus LaBRADOR's
-verify); memory ≥ 300 MB of `phi` (7 primes) plus LaBRADOR's own and the conversion buffers
-— measured in step 1.
+Measured at `Params::basic()` on one core of an i7-11850H, `LOGQ = 48`: proof 80.0 KB
+(`T_Y` 4.1 + `T_u` 1.1 + `T_R` 3.0 + 29 norms 0.2 + LaBRADOR 71.5), against 978 KB in the clear.
+Prover: `commit` 50.3 ms with `T_Y` (13.9 without), `commit_left_expansion` 0.2 ms,
+`prove_opening` 489 ms = fold 4.5 + encoding 22.7 + `T_R` 2.7 + masks 2.4 + constraint `phi` 16.9
++ `labrador::prove` 404.7, so 49.2 ms of arithmetic of our own. Verifier: statement rebuild
+26.7 ms + `labrador::verify` 235.7 ms. Key time (`PublicParameters::from_seed`): 124 ms and 233 MB
+of key-time `phi` for two limbs; 81 MB of per-proof `phi`; peak resident set 592 MB.
 
 ## 7. Build and code layout
 
@@ -354,7 +362,10 @@ verify); memory ≥ 300 MB of `phi` (7 primes) plus LaBRADOR's own and the conve
 * **D1** `C` inside LaBRADOR; `T_C` is the commitment. — yes.
 * **D2** zero parts via `T_R` and four transcript-derived masks; no LaBRADOR change. — yes.
 * **D3** chunking 54/9. — yes.
-* **D4** `LOGQ = 40`. — yes.
+* **D4** `LOGQ = 48` (was 40). At 40 the residue vectors alone put the total witness norm² at
+  `2^40.4`, above the `2^(LOGQ-3) = 2^37` ceiling Dachshund's exact-norm proof wants; at 48 the
+  ceiling is `2^45` and the no-wrap margins are 1992x (3889) and 552x (9721) against `Q/2 = 2^47`.
+  Digit-decomposing the residues to fit 40 is dearer than the wider modulus.
 * **D5** `betasq_v ≤ 2^30.9`: the 95th percentile of the honest `‖v‖²` for a random binary
   witness, so ≈ 5 % of honest folds are retried with fresh challenges. `‖v‖²` does not
   concentrate — it is `A·(1 + χ²₁)` with `A ≈ 2^28.65`, the second term being the square of

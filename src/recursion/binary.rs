@@ -14,7 +14,7 @@ use super::chain::{At, Carries, Chain, Product};
 use super::{Build, Gadget, SElem, CHUNKS, U};
 use crate::api::N162;
 use crate::eval::eq_table;
-use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
+use crate::scheme::EvaluationPoint;
 use bin_fields::scalar::F162;
 
 /// The carries and quotients of the two binary chains.
@@ -36,35 +36,17 @@ pub fn reduce_mod_2(x: &SElem) -> F162 {
 }
 
 /// Append the two lifted identities to `build`.
-pub fn encode(
-    build: &mut Build,
-    folded: &FoldedWitness,
-    row: &RowEvaluation,
-    challenges: &FoldingChallenges,
-    point: &EvaluationPoint,
-    claim: &F162,
-) {
-    let n = folded.elements().len();
-    let r = row.values().len();
+pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
+    let (n, r) = (build.n, build.r);
     let eq0 = eq_table(point.p0());
-    assert_eq!(eq0.len(), 4 * n, "the row table does not match the folded witness");
+    assert_eq!(eq0.len(), 4 * n, "the row table does not match the key");
 
     let base_eq0 = build.public.len();
     for l in 0..4 {
-        for i in 0..n {
-            build.blocks(&lift(&eq0[4 * i + l]), false);
-        }
-    }
-    let base_challenge = build.public.len();
-    for c in challenges.challenges() {
-        let coefficients = c.coeffs();
-        let g: SElem = core::array::from_fn(|m| -(coefficients[m] as i64));
-        build.blocks(&g, false);
+        build.group_lifts(&(0..n).map(|i| lift(&eq0[4 * i + l])).collect::<Vec<SElem>>());
     }
     let base_eq1 = build.public.len();
-    for x in eq_table(point.p1()) {
-        build.blocks(&lift(&x), false);
-    }
+    build.group_lifts(&eq_table(point.p1()).iter().map(lift).collect::<Vec<SElem>>());
 
     let mut products = Vec::with_capacity(4 * CHUNKS * n + CHUNKS * r);
     for l in 0..4 {
@@ -78,23 +60,23 @@ pub fn encode(
             }
         }
     }
-    for j in 0..r {
-        for b in 0..CHUNKS {
+    for b in 0..CHUNKS {
+        for j in 0..r {
             products.push(Product {
-                blocks: base_challenge + j,
+                blocks: build.challenges + j,
                 chunk: b,
-                at: At { vector: U, off: j * CHUNKS + b },
+                at: At { vector: U, off: b * r + j },
             });
         }
     }
     chain(build, "binary fold".into(), products, [0i64; N162], "w");
 
-    let products = (0..r)
-        .flat_map(|j| {
-            (0..CHUNKS).map(move |b| Product {
+    let products = (0..CHUNKS)
+        .flat_map(|b| {
+            (0..r).map(move |j| Product {
                 blocks: base_eq1 + j,
                 chunk: b,
-                at: At { vector: U, off: j * CHUNKS + b },
+                at: At { vector: U, off: b * r + j },
             })
         })
         .collect();
