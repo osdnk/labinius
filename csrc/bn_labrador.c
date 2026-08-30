@@ -109,14 +109,14 @@ const void *bn_sx_ptr(const void *sxp, size_t i, size_t off) {
 }
 
 void bn_commit_polx(void *out, const void *key, const void *s, size_t len, size_t deg) {
-  polxvec_mul_extension((polx*)out,(const polx*)key,(const polx*)s,len,deg,1);
+  polxvec_mul_extension((polx*)out,(const polx*)key,(const polx*)s,len,deg,1,SPROD_WORST);
 }
 
 void bn_commit_i16(void *out, const void *key, const int16_t *s, size_t len, size_t deg) {
   polx *sx = _aligned_alloc(64,MAX(len,1)*sizeof(polx));
 
   bn_polx_from_int16(sx,len,s);
-  polxvec_mul_extension((polx*)out,(const polx*)key,sx,len,deg,1);
+  polxvec_mul_extension((polx*)out,(const polx*)key,sx,len,deg,1,SPROD_WORST);
   free(sx);
 }
 
@@ -147,7 +147,7 @@ void bn_eval_blocks(void *out, size_t deg, size_t nz, const size_t *idx, const s
       shortphi_topolxvec(scratch,&sp,0,len[j]);
       p = scratch;
     }
-    polxvec_mul_extension(t,p,&sx[idx[j]][off[j]],len[j],deg2,1);
+    polxvec_mul_extension(t,p,&sx[idx[j]][off[j]],len[j],deg2,1,SPROD_WORST);
     polxvec_add(o,o,t,deg2);
   }
   free(scratch);
@@ -234,7 +234,7 @@ void bn_commit_blocks(void *out, const void *key, size_t deg, size_t nb, const s
   polxvec_setzero(o,deg);
   for(j=0;j<nb;j++) {
     bn_polx_from_int16(sx,len[j],s[j]);
-    polxvec_mul_extension(t,(const polx*)key + off,sx,len[j],deg,1);
+    polxvec_mul_extension(t,(const polx*)key + off,sx,len[j],deg,1,SPROD_WORST);
     polxvec_add(o,o,t,deg);
     off += extlen(len[j],deg);
   }

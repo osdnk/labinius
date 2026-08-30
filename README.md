@@ -120,31 +120,31 @@ and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 18.06 |
+| `commit`, including `T_Y` | 17.16 |
 | `row_evaluate` | 0.29 |
 | `commit_left_expansion` | 0.25 |
-| `prove_opening` | 232.95 |
+| `prove_opening` | 218.87 |
 | — fold | 4.56 |
-| — encoding | 18.32 |
-| — `T_R` | 2.23 |
-| — masks | 1.92 |
-| — constraint `phi` | 2.31 |
-| — statement build | 7.69 |
-| — `labrador::prove` | 171.33 |
-| *total* | *251.54* |
+| — encoding | 18.26 |
+| — `T_R` | 1.93 |
+| — masks | 1.99 |
+| — constraint `phi` | 2.40 |
+| — statement build | 7.39 |
+| — `labrador::prove` | 158.84 |
+| *total* | *236.55* |
 | **statement** | |
 | `derive_evaluation_point` | 0.00 |
 | `mle_evaluate` | 0.30 |
 | *total* | *0.30* |
 | **verifier** | |
 | `derive_folding_challenges` | 1.21 |
-| statement rebuild | 16.77 |
-| — layout | 1.39 |
-| — no-wrap bound | 2.33 |
-| — constraint `phi` | 2.31 |
-| — statement build | 7.69 |
-| `labrador::verify` | 102.78 |
-| *total* | *120.76* |
+| statement rebuild | 16.53 |
+| — layout | 1.37 |
+| — no-wrap bound | 2.36 |
+| — constraint `phi` | 2.40 |
+| — statement build | 7.39 |
+| `labrador::verify` | 103.94 |
+| *total* | *121.70* |
 
 The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
 LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 1 MB on
@@ -152,8 +152,11 @@ top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident se
 each mode is 294 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
-`commit` 49.6 -> 18.1, `prove_opening` 526.4 -> 233.0 and the verifier 287.8 -> 120.8 ms. Inside
-LaBRADOR (300 -> 171 ms proving, 222 -> 103 ms verifying, transcript-neutral): the chain `phi`
+`commit` 49.6 -> 17.0, `prove_opening` 526.4 -> 218.9 and the verifier 287.8 -> 121.7 ms. Inside
+LaBRADOR (300 -> 159 ms proving, 222 -> 104 ms verifying, transcript-neutral): the inner products
+as a VNNI double schoolbook with two exact products per `vpdpwssd` and a per-call reduction
+chunk (Lazer's random-walk chunk on the prover's honest data, the worst-case chunk wherever a
+kernel reads the proof), the chain `phi`
 handed over as nine int16 coefficients instead of 1 KB NTT images and collapsed in the
 coefficient domain with `vpdpwssd` against the shifted quarternary challenge, one NTT per
 destination run at the end (the aggregation 41 -> 13 ms, the key-time buffers 233 -> 20 MB,
