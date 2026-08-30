@@ -112,7 +112,7 @@ pub const fn r16(q: u16) -> i32 {
 }
 
 /// Bound on one lane of the transform's output: `vertical_bin_asm`'s 7.5 q (3889) and 2.294 q
-/// (9721), `vertical_bin_large`'s 1.706 q (17497) and 1.580 q (19441).
+/// (9721), `vertical_bin_large`'s 1.786 q (17497) and 1.580 q (19441).
 pub const fn w_bound(q: u16) -> i64 {
     if vl::is_large(q) {
         vl::output_bound(q) as i64

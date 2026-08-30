@@ -15,13 +15,23 @@
 //! slack. There is no schedule of the existing kernels, which reduce only the untwiddled `a0`,
 //! that fits: at 19441 the un-Barretted level 3 alone leaves `3 q = 58323`.
 //!
-//! Everything a butterfly adds therefore has to be reduced, not just `a0`, and the reduction has
-//! to be the shuffle-port **lookup Barrett** of
-//! [`crate::simd::vertical_bin_asm::barrett_lut_i16`] (`vpmultishiftqb` + `vpandd` + `vpord` +
-//! `vpermb` + `vpaddw`: 2 port-5 and 3 flexible uops, **not one multiply-port slot**), because
-//! the multiply port is what the kernel is already bound by and the two-multiply `vpmulhrsw`
-//! Barrett is useless up here anyway — `round(2^15/q)` is 2 for both primes, an estimate with two
-//! significant bits.
+//! Everything a butterfly adds therefore has to be reduced, not just `a0`, and neither of the
+//! crate's two reductions is dear enough to rule out. They are cheap on **different ports**,
+//! which is the whole of the schedule below:
+//!
+//! * the shuffle-port **lookup Barrett** of
+//!   [`crate::simd::vertical_bin_asm::barrett_lut_i16`] — `vpmultishiftqb`, `vpandd`, `vpord`,
+//!   `vpermb`, `vpaddw`, of which LLVM makes the middle two one `vpternlogd`: **4 uops, two of
+//!   them port-5 only and none on the multiply port**, `|r| <= q/2 + 2^10` = 0.53 q;
+//! * the two-multiply **`vpmulhrsw` Barrett** of [`crate::params::barrett_i16`] — `vpmulhrsw`,
+//!   `vpmullw`, `vpsubw`: **3 uops, two of them port-0 only**. `round(2^15/q)` is 2 for both
+//!   primes, a quotient estimate with two significant bits, so it only reaches `|r| <= 0.60 q`
+//!   at 17497 and 0.74 q at 19441 — but it is a uop cheaper.
+//!
+//! Nine of a butterfly's uops are the three Montgomery products' multiplies and are port-0 only,
+//! and the level-3 loop carries 12 `vpermb` per row on port 5, so neither port is the bottleneck
+//! by itself: the schedule is a port-balancing problem, not a "how few reductions" one, and
+//! [`bin_sched`] solves it as one.
 //!
 //! # The unsigned alternative, and why this one
 //!
@@ -31,12 +41,12 @@
 //! (`vpmullw` + `vpmulhuw` + `vpmullw` + `vpsubw` + `vpsubw` + `vpminuw`, 6 uops of which 3 on
 //! the multiply port), three negations `q - t` so that the two twiddled outputs stay sums rather
 //! than differences, six adds and one unsigned lookup Barrett on `a0`: 33 uops, 9 on port 0 and 2
-//! on port 5, against the signed schedule's 34 (q = 17497) and 39 (q = 19441) with the same 9 on
-//! port 0 and 6 or 8 on port 5.
+//! on port 5, against the signed schedule's 29 (q = 17497) and 35 (q = 19441) with the same 9 on
+//! port 0 and 2 or 8 on port 5.
 //!
 //! Measured over the same 216-butterfly level, both written out in intrinsics
 //! (`tests/vertical_bin_large.rs::the_unsigned_alternative`), the signed one wins anyway:
-//! **3.89 ns per butterfly against the unsigned form's 6.10 at q = 17497, and 4.51 against 6.20
+//! **3.68 ns per butterfly against the unsigned form's 5.96 at q = 17497, and 4.40 against 6.08
 //! at q = 19441** — 1.6x and 1.4x. The uop counts are a wash and the dependency chains are
 //! not: a Shoup product is
 //! `vpmullw -> vpmullw -> vpsubw -> vpsubw -> vpminuw` deep where a Montgomery one is
@@ -51,34 +61,56 @@
 //!
 //! # The schedule
 //!
-//! Per level, the flags are `(a0, t12, u)`: Barrett the untwiddled `a0` input, the two twiddle
-//! products `t1`, `t2`, and the `omega (t1 - t2)` of the radix-3 butterfly. [`bin_sched`] tries
-//! every one of the 4096 placements over the four radix-3 levels against the exact bound
-//! recursion [`bin_model`] and keeps the cheapest that stays inside i16, so the reduction points
-//! are a compile-time consequence of `q` and not a table:
+//! Per level there are three sites — the untwiddled `a0` input, the two twiddle products `t1`,
+//! `t2`, and the `omega (t1 - t2)` — and each takes one of the three reductions above or none.
+//! [`bin_sched`] walks all 3^12 placements over the four radix-3 levels, keeps those the exact
+//! bound recursion [`bin_model`] proves stay inside i16, and among those the one [`bar_cost`]
+//! scores cheapest on the two vector ports, so the reduction points are a compile-time
+//! consequence of `q` and not a table:
 //!
-//! | after            | q = 17497 | q = 19441 |
-//! |------------------|----------:|----------:|
-//! | levels 0+1+2     |    1.00 q |    1.00 q |
-//! | level 3          |    1.71 q |    1.58 q |
-//! | level 4          |    1.71 q |    1.58 q |
-//! | level 5          |    1.71 q |    1.58 q |
-//! | level 6 (output) |    1.71 q |    1.58 q |
+//! | level            | q = 17497           | after    | q = 19441                | after    |
+//! |------------------|---------------------|---------:|--------------------------|---------:|
+//! | levels 0+1+2     |                     |   1.00 q |                          |   1.00 q |
+//! | level 3          | `a0` mul, `t` mul   |   1.85 q | `a0`, `t`, `u` lookup    |   1.58 q |
+//! | level 4          | `a0` lookup, `t` mul|   1.79 q | `a0`, `t`, `u` lookup    |   1.58 q |
+//! | level 5          | `a0` lookup, `t` mul|   1.79 q | `a0`, `t`, `u` lookup    |   1.58 q |
+//! | level 6 (output) | `a0` lookup, `t` mul|   1.79 q | `a0`, `t`, `u` lookup    |   1.58 q |
+//!
+//! 17497 reduces `a0`, `t1` and `t2` — three reductions per butterfly, 2592 per batch — and can
+//! leave `u` alone because `a0 + t2 + u` at `0.53 q + 0.60 q + 0.60 q` still clears 1.873 q.
+//! 19441 cannot (that same sum is 1.77 q against a 1.686 q budget) and pays a fourth, 3456 per
+//! batch; 0.74 q is too loose anywhere in its schedule, so all sixteen of its reductions are the
+//! lookup. The `t1`, `t2` reduction is what earns its keep at either prime: without it the
+//! level-3 sum `t1 + t2` of two table sums is `2 q`, and no amount of reducing `a0` brings
+//! `a0 + t1 + t2` under 2.5 q.
+//!
+//! Every site 17497 gives the `vpmulhrsw` Barrett has an input small enough that the two
+//! reductions return the same value — `|t| <= 0.73 q < 2^14` for a twiddle product, `|a0| <= q`
+//! at level 3, and the two quotient estimates only part company above 24576 — so the kernel's
+//! output is **bit-identical** to the all-lookup schedule it replaces, 6 % cheaper. The bound
+//! model does not know that and does not need to: it carries the worst case of each, which is
+//! why the declared output grows from 1.71 q to 1.79 q.
+//!
+//! # Levels 5 and 6 are software-pipelined
+//!
+//! A degree-9 sub-ring is exactly three degree-3 sub-rings, so its nine values never leave
+//! registers between levels 5 and 6 — but level 6 consumes all three of level 5's butterflies,
+//! and taking the three sub-rings of a block one after another leaves only three independent
+//! butterflies in flight. Sampled per loop, that one ran 17.5 % above its port bound where
+//! level 4, whose nine butterflies are independent, ran 1.4 % above. Running one sub-ring's
+//! level 5 in the shadow of the previous one's level 6 holds 18 rows instead of 9 and still
+//! keeps 32 registers without a spill: **431.1 to 415.7 cycles per ring element at 17497 and
+//! 532.8 to 513.3 at 19441**, which leaves the whole kernel 6 % above the model. Holding all 27
+//! rows of a block instead spills — uops issued per element 986 to 1180 — and costs 455.7.
 //!
 //! There is no `asm!` tail here as there is in [`crate::simd::vertical_bin_asm`]. That kernel
 //! hand-schedules levels 4, 5 and 6 into one block per 27-slot block because 27 resident data
-//! registers plus its three constants exactly fill the file; this one needs seven constants (the
-//! lookup Barrett's four on top of `q`, omega and its companion) and three or four reductions per
-//! butterfly, so the register-resident tail does not exist to be written. It is the intrinsics
-//! form of the same tree, block for block and sink for sink, which is also what
+//! registers plus its three constants exactly fill the file; this one needs eight — `q`, omega
+//! and its companion, the lookup Barrett's four and the `vpmulhrsw` one's `round(2^15/q)` — and
+//! three or four reductions per butterfly, so the 27-row register-resident tail does not exist to
+//! be written. The pipelined 18 rows above is what fits. It is otherwise the intrinsics form of
+//! the same tree, block for block and sink for sink, which is also what
 //! [`crate::simd::vertical_bin_quad`] does at 247 to 291 cycles per ring element.
-//!
-//! 17497 reduces `a0`, `t1` and `t2` — three lookup Barretts per butterfly, 2592 per batch —
-//! and can leave `u` alone because `a0 + t2 + u` at `0.53 q + 0.53 q + 0.64 q` still clears
-//! 1.873 q. 19441 cannot (that same sum is 1.77 q against a 1.686 q budget) and pays a fourth,
-//! 3456 per batch. The `t1`, `t2` reduction is what earns its keep: without it the level-3 sum
-//! `t1 + t2` of two table sums is `2 q`, and no amount of reducing `a0` brings `a0 + t1 + t2`
-//! under 2.5 q.
 use crate::params::*;
 use crate::simd::vertical_bin_asm::barrett_lut_corr;
 pub use crate::simd::vertical_bin_asm::BlockSink;
@@ -90,9 +122,11 @@ use core::arch::x86_64::*;
 // bounds and the reduction schedule
 // ---------------------------------------------------------------------------------------------
 
-/// `|barrett_lut_i16(a, q)|` for the worst i16 `a`, per prime — an exhaustive sweep, evaluated
-/// once (`q/2 + 2^10` is the theoretical bound; the sweep is a little tighter).
+/// `|barrett_lut_i16(a, q)|` and `|barrett_i16(a, q)|` for the worst i16 `a`, per prime —
+/// exhaustive sweeps, evaluated once (`q/2 + 2^10` is the lookup one's theoretical bound; the
+/// sweep is a little tighter).
 const BLM: [i32; 2] = [barrett_lut_sweep(QS_LARGE[0]), barrett_lut_sweep(QS_LARGE[1])];
+const BMM: [i32; 2] = [barrett_mul_sweep(QS_LARGE[0]), barrett_mul_sweep(QS_LARGE[1])];
 
 const fn qi(q: u16) -> usize {
     if q == QS_LARGE[0] {
@@ -112,6 +146,11 @@ pub const fn barrett_lut_max(q: u16) -> i32 {
     BLM[qi(q)]
 }
 
+/// `|barrett_i16(a, q)|` for the worst i16 `a`.
+pub const fn barrett_mul_max(q: u16) -> i32 {
+    BMM[qi(q)]
+}
+
 const fn barrett_lut_sweep(q: u16) -> i32 {
     let mut m = 0i32;
     let mut a = -32768i32;
@@ -126,87 +165,219 @@ const fn barrett_lut_sweep(q: u16) -> i32 {
     m
 }
 
+/// [`crate::params::barrett_i16`] as a `const fn`: `t = round(a v / 2^15)` (`vpmulhrsw`),
+/// `r = a - t q`.
+const fn barrett_mul_i16(a: i32, q: u16) -> i32 {
+    let t = ((a * barrett_v(q) as i32 * 2 + (1 << 15)) >> 16) as i16;
+    (a as i16).wrapping_sub(t.wrapping_mul(q as i16)) as i32
+}
+
+const fn barrett_mul_sweep(q: u16) -> i32 {
+    let mut m = 0i32;
+    let mut a = -32768i32;
+    while a < 32768 {
+        let r = barrett_mul_i16(a, q);
+        let r = if r < 0 { -r } else { r };
+        if r > m {
+            m = r;
+        }
+        a += 1;
+    }
+    m
+}
+
 /// `|mont(a, w)| <= |a| q / 2^17 + q/2` (`params::mont_mul_i16`, |w| <= q/2).
 const fn mont_bound(b: i32, q: u16) -> i32 {
     ((b as i64 * q as i64) >> 17) as i32 + (q as i32 + 1) / 2
 }
 
-/// Is flag `i` of level `3 + l` set in the placement mask? `i` = 0 reduces the untwiddled `a0`,
-/// 1 the two twiddle products, 2 the `omega (t1 - t2)`.
-pub const fn bar_flag(mask: u32, l: usize, i: usize) -> bool {
-    (mask >> (3 * l + i)) & 1 == 1
+/// A schedule is a base-3 word of 12 digits: digit `3 l + i` names the reduction the butterflies
+/// of level `3 + l` apply at site `i` — 0 the untwiddled `a0`, 1 the two twiddle products `t1`
+/// and `t2`, 2 the `omega (t1 - t2)`.
+pub const SCHEDULES: u32 = 531441;
+pub const RED_NONE: u8 = 0;
+/// The shuffle-port lookup Barrett: 4 uops, two of them bound to port 5.
+pub const RED_LUT: u8 = 1;
+/// The two-multiply `vpmulhrsw` Barrett: 3 uops, two of them bound to port 0.
+pub const RED_MUL: u8 = 2;
+
+const POW3: [u32; 13] = {
+    let mut p = [1u32; 13];
+    let mut i = 1;
+    while i < 13 {
+        p[i] = 3 * p[i - 1];
+        i += 1;
+    }
+    p
+};
+
+/// Which reduction level `3 + l` applies at site `i`.
+pub const fn bar_kind(code: u32, l: usize, i: usize) -> u8 {
+    (code / POW3[3 * l + i] % 3) as u8
+}
+
+/// The bound a site's reduction caps its input at, or the input itself when it reduces nothing.
+const fn capped(b: i32, k: u8, q: u16) -> i32 {
+    let r = match k {
+        RED_LUT => barrett_lut_max(q),
+        RED_MUL => barrett_mul_max(q),
+        _ => return b,
+    };
+    if r < b {
+        r
+    } else {
+        b
+    }
+}
+
+/// One level of the bound recursion: the input bound `v` and the peak so far in, the output
+/// bound and the new peak out. `l == 0` is level 3, whose twiddles are folded into the lookup
+/// tables, so there `t1` and `t2` are table sums rather than Montgomery products.
+const fn bin_level(q: u16, code: u32, l: usize, v: i32, peak: i32) -> (i32, i32) {
+    let mut peak = peak;
+    let t = capped(if l == 0 { v } else { mont_bound(v, q) }, bar_kind(code, l, 1), q);
+    if 2 * t > peak {
+        peak = 2 * t;
+    }
+    let u = capped(mont_bound(2 * t, q), bar_kind(code, l, 2), q);
+    let b0 = capped(v, bar_kind(code, l, 0), q);
+    let (o0, o1) = (b0 + 2 * t, b0 + t + u);
+    if o0 > peak {
+        peak = o0;
+    }
+    if o1 > peak {
+        peak = o1;
+    }
+    (if o0 > o1 { o0 } else { o1 }, peak)
 }
 
 /// The kernel's schedule replayed on bounds: the maximum |lane| after the fused lookups and
 /// after each of levels 3, 4, 5, 6, and the largest intermediate ever formed (which is what has
 /// to stay inside i16).
 ///
-/// Every position of a level carries the same bound — the tree is uniform and the flags are
+/// Every position of a level carries the same bound — the tree is uniform and the schedule is
 /// per level — so the recursion is the scalar one and its per-level maximum is exact.
-pub const fn bin_model(q: u16, mask: u32) -> ([i32; 5], i32) {
-    let r = barrett_lut_max(q);
-    let h = (q as i32 + 1) / 2;
+pub const fn bin_model(q: u16, code: u32) -> ([i32; 5], i32) {
     let mut lm = [0i32; 5];
-    let mut v = 2 * h;
+    let mut v = 2 * ((q as i32 + 1) / 2);
     let mut peak = v;
     lm[0] = v;
     let mut l = 0;
     while l < 4 {
-        // level 3's twiddles are folded into the lookup tables, so its `t1`, `t2` are table sums.
-        let mut t = if l == 0 { v } else { mont_bound(v, q) };
-        if bar_flag(mask, l, 1) && r < t {
-            t = r;
-        }
-        if 2 * t > peak {
-            peak = 2 * t;
-        }
-        let mut u = mont_bound(2 * t, q);
-        if bar_flag(mask, l, 2) && r < u {
-            u = r;
-        }
-        let b0 = if bar_flag(mask, l, 0) && r < v { r } else { v };
-        let (o0, o1) = (b0 + 2 * t, b0 + t + u);
-        if o0 > peak {
-            peak = o0;
-        }
-        if o1 > peak {
-            peak = o1;
-        }
-        v = if o0 > o1 { o0 } else { o1 };
+        (v, peak) = bin_level(q, code, l, v, peak);
         lm[l + 1] = v;
         l += 1;
     }
     (lm, peak)
 }
 
-/// Lookup Barretts one butterfly of the mask costs.
-const fn bar_cost(mask: u32) -> u32 {
-    let mut c = 0;
-    let mut l = 0;
+/// `(port-0-only, port-5-only, either)` uops one butterfly of level `3 + l` spends reducing.
+const fn red_uops(code: u32, l: usize) -> (u32, u32, u32) {
+    let (mut p0, mut p5, mut fx) = (0, 0, 0);
+    let mut i = 0;
+    while i < 3 {
+        let n = if i == 1 { 2 } else { 1 };
+        match bar_kind(code, l, i) {
+            RED_LUT => {
+                p5 += 2 * n;
+                fx += 2 * n;
+            }
+            RED_MUL => {
+                p0 += 2 * n;
+                fx += n;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (p0, p5, fx)
+}
+
+/// Cycles a level's butterflies cost when nothing but the two vector ports binds: the flexible
+/// uops go wherever they fit, so it is the larger of either port's own load and half the total —
+/// except that the scheduler steers them at issue and does not quite reach the balance, so a
+/// level whose port-0-only load comes within a sixteenth of half of it runs at that load
+/// instead. That sixteenth and the per-level accounting of [`bar_cost`] are what make the model
+/// rank six measured schedules of q = 17497 in the order the machine does (predicted 391.5,
+/// 394.9, 401.3, 404.6, 420.8, 421.9 cycles per element; measured, before levels 5 and 6 were
+/// pipelined, 432.6, 438.8, 441.6, 443.0, 444.4, 458.8; after, the winner and the runner-up are
+/// 415.7 and 421.8).
+const fn ports(p0: u32, p5: u32, fx: u32) -> u32 {
+    let half = (p0 + p5 + fx).div_ceil(2);
+    let m = if p0 > p5 { p0 } else { p5 };
+    let m = m + m / 16;
+    if m > half {
+        m
+    } else {
+        half
+    }
+}
+
+/// What one 162-row group costs: 54 butterflies at each of the four levels, balanced level by
+/// level. Level 3's are the omega-only [`r3_folded`] — 3 multiply uops, not 9 — and its loop
+/// also carries 27 rows of 12 `vpermb` and 6 adds, which is where the kernel's port-5 load is
+/// concentrated and why that level can afford the port-0 Barrett everywhere.
+///
+/// Levels 5 and 6 share one loop body but are charged apart: level 6 consumes level 5's three
+/// outputs, so a level-5 uop of the same sub-ring cannot move into level 6's shadow, and two
+/// schedules with the same port totals over the pair measure 2.4% apart when the split between
+/// them differs. What the body does overlap is the *next* sub-ring's level 5, which is a
+/// different 9 rows and carries the same schedule.
+const fn bar_cost(code: u32) -> u32 {
+    let (a0, a5, af) = red_uops(code, 0);
+    let mut c = ports(54 * (3 + a0), 324 + 54 * a5, 162 + 54 * (8 + af));
+    let mut l = 1;
     while l < 4 {
-        c += bar_flag(mask, l, 0) as u32 + 2 * bar_flag(mask, l, 1) as u32
-            + bar_flag(mask, l, 2) as u32;
+        let (p0, p5, fx) = red_uops(code, l);
+        c += ports(54 * (9 + p0), 54 * p5, 54 * (10 + fx));
         l += 1;
     }
     c
 }
 
-/// The cheapest placement that keeps every intermediate inside i16, and the output bound it
+/// The cheapest schedule that keeps every intermediate inside i16, and the output bound it
 /// leaves. Ties on cost go to the tighter output.
+///
+/// Exhaustive over all [`SCHEDULES`] of them, four nested passes over one level's 27 choices:
+/// the peak only grows, so a prefix that has already left i16 prunes every schedule under it and
+/// the search touches a few thousand instead of half a million.
 const fn bin_sched(q: u16) -> (u32, i32) {
     let (mut best, mut cost, mut out) = (u32::MAX, u32::MAX, i32::MAX);
-    let mut mask = 0u32;
-    while mask < 1 << 12 {
-        let (lm, peak) = bin_model(q, mask);
-        if peak <= 32767 {
-            let c = bar_cost(mask);
-            if c < cost || (c == cost && lm[4] < out) {
-                best = mask;
-                cost = c;
-                out = lm[4];
+    let v0 = 2 * ((q as i32 + 1) / 2);
+    let mut c0 = 0;
+    while c0 < 27 {
+        let (v1, p1) = bin_level(q, c0, 0, v0, v0);
+        if p1 <= 32767 {
+            let mut c1 = 0;
+            while c1 < 27 {
+                let (v2, p2) = bin_level(q, 27 * c1, 1, v1, p1);
+                if p2 <= 32767 {
+                    let mut c2 = 0;
+                    while c2 < 27 {
+                        let (v3, p3) = bin_level(q, 729 * c2, 2, v2, p2);
+                        if p3 <= 32767 {
+                            let mut c3 = 0;
+                            while c3 < 27 {
+                                let (v4, p4) = bin_level(q, 19683 * c3, 3, v3, p3);
+                                if p4 <= 32767 {
+                                    let code = c0 + 27 * c1 + 729 * c2 + 19683 * c3;
+                                    let c = bar_cost(code);
+                                    if c < cost || (c == cost && v4 < out) {
+                                        best = code;
+                                        cost = c;
+                                        out = v4;
+                                    }
+                                }
+                                c3 += 1;
+                            }
+                        }
+                        c2 += 1;
+                    }
+                }
+                c1 += 1;
             }
         }
-        mask += 1;
+        c0 += 1;
     }
     assert!(best != u32::MAX, "no i16 schedule for this prime");
     (best, out)
@@ -214,7 +385,7 @@ const fn bin_sched(q: u16) -> (u32, i32) {
 
 const BIN_SCHED: [(u32, i32); 2] = [bin_sched(QS_LARGE[0]), bin_sched(QS_LARGE[1])];
 
-/// Which of `a0`, `(t1, t2)` and `u` each of levels 3, 4, 5, 6 reduces.
+/// Which reduction each of levels 3, 4, 5, 6 applies at each of `a0`, `(t1, t2)` and `u`.
 pub const fn bar_levels(q: u16) -> u32 {
     BIN_SCHED[qi(q)].0
 }
@@ -224,19 +395,46 @@ pub const fn output_bound(q: u16) -> i32 {
     BIN_SCHED[qi(q)].1
 }
 
+/// The schedule that reduces `a0` with the lookup Barrett at every level and nothing else, which
+/// is all the kernels below `2^14` ever do.
+const fn lut_a0_only() -> u32 {
+    let mut code = 0;
+    let mut l = 0;
+    while l < 4 {
+        code += RED_LUT as u32 * 3u32.pow(3 * l);
+        l += 1;
+    }
+    code
+}
+
 const _: () = {
     let mut i = 0;
     while i < 2 {
         let q = QS_LARGE[i];
         assert!(bin_model(q, bar_levels(q)).1 <= 32767);
-        // three reductions per butterfly at 17497, four at 19441, at every one of the four levels
-        assert!(bar_cost(bar_levels(q)) == if q == 17497 { 12 } else { 16 });
+        assert!(bin_model(q, lut_a0_only()).1 > 32767);
         i += 1;
     }
 };
-// Reducing only the untwiddled `a0`, which is all the kernels below 2^14 ever do, does not fit.
-const _: () = assert!(bin_model(QS_LARGE[0], 0o1111).1 > 32767);
-const _: () = assert!(bin_model(QS_LARGE[1], 0o1111).1 > 32767);
+// 17497 reduces `a0` and the two twiddle products at every level and leaves `u` alone, and every
+// level spends the three-uop Barrett on one of the two — the level's port-0 budget takes exactly
+// one of them. 19441 pays for `u` as well, and 0.736 q is too loose anywhere in its schedule, so
+// all sixteen of its reductions are the lookup.
+const _: () = {
+    let (c0, c1) = (bar_levels(QS_LARGE[0]), bar_levels(QS_LARGE[1]));
+    let mut l = 0;
+    while l < 4 {
+        assert!(bar_kind(c0, l, 0) != RED_NONE && bar_kind(c0, l, 1) != RED_NONE);
+        assert!(bar_kind(c0, l, 2) == RED_NONE);
+        assert!(bar_kind(c0, l, 0) == RED_MUL || bar_kind(c0, l, 1) == RED_MUL);
+        let mut i = 0;
+        while i < 3 {
+            assert!(bar_kind(c1, l, i) == RED_LUT);
+            i += 1;
+        }
+        l += 1;
+    }
+};
 
 // ---------------------------------------------------------------------------------------------
 // constant tables
@@ -263,8 +461,9 @@ pub struct Tables {
     tw6: [[u32; 4]; 216],
     /// omega and its companion.
     om: [u32; 2],
-    /// q, duplicated.
+    /// q and `round(2^15/q)`, duplicated.
     qd: u32,
+    bvd: u32,
 }
 
 const fn mont_pair<const Q: u16>(x: u16) -> (u32, u32) {
@@ -366,7 +565,7 @@ const fn build_tables<const Q: u16>() -> Tables {
         cv[3][i] = 0x2000;
         i += 1;
     }
-    Tables { lut, cv, tw4, tw5, tw6, om: [oa, ob], qd: dup(Q as i16) }
+    Tables { lut, cv, tw4, tw5, tw6, om: [oa, ob], qd: dup(Q as i16), bvd: dup(barrett_v(Q)) }
 }
 
 static T17497: Tables = build_tables::<17497>();
@@ -445,6 +644,7 @@ unsafe fn mont(a: __m512i, w: __m512i, wp: __m512i, q: __m512i) -> __m512i {
 
 struct C {
     q: __m512i,
+    bv: __m512i,
     om: __m512i,
     omp: __m512i,
     ms: __m512i,
@@ -453,8 +653,9 @@ struct C {
     orm: __m512i,
 }
 
-/// The shuffle-port lookup Barrett: 2 port-5 + 3 flexible uops, no multiply-port slot,
-/// `|r| <= q/2 + 2^10`.
+/// The shuffle-port lookup Barrett. `vpandd` and `vpord` are one `vpternlogd`, so it is
+/// `vpmultishiftqb` + `vpternlogd` + `vpermb` + `vpaddw`: **4 uops, two of them port-5 only and
+/// no multiply-port slot at all**, `|r| <= q/2 + 2^10`.
 #[inline(always)]
 unsafe fn barrett_lut(a: __m512i, c: &C) -> __m512i {
     let s = _mm512_multishift_epi64_epi8(c.ms, a);
@@ -463,12 +664,22 @@ unsafe fn barrett_lut(a: __m512i, c: &C) -> __m512i {
     _mm512_add_epi16(a, _mm512_permutexvar_epi8(s, c.corr))
 }
 
+/// The two-multiply Barrett of [`crate::params::barrett_i16`]: `vpmulhrsw` + `vpmullw` +
+/// `vpsubw`, **3 uops, two of them port-0 only**. The quotient estimate `round(2^15/q)` is 2 for
+/// both primes, so `|r|` only comes down to `0.60 q` where the lookup reaches `0.53 q` — but it
+/// is one uop cheaper and it spends it on the port the lookup leaves idle.
 #[inline(always)]
-unsafe fn red(a: __m512i, c: &C, on: bool) -> __m512i {
-    if on {
-        barrett_lut(a, c)
-    } else {
-        a
+unsafe fn barrett_mul(a: __m512i, c: &C) -> __m512i {
+    let t = _mm512_mulhrs_epi16(a, c.bv);
+    _mm512_sub_epi16(a, _mm512_mullo_epi16(t, c.q))
+}
+
+#[inline(always)]
+unsafe fn red(a: __m512i, c: &C, k: u8) -> __m512i {
+    match k {
+        RED_LUT => barrett_lut(a, c),
+        RED_MUL => barrett_mul(a, c),
+        _ => a,
     }
 }
 
@@ -480,7 +691,7 @@ unsafe fn r3_folded(
     a0: __m512i,
     t1: __m512i,
     t2: __m512i,
-    bar: [bool; 3],
+    bar: [u8; 3],
 ) -> (__m512i, __m512i, __m512i) {
     let t1 = red(t1, c, bar[1]);
     let t2 = red(t2, c, bar[1]);
@@ -501,7 +712,7 @@ unsafe fn r3(
     a1: __m512i,
     a2: __m512i,
     tw: *const u32,
-    bar: [bool; 3],
+    bar: [u8; 3],
 ) -> (__m512i, __m512i, __m512i) {
     let (w1, w1p, w2, w2p) = bc4(tw);
     let t1 = mont(a1, w1, w1p, c.q);
@@ -530,12 +741,12 @@ struct Blk([i16; 162 * 32]);
 struct Sched<const Q: u16>;
 
 impl<const Q: u16> Sched<Q> {
-    const BAR: [[bool; 3]; 4] = {
+    const BAR: [[u8; 3]; 4] = {
         let m = bar_levels(Q);
-        let mut b = [[false; 3]; 4];
+        let mut b = [[RED_NONE; 3]; 4];
         let mut l = 0;
         while l < 4 {
-            b[l] = [bar_flag(m, l, 0), bar_flag(m, l, 1), bar_flag(m, l, 2)];
+            b[l] = [bar_kind(m, l, 0), bar_kind(m, l, 1), bar_kind(m, l, 2)];
             l += 1;
         }
         b
@@ -552,6 +763,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
     let cvp = t.cv.as_ptr() as *const __m512i;
     let c = C {
         q: bc(&t.qd),
+        bv: bc(&t.bvd),
         om: bc(&t.om[0]),
         omp: bc(&t.om[1]),
         ms: _mm512_load_si512(cvp),
@@ -630,7 +842,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
                 st(bp, b1, o1);
                 st(bp, b2, o2);
             }
-            for g in 0..3 {
+            let lv5 = |g: usize| -> [__m512i; 9] {
                 let t5 = t.tw5[3 * kk + g].as_ptr();
                 let b = base + 9 * g;
                 let mut v = [_mm512_setzero_si512(); 9];
@@ -643,6 +855,9 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
                     v[3 + i] = o1;
                     v[6 + i] = o2;
                 }
+                v
+            };
+            let lv6 = |g: usize, v: &[__m512i; 9]| {
                 for i in 0..3 {
                     let t6 = t.tw6[9 * kk + 3 * g + i].as_ptr();
                     let (o0, o1, o2) =
@@ -652,7 +867,15 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
                     st(op, o + 1, o1);
                     st(op, o + 2, o2);
                 }
-            }
+            };
+            // one group's level 5 runs in the shadow of the previous group's level 6, which
+            // depends on it and would otherwise leave only three independent butterflies.
+            let g0 = lv5(0);
+            let g1 = lv5(1);
+            lv6(0, &g0);
+            let g2 = lv5(2);
+            lv6(1, &g1);
+            lv6(2, &g2);
             sink.block(kk, op);
         }
     }

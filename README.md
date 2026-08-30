@@ -295,21 +295,37 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   period from its own compile-time bound. The schedule is chosen by a `const` recursion over the
   exact bounds, and the folded-twiddle phase 1 above is used only where its wider intermediates
   still fit (which is why 12637 does not get it).
-* **Above `2^14` the whole butterfly is reduced, not just its `a0`.** 17497 and 19441 are the same
-  conductor-1944 tree as 3889 and 9721 — 648 linear slots, the same lookup tables, the same
-  27-row blocks — but a lane's budget is `2^15/q` = 1.87 and 1.69. A Montgomery twiddle product
-  never gets below `q/2`, since `mulhi(m, q)` is a full i16 times `q`, so the three terms of
-  `a0 + t1 + t2` already cost `1.5 q` before any slack: reducing only the untwiddled `a0`, which
-  is all the kernels below `2^14` ever do, leaves `3 q` at level 3 alone. `simd::vertical_bin_large`
-  therefore reduces `a0`, `t1` and `t2` at every one of the four radix-3 levels, and 19441 also
-  the `omega (t1 - t2)`, with the shuffle-port lookup Barrett — 2 port-5 and 3 flexible uops, not
-  one multiply-port slot, which is what makes four of them per butterfly affordable at all. The
-  placement is not a table: a `const` search tries all 4096 of them against the exact bound
-  recursion and keeps the cheapest that stays inside i16, and the same argument, one level looser,
-  gives the generic-input kernel and its inverse. The other answer — unsigned lanes in `[0, q)`,
+* **Above `2^14` the whole butterfly is reduced, not just its `a0`, and the reductions are
+  port-balanced.** 17497 and 19441 are the same conductor-1944 tree as 3889 and 9721 — 648 linear
+  slots, the same lookup tables, the same 27-row blocks — but a lane's budget is `2^15/q` = 1.87
+  and 1.69. A Montgomery twiddle product never gets below `q/2`, since `mulhi(m, q)` is a full i16
+  times `q`, so the three terms of `a0 + t1 + t2` already cost `1.5 q` before any slack: reducing
+  only the untwiddled `a0`, which is all the kernels below `2^14` ever do, leaves `3 q` at level 3
+  alone. `simd::vertical_bin_large` therefore reduces `a0`, `t1` and `t2` at every one of the four
+  radix-3 levels, and 19441 also the `omega (t1 - t2)`: three and four reductions per butterfly,
+  2592 and 3456 per batch, where the kernels below `2^14` place at most 432.
+
+  Which reduction each of those sites gets is a port question, not a count. The shuffle-port
+  lookup Barrett is 4 uops (`vpmultishiftqb`, `vpermb` and a `vpternlogd` index fix-up, two of
+  them port-5 only) and leaves `0.53 q`; the two-multiply `vpmulhrsw` Barrett is 3 uops, two of
+  them port-0 only, and leaves `0.60 q` at 17497 and `0.74 q` at 19441 because `round(2^15/q)` is
+  2, an estimate with two significant bits. Nine of a butterfly's uops are already port-0 only —
+  the three Montgomery products — and level 3's loop carries 12 `vpermb` per row on port 5, so
+  neither port is the bottleneck by itself and the cheap-but-loose reduction is affordable exactly
+  where port 0 has room. A `const` search walks all 3^12 placements against the exact bound
+  recursion and scores the survivors on both ports: 17497 takes the `vpmulhrsw` form for both
+  twiddle products at every level and for `a0` at level 3, 19441 has no head-room for `0.74 q`
+  anywhere and stays on the lookup throughout. Every site 17497 gives the loose reduction has an
+  input under 24576, where the two quotient estimates agree, so the kernel's output is
+  bit-identical to the all-lookup schedule it replaces and 6 % cheaper; the last 4 % comes from
+  software-pipelining levels 5 and 6, whose nine register-resident rows leave only three
+  independent butterflies until one sub-ring's level 5 is run in the shadow of the previous one's
+  level 6. Together, 459 to 415 cycles per ring element. The same argument, one level looser,
+  gives the generic-input kernel and its inverse — which keep the uniform lookup schedule, being
+  off the hot path. The other answer — unsigned lanes in `[0, q)`,
   where the head-room is `2^16/q` and a radix-3 sum fits — was written out and measured, and it
-  is *slower*: 6.10 ns per butterfly against the signed form's 3.89 at 17497 and 6.20 against
-  4.51 at 19441, 1.6x and 1.4x, because a Shoup product with its conditional subtract is five
+  is *slower*: 5.96 ns per butterfly against the signed form's 3.68 at 17497 and 6.08 against
+  4.40 at 19441, 1.6x and 1.4x, because a Shoup product with its conditional subtract is five
   dependent uops where a Montgomery one is three. It would also need the transform centered
   before `vpdpwssd`, the fold and the decomposition could read it.
 * **Block-fused base multiplication.** The kernel hands out 27 finished slot vectors at a time
@@ -401,8 +417,8 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   | 3889 (base) | linear | 7.34 ms | 280 | 58 | 7 |
   | 9721    | linear | +6.50 ms | 304 | 58 | 7 |
   | 12637   | quadratic | +7.19 ms | 291 | 75 | 16 |
-  | 17497   | linear | +8.93 ms | 459 | 58 | 9 |
-  | 19441   | linear | +9.85 ms | 532 | 58 | 7 |
+  | 17497   | linear | +8.13 ms | 415 | 58 | 9 |
+  | 19441   | linear | +9.83 ms | 514 | 58 | 7 |
 
   The front end costs 31 more cycles per ring element and is paid once however many moduli
   follow. A quadratic-slot modulus runs a shorter tree — one radix-2 level fewer, and for 2917
@@ -412,11 +428,13 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   modulus there is, 4861 and 9721 sit within 3 % of each other, and 12637 — three Barretts inside
   the kernel, and an accumulator it has to fold back every batch — is 20 % dearer than 2917.
 
-  17497 and 19441 buy 4.2 more bits of modulus for 1.5x and 1.7x of 9721's transform: three
-  lookup Barretts per radix-3 butterfly and, for 19441, four, at every one of the four levels
-  (see the implementation note above), which is 2592 and 3456 reductions per batch of 32 against
-  9721's 216. Nothing else about them costs more — the base multiplication is the same
-  `vpdpwssd` accumulation and measures the same to a tenth of a cycle, and the fold-down is the
-  same, except that 17497 has to fold its accumulator back twice inside `hsum8` because
+  17497 and 19441 buy 4.2 more bits of modulus for 1.4x and 1.7x of 9721's transform: three
+  Barretts per radix-3 butterfly and, for 19441, four, at every one of the four levels (see the
+  implementation note above), which is 2592 and 3456 reductions per batch of 32 against 9721's
+  216. Nothing else about them costs more — the base multiplication is the same `vpdpwssd`
+  accumulation and measures the same to a tenth of a cycle, and the fold-down is the same, except
+  that 17497 has to fold its accumulator back twice inside `hsum8` because
   `2^16 mod 17497 = 13045` is the one `R` for which eight lanes do not sum inside `i32` after one
-  fold-back. All six extra moduli together: 48.4 ms.
+  fold-back. 19441's transform improved by the same software pipelining as 17497's (532 to 514
+  cycles) but its `commit` column did not move: what the wall clock of a limb this wide is waiting
+  on is the `A` stream, not the last 3 % of the kernel. All six extra moduli together: 47.5 ms.

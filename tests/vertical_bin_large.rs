@@ -11,6 +11,7 @@ use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_asm::{barrett_lut_corr, barrett_lut_i16};
+use bin_ntt::simd::vertical_bin_large::{RED_LUT, RED_MUL};
 use bin_ntt::simd::vertical_bin_large as vl;
 use bin_ntt::types::*;
 
@@ -111,16 +112,16 @@ impl<const Q: u16> Shadow<Q> {
         let w = Params::<Q>::to_mont(x);
         self.see(mont_mul_i16(a, w, Params::<Q>::mont_pre(w), Q) as i32)
     }
-    fn red(&mut self, a: i16, on: bool) -> i16 {
-        if on {
-            self.see(barrett_lut_i16(a, Q) as i32)
-        } else {
-            a
+    fn red(&mut self, a: i16, k: u8) -> i16 {
+        match k {
+            RED_LUT => self.see(barrett_lut_i16(a, Q) as i32),
+            RED_MUL => self.see(barrett_i16(a, Q) as i32),
+            _ => a,
         }
     }
     fn r3_folded(&mut self, a0: i16, t1: i16, t2: i16, l: usize) -> (i16, i16, i16) {
         let m = vl::bar_levels(Q);
-        let f = |i| vl::bar_flag(m, l, i);
+        let f = |i| vl::bar_kind(m, l, i);
         let t1 = self.red(t1, f(1));
         let t2 = self.red(t2, f(1));
         let d = self.see(t1 as i32 - t2 as i32);
@@ -284,8 +285,11 @@ fn kernel<const Q: u16>() {
     let flags: Vec<String> = (0..4)
         .map(|l| {
             let n = ["a0", "t12", "u"];
-            let on: Vec<&str> =
-                (0..3).filter(|&i| vl::bar_flag(m, l, i)).map(|i| n[i]).collect();
+            let kind = |i| if vl::bar_kind(m, l, i) == RED_LUT { "L" } else { "M" };
+            let on: Vec<String> = (0..3)
+                .filter(|&i| vl::bar_kind(m, l, i) != 0)
+                .map(|i| format!("{}{}", n[i], kind(i)))
+                .collect();
             format!("L{}: {}", 3 + l, if on.is_empty() { "-".into() } else { on.join("+") })
         })
         .collect();
@@ -503,7 +507,7 @@ fn unsigned_is_the_same_butterfly<const Q: u16>() {
 }
 
 /// The signed butterfly the kernel runs, written out here so the two forms are timed over the
-/// same loop: Montgomery products and the lookup Barretts the prime's own schedule asks for.
+/// same loop: Montgomery products and the Barretts the prime's own level-6 schedule asks for.
 #[inline(always)]
 unsafe fn sr3<const Q: u16>(
     c: &U,
@@ -521,19 +525,22 @@ unsafe fn sr3<const Q: u16>(
         let m = _mm512_mullo_epi16(a, wp);
         _mm512_sub_epi16(_mm512_mulhi_epi16(a, w), _mm512_mulhi_epi16(m, c.q))
     };
-    let red = |a: __m512i, on: bool| {
-        if on {
+    let red = |a: __m512i, k: u8| match k {
+        RED_LUT => {
             let x = _mm512_multishift_epi64_epi8(c.ms, a);
             let x = _mm512_or_si512(_mm512_and_si512(x, c.andm), c.orm);
             _mm512_add_epi16(a, _mm512_permutexvar_epi8(x, corr))
-        } else {
-            a
         }
+        RED_MUL => {
+            let t = _mm512_mulhrs_epi16(a, _mm512_set1_epi16(barrett_v(Q)));
+            _mm512_sub_epi16(a, _mm512_mullo_epi16(t, c.q))
+        }
+        _ => a,
     };
-    let t1 = red(mont(a1, w1, w1p), vl::bar_flag(m, 3, 1));
-    let t2 = red(mont(a2, w2, w2p), vl::bar_flag(m, 3, 1));
-    let u = red(mont(_mm512_sub_epi16(t1, t2), c.om, c.omp), vl::bar_flag(m, 3, 2));
-    let a0 = red(a0, vl::bar_flag(m, 3, 0));
+    let t1 = red(mont(a1, w1, w1p), vl::bar_kind(m, 3, 1));
+    let t2 = red(mont(a2, w2, w2p), vl::bar_kind(m, 3, 1));
+    let u = red(mont(_mm512_sub_epi16(t1, t2), c.om, c.omp), vl::bar_kind(m, 3, 2));
+    let a0 = red(a0, vl::bar_kind(m, 3, 0));
     (
         _mm512_add_epi16(a0, _mm512_add_epi16(t1, t2)),
         _mm512_add_epi16(_mm512_sub_epi16(a0, t2), u),
