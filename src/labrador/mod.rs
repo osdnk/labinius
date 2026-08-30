@@ -133,9 +133,55 @@ pub enum PhiSource {
     Int64(Vec<[i64; N]>),
     Int16(Vec<[i16; N]>),
     Polx(std::sync::Arc<PolxBuf>, usize),
-    /// One `(buffer, offset)` per block, so that blocks of the same constraint can alias
+    /// One block descriptor per block, so that blocks of the same constraint can alias
     /// buffers that were converted independently and are shared with other constraints.
-    Blocks(Vec<(std::sync::Arc<PolxBuf>, usize)>),
+    Blocks(Vec<PhiBlock>),
+}
+
+/// A `phi` block given in the coefficient domain: element `i` of the block is
+/// `sum_t c[i * wid + t] X^(off + t)`, with `off + wid <= N`.
+///
+/// A chain constraint's `phi` is a public sub-chunk: nine consecutive `i16` coefficients of
+/// a polynomial of degree 64. Handing LaBRADOR those nine numbers instead of the `1 KB`
+/// `polx` image is a 57-fold cut in what the aggregation streams, and lets it multiply the
+/// block by the aggregation challenge over `int32` coefficient lanes -- one `polx`
+/// conversion per destination element at the end, instead of one per contribution.
+#[derive(Debug)]
+pub struct ShortPhi {
+    pub off: usize,
+    pub wid: usize,
+    pub c: Vec<i16>,
+}
+
+impl ShortPhi {
+    pub fn new(off: usize, wid: usize, c: Vec<i16>) -> Self {
+        assert!(wid > 0 && off + wid <= N, "a short phi must fit the ring degree");
+        assert_eq!(c.len() % wid, 0, "coefficients are element major, {wid} per element");
+        Self { off, wid, c }
+    }
+
+    /// Elements the buffer holds.
+    pub fn len(&self) -> usize {
+        self.c.len() / self.wid
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.c.is_empty()
+    }
+
+    /// Bytes held, for a memory report.
+    pub fn bytes(&self) -> usize {
+        self.c.len() * 2
+    }
+}
+
+/// Where one block of a [`PhiSource::Blocks`] constraint reads its `phi`: either
+/// `polx` at an offset into a shared buffer, or `wid` coefficients per element at an
+/// element offset into a shared [`ShortPhi`].
+#[derive(Debug)]
+pub enum PhiBlock {
+    Polx(std::sync::Arc<PolxBuf>, usize),
+    Short(std::sync::Arc<ShortPhi>, usize),
 }
 
 impl PhiSource {
@@ -184,6 +230,26 @@ pub struct Constraint {
     phi_cache: OnceLock<PolxBuf>,
 }
 
+/// The per-block pointer arrays the shim takes: one `polx` pointer per block, and, for the
+/// blocks given in the coefficient domain, one `i16` pointer with its offset and width.
+struct BlockPtrs {
+    phi: Vec<*const c_void>,
+    sphi: Vec<*const i16>,
+    soff: Vec<usize>,
+    swid: Vec<usize>,
+    short: bool,
+}
+
+impl BlockPtrs {
+    fn short_ptr(&self) -> *const *const i16 {
+        if self.short {
+            self.sphi.as_ptr()
+        } else {
+            std::ptr::null()
+        }
+    }
+}
+
 impl Constraint {
     pub fn new(deg: usize, blocks: Vec<Block>, phi: PhiSource, b: Option<BSource>) -> Self {
         Self { deg, blocks, phi, b, phi_cache: OnceLock::new() }
@@ -217,13 +283,34 @@ impl Constraint {
     }
 
     /// Pointers to each block's `phi`, aliased into the (cached or borrowed) buffers.
-    fn phi_ptrs(&self) -> Vec<*const c_void> {
+    /// Short blocks contribute a null `polx` pointer and a non-null coefficient pointer.
+    fn phi_ptrs(&self) -> BlockPtrs {
+        let mut p = BlockPtrs {
+            phi: Vec::with_capacity(self.blocks.len()),
+            sphi: vec![std::ptr::null(); self.blocks.len()],
+            soff: vec![0; self.blocks.len()],
+            swid: vec![0; self.blocks.len()],
+            short: false,
+        };
         if let PhiSource::Blocks(parts) = &self.phi {
-            return parts.iter().map(|(buf, off)| buf.ptr_at(*off)).collect();
+            for (j, part) in parts.iter().enumerate() {
+                match part {
+                    PhiBlock::Polx(buf, off) => p.phi.push(buf.ptr_at(*off)),
+                    PhiBlock::Short(sp, off) => {
+                        p.phi.push(std::ptr::null());
+                        p.sphi[j] = sp.c[off * sp.wid..].as_ptr();
+                        p.soff[j] = sp.off;
+                        p.swid[j] = sp.wid;
+                        p.short = true;
+                    }
+                }
+            }
+            return p;
         }
         let buf = self.phi_buf();
         let base = self.phi_base();
-        (0..self.blocks.len()).map(|j| buf.ptr_at(base + self.phi_offset(j))).collect()
+        p.phi = (0..self.blocks.len()).map(|j| buf.ptr_at(base + self.phi_offset(j))).collect();
+        p
     }
 
     /// Force the `phi` conversion now, so that it is not charged to the first proof.
@@ -244,7 +331,7 @@ impl Constraint {
         let idx: Vec<usize> = self.blocks.iter().map(|b| b.idx).collect();
         let off: Vec<usize> = self.blocks.iter().map(|b| b.off).collect();
         let len: Vec<usize> = self.blocks.iter().map(|b| b.len).collect();
-        let phi = self.phi_ptrs();
+        let p = self.phi_ptrs();
         unsafe {
             ffi::bn_eval_blocks(
                 out.as_ptr() as *mut c_void,
@@ -253,7 +340,10 @@ impl Constraint {
                 idx.as_ptr(),
                 off.as_ptr(),
                 len.as_ptr(),
-                phi.as_ptr(),
+                p.phi.as_ptr(),
+                p.short_ptr(),
+                p.soff.as_ptr(),
+                p.swid.as_ptr(),
                 sx.raw(),
             );
         }
@@ -344,11 +434,24 @@ impl Statement {
                 }
                 PhiSource::Blocks(parts) => {
                     h.update(b"blk");
-                    for ((buf, off), blk) in parts.iter().zip(&c.blocks) {
-                        let start = off * sizeof_polx();
-                        let end = (off + philen(blk.len, c.deg)) * sizeof_polx();
-                        let bytes = buf.as_bytes();
-                        h.update(&bytes[start.min(bytes.len())..end.min(bytes.len())]);
+                    for (part, blk) in parts.iter().zip(&c.blocks) {
+                        match part {
+                            PhiBlock::Polx(buf, off) => {
+                                h.update(b"p");
+                                let start = off * sizeof_polx();
+                                let end = (off + philen(blk.len, c.deg)) * sizeof_polx();
+                                let bytes = buf.as_bytes();
+                                h.update(&bytes[start.min(bytes.len())..end.min(bytes.len())]);
+                            }
+                            PhiBlock::Short(sp, off) => {
+                                h.update(b"s");
+                                h.update(&(sp.off as u64).to_le_bytes());
+                                h.update(&(sp.wid as u64).to_le_bytes());
+                                for &x in &sp.c[off * sp.wid..(off + blk.len) * sp.wid] {
+                                    h.update(&x.to_le_bytes());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -608,9 +711,25 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
                     c.blocks.len()
                 ));
             }
-            for (j, ((buf, off), blk)) in parts.iter().zip(&c.blocks).enumerate() {
-                if off + philen(blk.len, c.deg) > buf.len() {
-                    return Err(format!("constraint {ci}: phi block {j} runs past its buffer"));
+            for (j, (part, blk)) in parts.iter().zip(&c.blocks).enumerate() {
+                match part {
+                    PhiBlock::Polx(buf, off) => {
+                        if off + philen(blk.len, c.deg) > buf.len() {
+                            return Err(format!("constraint {ci}: phi block {j} runs past its buffer"));
+                        }
+                    }
+                    PhiBlock::Short(sp, off) => {
+                        if sp.off + sp.wid > N {
+                            return Err(format!(
+                                "constraint {ci}: short phi block {j} spans coefficients [{}, {}) of {N}",
+                                sp.off,
+                                sp.off + sp.wid
+                            ));
+                        }
+                        if off + philen(blk.len, c.deg) > sp.len() {
+                            return Err(format!("constraint {ci}: short phi block {j} runs past its buffer"));
+                        }
+                    }
                 }
             }
         }
@@ -710,7 +829,7 @@ fn build_raw_statement(stmt: &Statement) -> Result<RawStatement, String> {
         let idx: Vec<usize> = c.blocks.iter().map(|b| b.idx).collect();
         let off: Vec<usize> = c.blocks.iter().map(|b| b.off).collect();
         let len: Vec<usize> = c.blocks.iter().map(|b| b.len).collect();
-        let phi = c.phi_ptrs();
+        let p = c.phi_ptrs();
         let b_owned: Option<PolxBuf> = match &c.b {
             Some(BSource::Int64(v)) => Some(PolxBuf::from_int64(v)),
             _ => None,
@@ -730,7 +849,10 @@ fn build_raw_statement(stmt: &Statement) -> Result<RawStatement, String> {
                 idx.as_ptr(),
                 off.as_ptr(),
                 len.as_ptr(),
-                phi.as_ptr(),
+                p.phi.as_ptr(),
+                p.short_ptr(),
+                p.soff.as_ptr(),
+                p.swid.as_ptr(),
                 b_ptr,
             )
         };

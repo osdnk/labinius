@@ -85,6 +85,9 @@ extern "C" {
         off: *const usize,
         len: *const usize,
         phi: *const *const c_void,
+        sphi: *const *const i16,
+        soff: *const usize,
+        swid: *const usize,
         sx: *const c_void,
     );
 
@@ -104,6 +107,9 @@ extern "C" {
         off: *const usize,
         len: *const usize,
         phi: *const *const c_void,
+        sphi: *const *const i16,
+        soff: *const usize,
+        swid: *const usize,
         b: *const c_void,
     ) -> c_int;
 

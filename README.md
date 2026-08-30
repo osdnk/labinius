@@ -114,46 +114,52 @@ The wire is 648 KB of commitment, 6 KB of row evaluation and 324 KB of folded wi
 
 The same shape with the recursion on. `PublicParameters::from_seed` additionally inverts the key
 rows, blocks them, converts the 221 184 key-time `phi` and the nine-bit pattern table to `polx`,
-and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 120 ms and
-233 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
+and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 34 ms and
+20 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 17.95 |
+| `commit`, including `T_Y` | 18.06 |
 | `row_evaluate` | 0.29 |
 | `commit_left_expansion` | 0.25 |
-| `prove_opening` | 304.34 |
-| — fold | 4.51 |
-| — encoding | 17.99 |
-| — `T_R` | 2.29 |
+| `prove_opening` | 232.95 |
+| — fold | 4.56 |
+| — encoding | 18.32 |
+| — `T_R` | 2.23 |
 | — masks | 1.92 |
-| — constraint `phi` | 8.59 |
-| — statement build | 10.39 |
-| — `labrador::prove` | 228.94 |
-| *total* | *322.81* |
+| — constraint `phi` | 2.31 |
+| — statement build | 7.69 |
+| — `labrador::prove` | 171.33 |
+| *total* | *251.54* |
 | **statement** | |
 | `derive_evaluation_point` | 0.00 |
 | `mle_evaluate` | 0.30 |
 | *total* | *0.30* |
 | **verifier** | |
 | `derive_folding_challenges` | 1.21 |
-| statement rebuild | 22.55 |
-| — layout | 2.44 |
-| — no-wrap bound | 2.25 |
-| — constraint `phi` | 8.59 |
-| — statement build | 10.39 |
-| `labrador::verify` | 158.53 |
-| *total* | *182.30* |
+| statement rebuild | 16.77 |
+| — layout | 1.39 |
+| — no-wrap bound | 2.33 |
+| — constraint `phi` | 2.31 |
+| — statement build | 7.69 |
+| `labrador::verify` | 102.78 |
+| *total* | *120.76* |
 
 The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
-LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 81 MB on
-top of the key's 233 MB, plus 33 MB for the three mask rows; the peak resident set of one round in
-each mode is 588 MB.
+LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 1 MB on
+top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident set of one round in
+each mode is 294 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
-`commit` 49.6 -> 18.0, `prove_opening` 526.4 -> 304.3 and the verifier 287.8 -> 182.3 ms. Inside
-LaBRADOR (300 -> 229 ms proving, 222 -> 159 ms verifying, transcript-neutral): the pointwise,
+`commit` 49.6 -> 18.1, `prove_opening` 526.4 -> 233.0 and the verifier 287.8 -> 120.8 ms. Inside
+LaBRADOR (300 -> 171 ms proving, 222 -> 103 ms verifying, transcript-neutral): the chain `phi`
+handed over as nine int16 coefficients instead of 1 KB NTT images and collapsed in the
+coefficient domain with `vpdpwssd` against the shifted quarternary challenge, one NTT per
+destination run at the end (the aggregation 41 -> 13 ms, the key-time buffers 233 -> 20 MB,
+the per-proof `phi` 81 -> 1 MB), the constant-term scaling deferred across the three lifts and
+applied once, the JL collapse rewritten without register spills and with a prefetch ahead of
+its strided reads, a batched refresh, every per-prime sweep blocked in 16-`polx` chunks, the pointwise,
 scale and add passes of the `polx` kernels fused with their reductions, the constraint
 aggregation walked source-major so that each shared `phi` buffer streams once for all the
 constraints that alias it, the refresh after the constant-term collapse restricted to the ranges

@@ -12,15 +12,13 @@ use std::sync::Arc;
 use super::{chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
 use crate::api::N162;
 use crate::challenge::ShortChallenge;
-use crate::labrador::{sis_rank, sizeof_polx, CommitmentKey, PolxBuf};
+use crate::labrador::{sis_rank, sizeof_polx, CommitmentKey, PolxBuf, ShortPhi};
 use crate::params::N;
 use crate::scheme::{EvaluationPoint, FoldingChallenges, Params, PublicParameters};
 use bin_fields::scalar::F162;
 
 /// LaBRADOR's own slack in front of a commitment's norm when it picks a rank, `6 T SLACK`.
 const SIS_SLACK: f64 = 6.0 * 14.0 * 2.0;
-
-const PATTERNS: usize = 1 << SUB;
 
 pub struct Setup {
     /// Ring elements of one column, and columns.
@@ -30,9 +28,9 @@ pub struct Setup {
     pub limbs: Vec<limbs::Shape>,
     /// `blocks[(limb * 8 + part) * n + i]`, `part = component * 2 + twist`.
     blocks: Vec<Blocks>,
-    /// `key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]`, a buffer of `n` `polx`.
-    key_phi: Vec<Arc<PolxBuf>>,
-    patterns: PolxBuf,
+    /// `key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]`, a buffer of `n` sub-chunks
+    /// of [`SUB`] `i16` -- the coefficient form LaBRADOR aggregates directly.
+    key_phi: Vec<Arc<ShortPhi>>,
     scalars: BTreeMap<i64, Arc<PolxBuf>>,
     /// `carry_phi[(base, level)][a]`, a buffer of `BLOCKS` `polx`.
     carry_phi: BTreeMap<(i64, usize), Vec<Arc<PolxBuf>>>,
@@ -73,15 +71,6 @@ impl Setup {
                 }
             }
         }
-        let patterns: Vec<[i16; DEG]> = (0..PATTERNS)
-            .map(|w| {
-                let mut p = [0i16; DEG];
-                for (u, c) in p.iter_mut().take(SUB).enumerate() {
-                    *c = ((w >> u) & 1) as i16;
-                }
-                p
-            })
-            .collect();
         let empty = || CommitmentKey::expand(1, 1, &[0u8; 16], 0);
         let mut setup = Setup {
             n,
@@ -90,7 +79,6 @@ impl Setup {
             limbs,
             blocks,
             key_phi: Vec::new(),
-            patterns: PolxBuf::from_int16(&patterns),
             scalars: BTreeMap::new(),
             carry_phi: BTreeMap::new(),
             ranks: Vec::new(),
@@ -142,14 +130,11 @@ impl Setup {
         let key_phi = (0..setup.blocks.len() / n)
             .flat_map(|part| (0..CHUNKS).flat_map(move |b| (0..BLOCKS).map(move |a| (part, b, a))))
             .map(|(part, b, a)| {
-                let polys: Vec<[i16; DEG]> = (0..n)
-                    .map(|i| {
-                        let mut p = [0i16; DEG];
-                        p[..SUB].copy_from_slice(&setup.blocks[part * n + i][b][a]);
-                        p
-                    })
-                    .collect();
-                Arc::new(PolxBuf::from_int16(&polys))
+                let mut c = vec![0i16; n * SUB];
+                for i in 0..n {
+                    c[i * SUB..(i + 1) * SUB].copy_from_slice(&setup.blocks[part * n + i][b][a]);
+                }
+                Arc::new(ShortPhi::new(0, SUB, c))
             })
             .collect();
         setup.key_phi = key_phi;
@@ -172,7 +157,7 @@ impl Setup {
         &self.blocks[at..at + self.n]
     }
 
-    pub fn key_phi(&self, limb: usize, part: usize, b: usize, a: usize) -> &Arc<PolxBuf> {
+    pub fn key_phi(&self, limb: usize, part: usize, b: usize, a: usize) -> &Arc<ShortPhi> {
         &self.key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]
     }
 
@@ -222,26 +207,28 @@ impl Setup {
         &self.carry_phi.get(&(base, d)).expect("this carry level was not prepared at key time")[a]
     }
 
-    /// The `phi` of one group of binary lifts at chunk `b` and diagonal `a`, assembled out of the
-    /// nine-bit patterns of [`chunk::taps`] rather than transformed.
-    pub fn lift_phi(&self, windows: &[u16], len: usize, b: usize, a: usize) -> PolxBuf {
+    /// The `phi` of one group of binary lifts at chunk `b` and diagonal `a`. A lift's sub-chunk
+    /// is a signed sum of the nine-bit windows [`chunk::taps`] names, so its [`SUB`]
+    /// coefficients are read off the window bits directly.
+    pub fn lift_phi(&self, windows: &[u16], len: usize, b: usize, a: usize) -> ShortPhi {
         let taps = &chunk::taps()[b][a];
-        if taps.is_empty() {
-            return PolxBuf::zeroed(len);
+        let mut c = vec![0i16; len * SUB];
+        for i in 0..len {
+            for t in taps {
+                let w = windows[i * (N162 / SUB) + t.0 as usize];
+                for (u, x) in c[i * SUB..(i + 1) * SUB].iter_mut().enumerate() {
+                    *x += t.1 as i16 * ((w >> u) & 1) as i16;
+                }
+            }
         }
-        let sign: Vec<i8> = taps.iter().map(|t| t.1).collect();
-        let idx: Vec<u16> = (0..len)
-            .flat_map(|i| taps.iter().map(move |t| windows[i * (N162 / SUB) + t.0 as usize]))
-            .collect();
-        PolxBuf::table_sum(len, &self.patterns, taps.len(), &idx, &sign)
+        ShortPhi::new(0, SUB, c)
     }
 
     /// Bytes held by everything above, the memory a key costs before any proof.
     pub fn footprint(&self) -> usize {
         let polx = sizeof_polx();
-        self.key_phi.iter().map(|p| p.len() * polx).sum::<usize>()
+        self.key_phi.iter().map(|p| p.bytes()).sum::<usize>()
             + self.carry_phi.values().flatten().map(|p| p.len() * polx).sum::<usize>()
-            + self.patterns.len() * polx
             + self.blocks.len() * core::mem::size_of::<Blocks>()
             + (self.key_y.buf().len() + self.key_u.buf().len() + self.key_r.buf().len()) * polx
     }

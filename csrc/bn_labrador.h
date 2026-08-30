@@ -36,9 +36,13 @@ const void *bn_sx_ptr(const void *sx, size_t i, size_t off);
 void bn_commit_polx(void *out, const void *key, const void *s, size_t len, size_t deg);
 void bn_commit_i16(void *out, const void *key, const int16_t *s, size_t len, size_t deg);
 
-/* Linear form of one constraint against a prepared sx; writes MAX(1,deg) polx. */
+/* Linear form of one constraint against a prepared sx; writes MAX(1,deg) polx.
+ * `sphi` may be NULL, or hold one coefficient-domain block per entry (NULL where the
+ * block is dense); see bn_smplstmnt_set_constraint(). */
 void bn_eval_blocks(void *out, size_t deg, size_t nz, const size_t *idx, const size_t *off,
-                    const size_t *len, const void *const *phi, const void *sx);
+                    const size_t *len, const void *const *phi,
+                    const int16_t *const *sphi, const size_t *soff, const size_t *swid,
+                    const void *sx);
 
 /* Opaque allocation of the LaBRADOR objects (Rust never sees their layout). */
 void *bn_alloc_smplstmnt(void);
@@ -49,9 +53,15 @@ void bn_free(void *p);
 
 /* Statement. The digest is the only binding of the statement contents. */
 void bn_smplstmnt_set_digest(void *st, const uint8_t digest[32]);
+/* A block is dense when sphi is NULL or sphi[j] is NULL, and then phi[j] points at
+ * philen(len[j], deg) polx the caller owns. Otherwise sphi[j] points at
+ * len[j] * swid[j] int16, element major: element i of the block is
+ * sum_t sphi[j][i*swid[j] + t] X^(soff[j] + t), and no polx image of it is ever formed. */
 int bn_smplstmnt_set_constraint(void *st, size_t ci, size_t deg, size_t nz,
                                 const size_t *idx, const size_t *off, const size_t *len,
-                                const void *const *phi, const void *b);
+                                const void *const *phi,
+                                const int16_t *const *sphi, const size_t *soff, const size_t *swid,
+                                const void *b);
 
 /* Witness. */
 int bn_set_witness_i16(void *wt, size_t i, size_t n, const int16_t *s);

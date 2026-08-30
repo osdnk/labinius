@@ -11,7 +11,8 @@ use super::setup::Setup;
 use super::{Instance, Kind, BLOCKS, CHUNKS, DEG, Q, SPAN, SUB};
 use crate::challenge::Transcript;
 use crate::labrador::{
-    logq, BSource, Block, Constraint, PhiSource, PolxBuf, Statement, VectorSpec,
+    logq, BSource, Block, Constraint, PhiBlock, PhiSource, PolxBuf, ShortPhi, Statement,
+    VectorSpec,
 };
 
 /// Independent repetitions of the zero-part test, `ceil(128 / LOGQ)`.
@@ -22,7 +23,7 @@ pub fn lifts() -> usize {
 /// The per-proof `phi`: one buffer per `(group, chunk, diagonal)` for every group that is not a
 /// function of the key alone.
 pub struct ProofPhi {
-    buffers: Vec<Vec<Arc<PolxBuf>>>,
+    buffers: Vec<Vec<Arc<ShortPhi>>>,
 }
 
 impl ProofPhi {
@@ -42,14 +43,12 @@ impl ProofPhi {
                 Kind::Challenge | Kind::Loose => (0..CHUNKS)
                     .flat_map(|b| (0..BLOCKS).map(move |a| (b, a)))
                     .map(|(b, a)| {
-                        let polys: Vec<[i16; DEG]> = (0..group.len)
-                            .map(|i| {
-                                let mut p = [0i16; DEG];
-                                p[..SUB].copy_from_slice(&layout.public[group.first + i][b][a]);
-                                p
-                            })
-                            .collect();
-                        Arc::new(PolxBuf::from_int16(&polys))
+                        let mut c = vec![0i16; group.len * SUB];
+                        for i in 0..group.len {
+                            c[i * SUB..(i + 1) * SUB]
+                                .copy_from_slice(&layout.public[group.first + i][b][a]);
+                        }
+                        Arc::new(ShortPhi::new(0, SUB, c))
                     })
                     .collect(),
             })
@@ -57,12 +56,12 @@ impl ProofPhi {
         ProofPhi { buffers }
     }
 
-    fn get(&self, group: usize, b: usize, a: usize) -> &Arc<PolxBuf> {
+    fn get(&self, group: usize, b: usize, a: usize) -> &Arc<ShortPhi> {
         &self.buffers[group][b * BLOCKS + a]
     }
 
     pub fn footprint(&self) -> usize {
-        self.buffers.iter().flatten().map(|p| p.len() * crate::labrador::sizeof_polx()).sum()
+        self.buffers.iter().flatten().map(|p| p.bytes()).sum()
     }
 }
 
@@ -172,19 +171,22 @@ pub fn build(
                     blocks.push(Block::new(r.at.vector, r.at.off, r.len));
                     parts.push(match layout.groups[r.group].kind {
                         Kind::Key { limb, part } => {
-                            (Arc::clone(setup.key_phi(limb, part, r.chunk, a)), r.offset)
+                            PhiBlock::Short(Arc::clone(setup.key_phi(limb, part, r.chunk, a)), r.offset)
                         }
-                        _ => (Arc::clone(phi.get(r.group, r.chunk, a)), r.offset),
+                        _ => PhiBlock::Short(Arc::clone(phi.get(r.group, r.chunk, a)), r.offset),
                     });
                 }
                 for s in &c.scaled {
                     blocks.push(Block::new(s.at.vector, s.at.off, 1));
                     let factor = if a == SPAN * s.chunk { s.factor } else { 0 };
-                    parts.push((Arc::clone(setup.scalar_phi(factor)), 0));
+                    parts.push(PhiBlock::Polx(Arc::clone(setup.scalar_phi(factor)), 0));
                 }
                 for (d, at) in c.carries.at.iter().enumerate() {
                     blocks.push(Block::new(at.vector, at.off, BLOCKS));
-                    parts.push((Arc::clone(setup.carry_phi(c.carries.gadget.base, d, a)), 0));
+                    parts.push(PhiBlock::Polx(
+                        Arc::clone(setup.carry_phi(c.carries.gadget.base, d, a)),
+                        0,
+                    ));
                 }
                 let mut b = [0i64; DEG];
                 for (u, x) in c.output[SUB * a..SUB * a + SUB].iter().enumerate() {

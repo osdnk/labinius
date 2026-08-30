@@ -121,19 +121,36 @@ void bn_commit_i16(void *out, const void *key, const int16_t *s, size_t len, siz
 }
 
 void bn_eval_blocks(void *out, size_t deg, size_t nz, const size_t *idx, const size_t *off,
-                    const size_t *len, const void *const *phi, const void *sxp)
+                    const size_t *len, const void *const *phi,
+                    const int16_t *const *sphi, const size_t *soff, const size_t *swid,
+                    const void *sxp)
 {
-  size_t j;
+  size_t j,elen,cap = 0;
   const size_t deg2 = MAX(1,deg);
   polx *const *sx = sxp;
   polx *o = out;
+  polx *scratch = NULL;
   polx t[deg2];
 
   polxvec_setzero(o,deg2);
   for(j=0;j<nz;j++) {
-    polxvec_mul_extension(t,(const polx*)phi[j],&sx[idx[j]][off[j]],len[j],deg2,1);
+    const polx *p = (const polx*)phi[j];
+    if(sphi && sphi[j]) {
+      shortphi sp = {sphi[j],soff[j],swid[j]};
+      elen = extlen(len[j],deg2);
+      if(elen > cap) {
+        free(scratch);
+        scratch = _aligned_alloc(64,elen*sizeof(polx));
+        cap = elen;
+      }
+      polxvec_setzero(scratch,elen);
+      shortphi_topolxvec(scratch,&sp,0,len[j]);
+      p = scratch;
+    }
+    polxvec_mul_extension(t,p,&sx[idx[j]][off[j]],len[j],deg2,1);
     polxvec_add(o,o,t,deg2);
   }
+  free(scratch);
 }
 
 void *bn_alloc_smplstmnt(void) { return calloc(1,sizeof(smplstmnt)); }
@@ -148,7 +165,9 @@ void bn_smplstmnt_set_digest(void *stp, const uint8_t digest[32]) {
 
 int bn_smplstmnt_set_constraint(void *stp, size_t ci, size_t deg, size_t nz,
                                 const size_t *idx, const size_t *off, const size_t *len,
-                                const void *const *phi, const void *b)
+                                const void *const *phi,
+                                const int16_t *const *sphi, const size_t *soff, const size_t *swid,
+                                const void *b)
 {
   smplstmnt *st = stp;
   sparsecnst *cnst;
@@ -170,6 +189,11 @@ int bn_smplstmnt_set_constraint(void *stp, size_t ci, size_t deg, size_t nz,
     cnst->len[j] = len[j];
     cnst->mult[j] = 1;
     cnst->phi[j] = (polx*)phi[j];
+    if(sphi && sphi[j]) {
+      cnst->sphi[j].c = sphi[j];
+      cnst->sphi[j].off = soff[j];
+      cnst->sphi[j].wid = swid[j];
+    }
   }
   cnst->a->len = 0;
   if(b)
