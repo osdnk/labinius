@@ -120,31 +120,31 @@ and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 18.38 |
+| `commit`, including `T_Y` | 17.95 |
 | `row_evaluate` | 0.29 |
 | `commit_left_expansion` | 0.25 |
-| `prove_opening` | 382.93 |
-| — fold | 4.67 |
-| — encoding | 18.10 |
-| — `T_R` | 2.58 |
-| — masks | 1.95 |
-| — constraint `phi` | 9.00 |
-| — statement build | 7.83 |
-| — `labrador::prove` | 300.49 |
-| *total* | *401.85* |
+| `prove_opening` | 304.34 |
+| — fold | 4.51 |
+| — encoding | 17.99 |
+| — `T_R` | 2.29 |
+| — masks | 1.92 |
+| — constraint `phi` | 8.59 |
+| — statement build | 10.39 |
+| — `labrador::prove` | 228.94 |
+| *total* | *322.81* |
 | **statement** | |
 | `derive_evaluation_point` | 0.00 |
 | `mle_evaluate` | 0.30 |
 | *total* | *0.30* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.22 |
-| statement rebuild | 23.25 |
-| — layout | 2.37 |
-| — no-wrap bound | 2.30 |
-| — constraint `phi` | 9.00 |
-| — statement build | 7.83 |
-| `labrador::verify` | 221.66 |
-| *total* | *246.12* |
+| `derive_folding_challenges` | 1.21 |
+| statement rebuild | 22.55 |
+| — layout | 2.44 |
+| — no-wrap bound | 2.25 |
+| — constraint `phi` | 8.59 |
+| — statement build | 10.39 |
+| `labrador::verify` | 158.53 |
+| *total* | *182.30* |
 
 The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
 LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 81 MB on
@@ -152,8 +152,12 @@ top of the key's 233 MB, plus 33 MB for the three mask rows; the peak resident s
 each mode is 588 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
-`commit` 49.6 -> 18.4, `prove_opening` 526.4 -> 382.9 and the verifier 287.8 -> 246.1 ms. Where it
-went: LaBRADOR's own stdout chatter, which a terminal charges at 48 ms of a proof and 27 ms of a
+`commit` 49.6 -> 18.0, `prove_opening` 526.4 -> 304.3 and the verifier 287.8 -> 182.3 ms. Inside
+LaBRADOR (300 -> 229 ms proving, 222 -> 159 ms verifying, transcript-neutral): the pointwise,
+scale and add passes of the `polx` kernels fused with their reductions, the constraint
+aggregation walked source-major so that each shared `phi` buffer streams once for all the
+constraints that alias it, the refresh after the constant-term collapse restricted to the ranges
+it scaled, and the decomposition self-check made opt-in. On the crate's side: LaBRADOR's own stdout chatter, which a terminal charges at 48 ms of a proof and 27 ms of a
 verification; `simple_verify`, which the honest prover has no reason to run (-60 ms); the residues
 of `T_Y`, off the scalar inverse transform and onto the vectorised one (-32 ms); the diagonal
 constraint order, which puts the key `phi` of a limb's four components in the last-level cache
