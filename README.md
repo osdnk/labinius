@@ -3,10 +3,10 @@
 An Ajtai commitment, a folding step and their verifier over `R_648 = Z_q[X]/(X^648 - X^324 + 1)`,
 the 1944-th cyclotomic ring, for a witness of binary ring elements carried as elements of
 `F162 = GF(2)[x]/(x^162 + x^81 + 1)`. The witness is committed modulo the base modulus 3889 and
-any of `2917, 4861, 9721, 12637`, folded against short ternary challenges of the subring
-`R_162 = Z_q[Z]/Phi_243(Z)`, and the folded opening is checked against the multilinear extension
-of the same witness over `F162` — one AVX-512 thread throughout. The opening is either sent in
-the clear or recursed into a single LaBRADOR proof of 80 KB.
+any of `2917, 4861, 9721, 12637, 17497, 19441`, folded against short ternary challenges of the
+subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the folded opening is checked against the multilinear
+extension of the same witness over `F162` — one AVX-512 thread throughout. The opening is either
+sent in the clear or recursed into a single LaBRADOR proof of 80 KB.
 
 ## The flow
 
@@ -271,8 +271,8 @@ const WITNESS_SEED: [u8; 32] = [0xC7; 32];
 const CPU: usize = 3;
 ```
 
-`EXTRA_MODULI` is any subset of `Modulus::{Q2917, Q4861, Q9721, Q12637}` (see the last
-implementation note for what each one costs); `Params::basic()` is this same shape for library
+`EXTRA_MODULI` is any subset of `Modulus::{Q2917, Q4861, Q9721, Q12637, Q17497, Q19441}` (see the
+last implementation note for what each one costs); `Params::basic()` is this same shape for library
 users, with the recursion off. `Params::new(witness_log_len, column_log_len, extra_moduli,
 recursion)` refuses a column shorter than one 128-`F162` batch, fewer than two columns, more
 columns than elements, or a repeated modulus. `cargo run` prints both modes.
@@ -295,6 +295,23 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   period from its own compile-time bound. The schedule is chosen by a `const` recursion over the
   exact bounds, and the folded-twiddle phase 1 above is used only where its wider intermediates
   still fit (which is why 12637 does not get it).
+* **Above `2^14` the whole butterfly is reduced, not just its `a0`.** 17497 and 19441 are the same
+  conductor-1944 tree as 3889 and 9721 — 648 linear slots, the same lookup tables, the same
+  27-row blocks — but a lane's budget is `2^15/q` = 1.87 and 1.69. A Montgomery twiddle product
+  never gets below `q/2`, since `mulhi(m, q)` is a full i16 times `q`, so the three terms of
+  `a0 + t1 + t2` already cost `1.5 q` before any slack: reducing only the untwiddled `a0`, which
+  is all the kernels below `2^14` ever do, leaves `3 q` at level 3 alone. `simd::vertical_bin_large`
+  therefore reduces `a0`, `t1` and `t2` at every one of the four radix-3 levels, and 19441 also
+  the `omega (t1 - t2)`, with the shuffle-port lookup Barrett — 2 port-5 and 3 flexible uops, not
+  one multiply-port slot, which is what makes four of them per butterfly affordable at all. The
+  placement is not a table: a `const` search tries all 4096 of them against the exact bound
+  recursion and keeps the cheapest that stays inside i16, and the same argument, one level looser,
+  gives the generic-input kernel and its inverse. The other answer — unsigned lanes in `[0, q)`,
+  where the head-room is `2^16/q` and a radix-3 sum fits — was written out and measured, and it
+  is *slower*: 6.10 ns per butterfly against the signed form's 3.89 at 17497 and 6.20 against
+  4.51 at 19441, 1.6x and 1.4x, because a Shoup product with its conditional subtract is five
+  dependent uops where a Montgomery one is three. It would also need the transform centered
+  before `vpdpwssd`, the fold and the decomposition could read it.
 * **Block-fused base multiplication.** The kernel hands out 27 finished slot vectors at a time
   (18 on the quadratic tree) and a hook multiplies them against `A` and accumulates on the spot,
   so the transform output never reaches memory and only `A` streams. A quadratic-slot modulus
@@ -366,6 +383,12 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   `LOGQ = 40` (`2^37`) does not clear and `LOGQ = 48` (`2^45`) clears with room. Digit-decomposing
   the residues to fit 40 costs more than the wider modulus does, and at 48 the no-wraparound
   bound of the plan's section 5 has margins of 1992x on 3889 and 552x on 9721 against `Q/2 = 2^47`.
+  A 19441 limb is the widest the recursion takes: its four residue vectors are `2^40.3` each, the
+  no-wrap bound is `2^38.9` and the margin 270x, and its carries reach `2^28.1` of the `2^31` that
+  four base-256 digits give them — the same gadget 9721 uses. A residue coefficient is then 9720,
+  which is what fixes `COEFF_LIMIT`; a public sub-chunk is twice a centred key row, so
+  `BLOCK_LIMIT` is 19440, and the `i16` dot product of `recursion::chain` widens its `i32` lanes
+  every four `vpmaddwd` instead of every eight (worth 2 % of the block sums, nothing of a proof).
 * **The moduli, quantified.** Committing 2^18 `F162` in 256 columns modulo the base 3889 alone
   takes 7.3 ms; each extra modulus adds its own transform, base multiplication and fold-down on
   the shared front end (wall clock, one core, best of 15; the cycle columns are per ring element,
@@ -378,6 +401,8 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   | 3889 (base) | linear | 7.34 ms | 280 | 58 | 7 |
   | 9721    | linear | +6.50 ms | 304 | 58 | 7 |
   | 12637   | quadratic | +7.19 ms | 291 | 75 | 16 |
+  | 17497   | linear | +8.93 ms | 459 | 58 | 9 |
+  | 19441   | linear | +9.85 ms | 532 | 58 | 7 |
 
   The front end costs 31 more cycles per ring element and is paid once however many moduli
   follow. A quadratic-slot modulus runs a shorter tree — one radix-2 level fewer, and for 2917
@@ -385,4 +410,13 @@ columns than elements, or a repeated modulus. `cargo run` prints both modes.
   multiplication, where three sums per two rows cost 16 cycles more than one sum per row, and in
   the fold-down, which has three accumulators to reduce instead of one. 2917 is the cheapest
   modulus there is, 4861 and 9721 sit within 3 % of each other, and 12637 — three Barretts inside
-  the kernel, and an accumulator it has to fold back every batch — is 20 % dearer than 2917. All four extra moduli together: 35.9 ms.
+  the kernel, and an accumulator it has to fold back every batch — is 20 % dearer than 2917.
+
+  17497 and 19441 buy 4.2 more bits of modulus for 1.5x and 1.7x of 9721's transform: three
+  lookup Barretts per radix-3 butterfly and, for 19441, four, at every one of the four levels
+  (see the implementation note above), which is 2592 and 3456 reductions per batch of 32 against
+  9721's 216. Nothing else about them costs more — the base multiplication is the same
+  `vpdpwssd` accumulation and measures the same to a tenth of a cycle, and the fold-down is the
+  same, except that 17497 has to fold its accumulator back twice inside `hsum8` because
+  `2^16 mod 17497 = 13045` is the one `R` for which eight lanes do not sum inside `i32` after one
+  fold-back. All six extra moduli together: 48.4 ms.

@@ -17,7 +17,14 @@ fn row(name: &str, milliseconds: f64) {
 
 #[test]
 fn the_encoding_at_the_basic_parameters() {
-    let params = Params::new(18, 8, vec![Modulus::Q9721], true).unwrap();
+    let extra: Vec<Modulus> = std::env::var("EXTRA")
+        .map(|v| {
+            v.split(',')
+                .map(|q| Modulus::from_prime(q.parse().unwrap()).unwrap())
+                .collect()
+        })
+        .unwrap_or_else(|_| vec![Modulus::Q9721]);
+    let params = Params::new(18, 8, extra, true).unwrap();
     let t = Instant::now();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let setup_ms = ms(t);

@@ -34,6 +34,7 @@
 //! - [`setup`]  : everything that depends on the commitment key alone, built once.
 //! - [`statement`]: the LaBRADOR statement, built the same way by prover and verifier.
 use crate::api::N162;
+use crate::params::{QS, QS_LARGE, QS_QUAD};
 use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
 use chain::{At, Carries, Chain, Product, Scaled};
 use bin_fields::scalar::F162;
@@ -80,11 +81,34 @@ pub const PAD: usize = 32;
 /// honest fold, so about one fold in twenty is retried with fresh challenges.
 pub const FOLD_CAP: f64 = 47.2;
 
-/// Largest public sub-chunk coefficient, and largest witness coefficient, the `i16` dot product of
-/// [`chain`] tolerates: `8 * 2 * BLOCK_LIMIT * COEFF_LIMIT < 2^31`.
-pub const BLOCK_LIMIT: i64 = 16384;
-/// See [`BLOCK_LIMIT`]; also LaBRADOR's own `int16` norm limit is 23170.
-pub const COEFF_LIMIT: i64 = 8191;
+/// Largest witness coefficient: a residue of the widest limb, which is a centered residue modulo
+/// 19441. LaBRADOR's own `int16` norm limit is 23170, so this clears it with a factor of 2.4.
+pub const COEFF_LIMIT: i64 = ((QS_LARGE[1] - 1) / 2) as i64;
+/// Largest public sub-chunk coefficient. A public block is `Z^{CHUNK b} g mod Phi_243` of a
+/// centered key row, and the two foldings `Z^162 = -Z^81 - 1` can perform leave it inside
+/// `2 |g|` — measured, 1.98 to 2.00 |g| for every prime (`tests/recursion.rs`).
+pub const BLOCK_LIMIT: i64 = 2 * COEFF_LIMIT;
+/// `vpmaddwd` accumulations [`chain`] takes before it widens its i32 lanes to i64: the largest
+/// power of two W with `2 W * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX`. It was 8 while the widest
+/// limb was 12637 and is 4 now that a residue coefficient reaches 9720.
+pub const WIDEN: usize = {
+    let mut w = 1usize;
+    while 2 * (2 * w as i64) * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX as i64 {
+        w *= 2;
+    }
+    w
+};
+const _: () = assert!(2 * (WIDEN as i64) * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX as i64);
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!((QS[i] as i64 - 1) / 2 <= COEFF_LIMIT);
+        assert!((QS_LARGE[i] as i64 - 1) / 2 <= COEFF_LIMIT);
+        assert!((QS_QUAD[i] as i64 - 1) / 2 <= COEFF_LIMIT);
+        i += 1;
+    }
+    assert!((QS_QUAD[2] as i64 - 1) / 2 <= COEFF_LIMIT);
+};
 
 /// An element of `S` over `Z`, coefficient `m` of `Z^m`.
 pub type SElem = [i64; N162];

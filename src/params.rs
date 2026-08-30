@@ -19,8 +19,12 @@
 pub const N: usize = 648;
 /// Conductor.
 pub const CONDUCTOR: u32 = 1944;
-/// The supported primes.
+/// The supported primes below `2^14`, whose kernels have head-room to spare.
 pub const QS: [u16; 2] = [3889, 9721];
+/// The supported primes above `2^14`: `1 mod 1944` like [`QS`], so the same conductor-1944 tree
+/// and the same 648 linear slots, but `2^15/q` is only 1.87 and 1.69, so their kernels reduce at
+/// every level (`crate::simd::vertical_bin_large`).
+pub const QS_LARGE: [u16; 2] = [17497, 19441];
 /// Radix of the split that turns level `l` into level `l+1` (level 0 is the whole ring).
 pub const RADIX: [usize; 7] = [2, 2, 2, 3, 3, 3, 3];
 /// Number of sub-rings at level `l` (level 7 = the 648 leaves).
@@ -160,6 +164,16 @@ impl<const Q: u16> Params<Q> {
     pub const ZETA_L5: [u16; 72] = Self::zetas::<72>(5);
     pub const ZETA_L6: [u16; 216] = Self::zetas::<216>(6);
 }
+
+/// Every splitting prime is `1 mod 1944` and its own kernel family.
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!((QS[i] as u32 - 1) % CONDUCTOR == 0 && QS[i] < 1 << 14);
+        assert!((QS_LARGE[i] as u32 - 1) % CONDUCTOR == 0 && QS_LARGE[i] > 1 << 14);
+        i += 1;
+    }
+};
 
 /// Signed Montgomery multiplication on 16-bit values, exactly what the SIMD kernels do lane-wise:
 /// returns a * x mod q in (-q, q) where w = to_mont(x), w_pre = mont_pre(w). Requires only that

@@ -13,7 +13,7 @@
 //! moved back by `Z^162 = -Z^81 - 1`. Summed against `Z^{SUB a}` the carries telescope to
 //! `-Z^162 e_{BLOCKS-1}` and the identity is `sum_a Z^{SUB a} D_a = z + Phi_243 e_{BLOCKS-1}`.
 use super::{
-    Blocks, Gadget, SElem, Vector, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, SPAN, SUB,
+    Blocks, Gadget, SElem, Vector, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, SPAN, SUB, WIDEN,
 };
 use crate::api::N162;
 use core::arch::x86_64::*;
@@ -237,8 +237,8 @@ impl Chain {
 }
 
 /// `sum_k a_{u,k} b_k` over `n` `i16` pairs for the [`SUB`] consecutive rows of `a`, `n` a multiple
-/// of 32: `vpmaddwd` into `i32` lanes, widened every eight accumulations so that
-/// `8 * 2 * BLOCK_LIMIT * COEFF_LIMIT` cannot overflow. One load of `b` feeds all [`SUB`] rows,
+/// of 32: `vpmaddwd` into `i32` lanes, widened every [`WIDEN`] accumulations so that
+/// `2 WIDEN * BLOCK_LIMIT * COEFF_LIMIT` cannot overflow. One load of `b` feeds all [`SUB`] rows,
 /// which is what the diagonal loop wants and what keeps the kernel off the load ports.
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn dots(a: *const i16, b: *const i16, n: usize) -> [i64; SUB] {
@@ -250,7 +250,7 @@ unsafe fn dots(a: *const i16, b: *const i16, n: usize) -> [i64; SUB] {
             let x = _mm512_loadu_si512(a.add(u * n + 32 * k) as *const __m512i);
             acc[u] = _mm512_add_epi32(acc[u], _mm512_madd_epi16(x, y));
         }
-        if k % 8 == 7 {
+        if k % WIDEN == WIDEN - 1 {
             for u in 0..SUB {
                 wide[u] = _mm512_add_epi64(wide[u], widen(acc[u]));
                 acc[u] = _mm512_setzero_si512();

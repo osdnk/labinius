@@ -3,7 +3,7 @@
 use bin_ntt::api::N162;
 use bin_ntt::params::N;
 use bin_ntt::recursion::{
-    binary, chunk, limbs, Gadget, Instance, SElem, BLOCKS, CHUNK, CHUNKS, DEG, Q, V,
+    binary, chunk, limbs, Gadget, Instance, SElem, BLOCKS, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, Q, V,
 };
 use bin_ntt::rng::Rng;
 use bin_ntt::{scalar, Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
@@ -219,7 +219,14 @@ fn the_instance_holds_over_z() {
 /// Every limb list the API offers, quadratic-slot primes included.
 #[test]
 fn the_instance_holds_on_every_limb() {
-    for extra in [vec![], vec![Modulus::Q2917], vec![Modulus::Q2917, Modulus::Q4861, Modulus::Q12637]] {
+    for extra in [
+        vec![],
+        vec![Modulus::Q2917],
+        vec![Modulus::Q2917, Modulus::Q4861, Modulus::Q12637],
+        vec![Modulus::Q17497],
+        vec![Modulus::Q19441],
+        vec![Modulus::Q9721, Modulus::Q19441],
+    ] {
         let n = extra.len() + 1;
         let i = round(&Params::new(9, 2, extra.clone(), true).unwrap());
         assert!(i.holds(), "{extra:?}: {:?}", i.failure());
@@ -319,5 +326,33 @@ fn lifts_reduce_to_f162() {
     for _ in 0..16 {
         let x = F162([rng.next_u64(), rng.next_u64(), rng.next_u64() & ((1 << 34) - 1)]);
         assert_eq!(binary::reduce_mod_2(&binary::lift(&x)), x);
+    }
+}
+
+/// The public blocks of every prime's key rows stay inside `BLOCK_LIMIT`, which is what makes the
+/// `i16` dot product of `chain` exact: a block is `Z^{CHUNK b} g mod Phi_243` of a centered key
+/// row, and the reduction's two foldings leave it at twice `|g|` at worst.
+#[test]
+fn public_blocks_stay_inside_their_limit() {
+    for m in Modulus::ALL {
+        let params = Params::new(9, 2, vec![m], false).unwrap();
+        let pp = PublicParameters::from_seed(params, [3u8; 32]);
+        for limb in 0..2 {
+            let q = pp.key().prime(limb) as i64;
+            let mut worst = 0i64;
+            for r in &limbs::key_rows(&pp, limb).rows {
+                for g in r {
+                    for b in chunk::blocks(g) {
+                        for a in b {
+                            for x in a {
+                                worst = worst.max((x as i64).abs());
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(worst <= BLOCK_LIMIT, "q = {q}: block coefficient {worst}");
+            assert!(worst <= q - 1, "q = {q}: block coefficient {worst} above 2 |g|");
+        }
     }
 }

@@ -95,6 +95,16 @@ fn prime_9721() {
     check_prime::<9721>();
 }
 
+#[test]
+fn prime_17497() {
+    check_prime::<17497>();
+}
+
+#[test]
+fn prime_19441() {
+    check_prime::<19441>();
+}
+
 /// `scalar::intt` is the exact inverse of `scalar::ntt`.
 fn check_intt<const Q: u16>() {
     let mut rng = Rng::new(0x1177 ^ Q as u64);
@@ -132,4 +142,14 @@ fn intt_3889() {
 #[test]
 fn intt_9721() {
     check_intt::<9721>();
+}
+
+#[test]
+fn intt_17497() {
+    check_intt::<17497>();
+}
+
+#[test]
+fn intt_19441() {
+    check_intt::<19441>();
 }

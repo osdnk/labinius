@@ -59,8 +59,8 @@
 //! primitive 243-rd root of unity. Outputs are centered into `[-(q-1)/2, (q-1)/2]`; note the `4^-1`
 //! factor above, which is already applied.
 use crate::params::{
-    inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS, QS_QUAD, QUAD_CLASS_SLOT,
-    QUAD_POW3_CLASS, SLOT_EXP,
+    inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS, QS_LARGE, QS_QUAD,
+    QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
 };
 use crate::rng::Rng;
 use crate::simd::commit as cm;
@@ -78,26 +78,32 @@ pub const BASE_PRIME: u16 = QS[0];
 
 /// A limb a [`CommitmentKey`] can carry on top of [`BASE_PRIME`].
 ///
-/// `Q9721` is the second splitting prime (648 linear slots, `vertical_bin_asm`); the other three
-/// are the *quadratic-slot* primes of [`crate::params::QS_QUAD`] — `q = 1 mod 972` but not mod
-/// 1944, so `Phi_1944` factors into 324 irreducible quadratics and the transform ends at
-/// `Z_q[X]/(X^2 - psi'^u)` leaves (`vertical_bin_quad`). Both kinds produce the same public
-/// output: four elements of `R_162`, 162 slots each, in the [`POW3_SLOT_EXP`] order.
+/// `Q9721`, `Q17497` and `Q19441` are splitting primes (648 linear slots): `Q9721` runs the
+/// hand-scheduled `vertical_bin_asm`, the two above `2^14` the reduce-at-every-level
+/// `vertical_bin_large`. The other three are the *quadratic-slot* primes of
+/// [`crate::params::QS_QUAD`] — `q = 1 mod 972` but not mod 1944, so `Phi_1944` factors into 324
+/// irreducible quadratics and the transform ends at `Z_q[X]/(X^2 - psi'^u)` leaves
+/// (`vertical_bin_quad`). All three kinds produce the same public output: four elements of
+/// `R_162`, 162 slots each, in the [`POW3_SLOT_EXP`] order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Modulus {
     Q2917,
     Q4861,
     Q9721,
     Q12637,
+    Q17497,
+    Q19441,
 }
 
 impl Modulus {
     /// Every limb, cheapest first (the order of the ranking in the README).
-    pub const ALL: [Modulus; 4] = [
+    pub const ALL: [Modulus; 6] = [
         Modulus::Q2917,
         Modulus::Q4861,
         Modulus::Q9721,
         Modulus::Q12637,
+        Modulus::Q17497,
+        Modulus::Q19441,
     ];
 
     /// The prime.
@@ -107,12 +113,14 @@ impl Modulus {
             Modulus::Q4861 => QS_QUAD[1],
             Modulus::Q9721 => QS[1],
             Modulus::Q12637 => QS_QUAD[2],
+            Modulus::Q17497 => QS_LARGE[0],
+            Modulus::Q19441 => QS_LARGE[1],
         }
     }
 
     /// Does `R_648` end in 324 quadratic leaves for this prime (rather than 648 linear slots)?
     pub const fn is_quadratic(self) -> bool {
-        !matches!(self, Modulus::Q9721)
+        matches!(self, Modulus::Q2917 | Modulus::Q4861 | Modulus::Q12637)
     }
 
     /// The limb of a prime, if it is one.
@@ -215,7 +223,7 @@ impl<const Q: u16> Pow3Consts<Q> {
     /// `i = psi^486`, the primitive 4th root of unity: the only multiplication the length-4
     /// inverse DFT needs, since `i^2 = -1` and `i^3 = -i`.
     const I: u32 = Self::PSI_POW[CONDUCTOR162 as usize] as u32;
-    /// `M = floor(2^43 / q)`, the Barrett magic of [`barrett29`].
+    /// `M = floor(2^43 / q)`, the Barrett magic of [`barrett31`].
     const BARRETT_M: u64 = (1u64 << 43) / Q as u64;
     /// `TWIST[k][s] = 4^-1 psi^{-v_s k} mod q`, the whole scaling of component `k` at slot `s`.
     const TWIST: [[u16; PAD]; 4] = {
@@ -239,11 +247,12 @@ impl<const Q: u16> Pow3Consts<Q> {
 /// The 162 slots padded to 11 AVX-512 vectors of 16 `u32`; the pad lanes carry zeros.
 const PAD: usize = 176;
 
-/// `p mod q` for `p < 2^29`, 16 lanes at a time: `t = (p * M) >> 43` is `floor(p/q)` or one less
-/// (`M = floor(2^43/q) < 2^32`, so `p * M < 2^61` and the quotient defect is below `p / 2^43`),
-/// which leaves `p - t q` in `[0, 2q)` for one conditional subtract.
+/// `p mod q` for `0 <= p < 2^31`, 16 lanes at a time: `t = (p * M) >> 43` is `floor(p/q)` or one
+/// less (the quotient defect is below `p / 2^43`), which leaves `p - t q` in `[0, 2q)` for one
+/// conditional subtract. `M = floor(2^43/q)` has to fit the u32 halves `vpmuludq` reads and the
+/// product has to stay inside a u64 lane; `barrett31_fits` asserts both for every limb.
 #[target_feature(enable = "avx512f")]
-unsafe fn barrett29<const Q: u16>(p: __m512i) -> __m512i {
+unsafe fn barrett31<const Q: u16>(p: __m512i) -> __m512i {
     let q = _mm512_set1_epi32(Q as i32);
     let mag = _mm512_set1_epi64(Pow3Consts::<Q>::BARRETT_M as i64);
     let lo = _mm512_set1_epi64(0xFFFF_FFFFu32 as i64);
@@ -270,7 +279,7 @@ unsafe fn recombine<const Q: u16>(y: &[u32; N], out: &mut [PowerOfThreeRingEleme
         let d0 = _mm512_sub_epi32(_mm512_add_epi32(e0, q), e2);
         let c = _mm512_add_epi32(e1, e3);
         let d1 = _mm512_sub_epi32(_mm512_add_epi32(e1, q), e3);
-        let id = barrett29::<Q>(_mm512_mullo_epi32(d1, iq));
+        let id = barrett31::<Q>(_mm512_mullo_epi32(d1, iq));
         let m = [
             _mm512_add_epi32(a, c),
             _mm512_sub_epi32(_mm512_add_epi32(d0, q), id),
@@ -286,7 +295,7 @@ unsafe fn recombine<const Q: u16>(y: &[u32; N], out: &mut [PowerOfThreeRingEleme
             let t = _mm512_cvtepu16_epi32(_mm256_loadu_si256(
                 tw[kk].as_ptr().add(16 * b) as *const __m256i
             ));
-            let r = barrett29::<Q>(_mm512_mullo_epi32(m[kk], t));
+            let r = barrett31::<Q>(_mm512_mullo_epi32(m[kk], t));
             // centre: r in [0, q) -> r - q where r > (q-1)/2, i.e. (-(q-1)/2 ..= (q-1)/2)
             let hi = _mm512_cmpgt_epi32_mask(r, _mm512_set1_epi32((Q as i32 - 1) / 2));
             let r = _mm512_mask_sub_epi32(r, hi, r, q);
@@ -295,7 +304,22 @@ unsafe fn recombine<const Q: u16>(y: &[u32; N], out: &mut [PowerOfThreeRingEleme
     }
 }
 
-const _: () = assert!(4 * (PRIMES[1] as u64) * (PRIMES[1] as u64) < (1u64 << 29));
+/// [`recombine`] feeds [`barrett31`] products of a lane below `4q` by a twist below `q`, so the
+/// hypotheses are `4 q^2 < 2^31`, `M < 2^32` and `4 q^2 M < 2^64`. The `2^29` the magic was first
+/// written for was the head-room of the two primes below `2^14`; 17497 and 19441 need the honest
+/// bound, and clear it with a factor of 1.4.
+const fn barrett31_fits(q: u16) -> bool {
+    let p = 4 * q as u64 * q as u64;
+    let m = (1u64 << 43) / q as u64;
+    p < (1u64 << 31) && m < (1u64 << 32) && p <= u64::MAX / m
+}
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!(barrett31_fits(QS[i]) && barrett31_fits(QS_LARGE[i]));
+        i += 1;
+    }
+};
 
 /// The same map, straight into the four ring elements the API returns.
 pub(crate) fn decompose_components<const Q: u16>(y: &[u32; N]) -> [PowerOfThreeRingElement; 4] {
@@ -390,6 +414,8 @@ pub fn components_of(q: u16, quad: bool, y: &[u32; N]) -> [PowerOfThreeRingEleme
     match (q, quad) {
         (3889, false) => decompose_components::<3889>(y),
         (9721, false) => decompose_components::<9721>(y),
+        (17497, false) => decompose_components::<17497>(y),
+        (19441, false) => decompose_components::<19441>(y),
         (2917, true) => decompose_components_quad::<2917>(y),
         (4861, true) => decompose_components_quad::<4861>(y),
         (12637, true) => decompose_components_quad::<12637>(y),

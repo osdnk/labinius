@@ -20,7 +20,9 @@ use crate::params::{
 };
 use crate::scalar;
 use crate::scheme::PublicParameters;
+use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::intt_gen_batch32;
+use crate::simd::vertical_gen_large as vgl;
 use crate::types::{Batch32, Representation, RingElement};
 
 /// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the two
@@ -35,14 +37,16 @@ pub struct Shape {
 
 impl Shape {
     pub fn of(q: u16) -> Shape {
+        // a product's coefficients have standard deviation about `q 2^14`, so a carry needs a
+        // range near `2^31`: three base-1024 digits below `2^13`, four base-256 digits above it.
         let (base, levels) = match q {
             2917 | 3889 => (1024, 3),
-            4861 | 9721 | 12637 => (256, 4),
+            4861 | 9721 | 12637 | 17497 | 19441 => (256, 4),
             _ => unreachable!("no limb with q = {q}"),
         };
         Shape {
             q,
-            quad: !matches!(q, 3889 | 9721),
+            quad: !matches!(q, 3889 | 9721 | 17497 | 19441),
             carry: Gadget { base, levels },
             quotient: Gadget { base: 512, levels: 2 },
         }
@@ -113,6 +117,8 @@ pub fn coefficients(q: u16, quad: bool, slots: &[u32; N]) -> [i64; N] {
     let c = match (q, quad) {
         (3889, false) => scalar::intt::<3889>(slots),
         (9721, false) => scalar::intt::<9721>(slots),
+        (17497, false) => scalar::intt::<17497>(slots),
+        (19441, false) => scalar::intt::<19441>(slots),
         (2917, true) => intt_quad::<2917>(slots),
         (4861, true) => intt_quad::<4861>(slots),
         (12637, true) => intt_quad::<12637>(slots),
@@ -127,6 +133,8 @@ pub fn transform(q: u16, quad: bool, coefficients: &[i64; N]) -> [u32; N] {
     match (q, quad) {
         (3889, false) => scalar::ntt::<3889>(&a),
         (9721, false) => scalar::ntt::<9721>(&a),
+        (17497, false) => scalar::ntt::<17497>(&a),
+        (19441, false) => scalar::ntt::<19441>(&a),
         (2917, true) => scalar::ntt_quad::<2917>(&a),
         (4861, true) => scalar::ntt_quad::<4861>(&a),
         (12637, true) => scalar::ntt_quad::<12637>(&a),
@@ -178,6 +186,8 @@ fn slots_of(q: u16, quad: bool, c: &[PowerOfThreeRingElement; 4]) -> [u32; N] {
     match (q, quad) {
         (3889, false) => slots_split::<3889>(c),
         (9721, false) => slots_split::<9721>(c),
+        (17497, false) => slots_split::<17497>(c),
+        (19441, false) => slots_split::<19441>(c),
         (2917, true) => slots_quad::<2917>(c),
         (4861, true) => slots_quad::<4861>(c),
         (12637, true) => slots_quad::<12637>(c),
@@ -282,9 +292,18 @@ fn recombination<const Q: u16>() -> Vec<u16> {
     e
 }
 
+/// Which vectorised inverse transform a splitting prime runs, as an associated const so the
+/// choice is made before the branches are emitted.
+struct Inv<const Q: u16>;
+
+impl<const Q: u16> Inv<Q> {
+    const LARGE: bool = vl::is_large(Q);
+}
+
 /// The residues of one splitting limb, 32 columns at a time: the recombination above out of a
-/// table, then the crate's vectorised inverse transform [`intt_gen_batch32`] on the whole batch,
-/// then the four `S`-components read straight out of the batch in chunk order.
+/// table, then the crate's vectorised inverse transform on the whole batch — [`intt_gen_batch32`]
+/// below `2^14`, `vertical_gen_large`'s above it — then the four `S`-components read straight out
+/// of the batch in chunk order.
 fn columns_split<const Q: u16>(
     matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
     limb: usize,
@@ -312,7 +331,13 @@ fn columns_split<const Q: u16>(
                 }
             }
         }
-        unsafe { intt_gen_batch32::<Q>(&mut batch) };
+        unsafe {
+            if Inv::<Q>::LARGE {
+                vgl::intt_gen_batch32::<Q>(&mut batch);
+            } else {
+                intt_gen_batch32::<Q>(&mut batch);
+            }
+        }
         for p in 0..cols {
             for (l, vector) in out.iter_mut().enumerate() {
                 for b in 0..CHUNKS {
@@ -364,6 +389,8 @@ pub fn residues(
         match (q, quad) {
             (3889, false) => columns_split::<3889>(matrix, limb, r, &mut out),
             (9721, false) => columns_split::<9721>(matrix, limb, r, &mut out),
+            (17497, false) => columns_split::<17497>(matrix, limb, r, &mut out),
+            (19441, false) => columns_split::<19441>(matrix, limb, r, &mut out),
             _ => columns_scalar(q, quad, matrix, limb, r, &mut out),
         }
         vectors.append(&mut out);

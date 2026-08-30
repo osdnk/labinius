@@ -112,7 +112,7 @@ impl Round {
 
 #[test]
 fn an_honest_recursive_round_is_accepted() {
-    for extra in [vec![Modulus::Q9721], vec![Modulus::Q4861]] {
+    for extra in [vec![Modulus::Q9721], vec![Modulus::Q4861], vec![Modulus::Q19441]] {
         let mut round = Round::new(&small(extra.clone()), b"bin-ntt/test/opening");
         let proof = round.prove().expect("the honest fold is within its cap");
         assert!(round.verify(&proof), "{extra:?}");

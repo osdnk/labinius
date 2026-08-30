@@ -8,6 +8,8 @@ pub mod commit;
 pub mod transpose_f162;
 pub mod vertical_bin;
 pub mod vertical_bin_asm;
+pub mod vertical_bin_large;
 pub mod vertical_bin_quad;
 pub mod vertical_gen;
+pub mod vertical_gen_large;
 pub mod vertical_gen_quad;

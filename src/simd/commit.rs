@@ -28,12 +28,18 @@
 //! # The exact fold-back
 //!
 //! The transform's output is lazily reduced to [`w_bound`] (7.5 q for q = 3889, 2.294 q for
-//! q = 9721) and `|A| <= (q-1)/2`, so one batch adds at most [`acc_per_batch`] to a lane. Every
-//! [`red_period`] batches the accumulator is folded back into `|acc| <= 2^15 (1 + R)`
-//! ([`acc_after_reduce`], `R = 2^16 mod q`) by [`reduce_acc_i32`]: three uops per accumulator
-//! vector, one of them on the multiply port, amortised over 8 (q = 3889) or 4 (q = 9721) batches.
-//! The period is the largest power of two for which `acc_after_reduce + period * acc_per_batch`
-//! still fits `i32`, which the `fits` assertion below checks at compile time.
+//! q = 9721, 1.706 q and 1.580 q for the two primes above `2^14`) and `|A| <= (q-1)/2`, so one
+//! batch adds at most [`acc_per_batch`] to a lane. Every [`red_period`] batches the accumulator
+//! is folded back into `|acc| <= 2^15 (1 + R)` ([`acc_after_reduce`], `R = 2^16 mod q`) by
+//! [`reduce_acc_i32`]: three uops per accumulator vector, one of them on the multiply port,
+//! amortised over 8 (q = 3889), 4 (q = 9721) or 1 (17497, 19441) batches. The period is the
+//! largest power of two for which `acc_after_reduce + period * acc_per_batch` still fits `i32`,
+//! which the `fits` assertion below checks at compile time.
+//!
+//! [`hsum8`] then wants the eight lanes of a group to sum inside `i32` after one fold-back, i.e.
+//! `R <= 8190` — not a question about the size of q but about where `2^16 mod q` lands. 17497,
+//! whose `R` is 13045, is the one prime that misses it and folds back twice
+//! ([`acc_after_hsum`]), which costs its `finish` 2 cycles per ring element.
 //!
 //! # The packed accumulator
 //!
@@ -54,7 +60,9 @@
 //! # Consuming the transform one block at a time
 //!
 //! [`vertical_bin_asm`](crate::simd::vertical_bin_asm) produces the 648 slots as 24 blocks of 27,
-//! each written out of registers by one `asm!` block. `Mac` is a [`BlockSink`] that hands the
+//! each written out of registers by one `asm!` block, and
+//! [`vertical_bin_large`](crate::simd::vertical_bin_large) produces the same 24 blocks for the two
+//! primes above `2^14`, so both feed the same sink. `Mac` is a [`BlockSink`] that hands the
 //! kernel a single 1728-byte scratch for every block and multiplies the block into the
 //! accumulator the moment it is stored, while it is still in L1. The alternatives cost, per ring
 //! element (q = 3889 / 9721): materialising the whole transform first 874 / 908 cycles — it adds
@@ -80,14 +88,15 @@
 //!
 //! # Measured (i7-11850H, one core, 2^18 F162 = 2^16 ring elements in 256 columns)
 //!
-//! `commit` runs at 7.2 ms for the base limb alone and adds 6.0 (2917), 6.3 (4861), 6.5 (9721)
-//! and 7.2 (12637) per further limb. Per ring element and limb: 248-291 cycles of transform,
-//! 58 (splitting) or 74 (quadratic) of base multiplication, 7 or 16 of [`finish`], and the front
-//! end's 32 once for all of them.
+//! `commit` runs at 7.2 ms for the base limb alone and adds 6.0 (2917), 6.3 (4861), 6.5 (9721),
+//! 7.2 (12637), 9.4 (17497) and 10.4 (19441) per further limb. Per ring element and limb:
+//! 247-533 cycles of transform, 58 (splitting) or 74 (quadratic) of base multiplication, 7, 9 or
+//! 16 of [`finish`], and the front end's 32 once for all of them.
 use crate::params::*;
 use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::transpose_f162::slice_f162_into;
 use crate::simd::vertical_bin_asm::{self as vb, BlockSink};
+use crate::simd::vertical_bin_large as vl;
 use crate::types::*;
 use bin_fields::scalar::F162;
 use core::arch::x86_64::*;
@@ -102,10 +111,14 @@ pub const fn r16(q: u16) -> i32 {
     (65536 % q as u32) as i32
 }
 
-/// Bound on one lane of the transform's output (`vertical_bin_asm`'s declared output bound,
-/// 7.5 q for q = 3889 and 2.294 q for q = 9721).
+/// Bound on one lane of the transform's output: `vertical_bin_asm`'s 7.5 q (3889) and 2.294 q
+/// (9721), `vertical_bin_large`'s 1.706 q (17497) and 1.580 q (19441).
 pub const fn w_bound(q: u16) -> i64 {
-    (vb::output_bound_milli_q(q) as i64 * q as i64) / 1000
+    if vl::is_large(q) {
+        vl::output_bound(q) as i64
+    } else {
+        (vb::output_bound_milli_q(q) as i64 * q as i64) / 1000
+    }
 }
 
 /// Bound on one lane of A: the matrix is stored centered.
@@ -125,20 +138,24 @@ pub const fn acc_after_reduce(q: u16) -> i64 {
 }
 
 /// Batches accumulated between two fold-backs: the largest power of two P with
-/// `acc_after_reduce + P * acc_per_batch <= i32::MAX`.
+/// `acc_after_reduce + P * acc_per_batch <= i32::MAX` (8 for 3889, 4 for 9721, and 1 for the two
+/// primes above `2^14`, whose `|W| |A|` is four times 9721's).
 pub const fn red_period(q: u16) -> usize {
-    if q == 3889 {
-        8
-    } else {
-        4
-    }
+    period_for(q, acc_per_batch(q))
 }
 
 const fn fits(q: u16) -> bool {
     acc_after_reduce(q) + (red_period(q) as i64) * acc_per_batch(q) <= i32::MAX as i64
 }
-const _: () = assert!(fits(3889));
-const _: () = assert!(fits(9721));
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!(fits(QS[i]) && fits(QS_LARGE[i]));
+        i += 1;
+    }
+};
+const _: () = assert!(red_period(3889) == 8 && red_period(9721) == 4);
+const _: () = assert!(red_period(17497) == 1 && red_period(19441) == 1);
 
 /// The exact fold-back, lane-wise (the scalar model of `reduce_vec`).
 ///
@@ -325,6 +342,38 @@ unsafe fn hs<const S: usize>(a: __m512i, b: __m512i) -> __m512i {
     )
 }
 
+/// Does one fold-back leave eight lanes summable inside i32? `reduce_vec` caps a lane at
+/// `2^15 (1 + R)`, so this asks `2^18 (1 + R) <= i32::MAX`, i.e. `R <= 8190` — not a question
+/// about the size of q but about where `2^16 mod q` lands. 3889, 9721 and 19441 clear it;
+/// 17497, whose `R` is 13045, does not and folds twice ([`acc_after_hsum`]).
+pub const fn hsum_double(q: u16) -> bool {
+    8 * acc_after_reduce(q) > i32::MAX as i64
+}
+
+/// Bound on a lane going into the eight-lane sum of [`hsum8`]. A second fold-back of a lane at
+/// `|x| <= A` leaves `|l| <= 2^15` and `|h + c| <= A / 2^16 + 1`, so `2^15 + (A / 2^16 + 1) R`.
+pub const fn acc_after_hsum(q: u16) -> i64 {
+    let a = acc_after_reduce(q);
+    if hsum_double(q) {
+        32768 + (a / 65536 + 1) * r16(q) as i64
+    } else {
+        a
+    }
+}
+
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!(8 * acc_after_hsum(QS[i]) <= i32::MAX as i64);
+        assert!(8 * acc_after_hsum(QS_LARGE[i]) <= i32::MAX as i64);
+        assert!(8 * acc_after_hsum(QS_QUAD[i]) <= i32::MAX as i64);
+        i += 1;
+    }
+};
+const _: () = assert!(8 * acc_after_hsum(QS_QUAD[2]) <= i32::MAX as i64);
+const _: () = assert!(!hsum_double(3889) && !hsum_double(9721) && !hsum_double(19441));
+const _: () = assert!(hsum_double(17497));
+
 /// The 16 lane-group sums of 8 consecutive accumulator vectors: lane `2k` is the sum of lanes
 /// 0..8 of vector `k`, lane `2k + 1` the sum of its lanes 8..16, each folded back first.
 ///
@@ -332,7 +381,14 @@ unsafe fn hs<const S: usize>(a: __m512i, b: __m512i) -> __m512i {
 /// `p` must be 64-byte aligned and cover 8 vectors.
 #[inline(always)]
 unsafe fn hsum8<const Q: u16>(p: *const i32) -> __m512i {
-    let v = |k: usize| reduce_vec::<Q>(_mm512_load_si512(p.add(16 * k) as *const __m512i));
+    let v = |k: usize| {
+        let x = reduce_vec::<Q>(_mm512_load_si512(p.add(16 * k) as *const __m512i));
+        if hsum_double(Q) {
+            reduce_vec::<Q>(x)
+        } else {
+            x
+        }
+    };
     let r0 = hs::<0>(v(0), v(1));
     let r1 = hs::<0>(v(2), v(3));
     let r2 = hs::<0>(v(4), v(5));
@@ -884,6 +940,14 @@ impl Scratch {
     }
 }
 
+/// Which binary kernel a splitting prime runs, as an associated const so that only that one is
+/// instantiated (a bare `const fn` call is not folded before the branches are emitted).
+struct Kernel<const Q: u16>;
+
+impl<const Q: u16> Kernel<Q> {
+    const LARGE: bool = vl::is_large(Q);
+}
+
 /// One split limb's batch, with the transform kept when `out` is given.
 ///
 /// # Safety
@@ -898,13 +962,15 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     out: *mut i16,
     done: usize,
 ) {
-    if KEEP {
-        vb::ntt_bin_batch32_sink::<Q, _>(
-            idx,
-            &mut MacKeep::<PF> { buf, a, apf, acc, out },
-        );
-    } else {
-        vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc });
+    match (KEEP, Kernel::<Q>::LARGE) {
+        (true, false) => {
+            vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut MacKeep::<PF> { buf, a, apf, acc, out })
+        }
+        (false, false) => vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc }),
+        (true, true) => {
+            vl::ntt_bin_batch32_sink::<Q, _>(idx, &mut MacKeep::<PF> { buf, a, apf, acc, out })
+        }
+        (false, true) => vl::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc }),
     }
     if done % red_period(Q) == 0 {
         reduce_acc::<Q>(acc);
@@ -946,8 +1012,8 @@ pub fn commit_limbs_into(
     unsafe { commit_limbs_core(elems, limbs, keep, st, out) };
 }
 
-/// The base limb and the four [`crate::Modulus`]s: the widest limb list there is.
-pub const MAX_LIMBS: usize = 5;
+/// The base limb and the six [`crate::Modulus`]s: the widest limb list there is.
+pub const MAX_LIMBS: usize = 7;
 
 /// One limb, resolved: everything the batch loop needs as plain words, so that the loop does not
 /// walk a `Vec` of boxed accumulators per batch.
@@ -1025,6 +1091,8 @@ unsafe fn commit_limbs_core(
             LimbAcc::Split(a) => match l.q {
                 3889 => finish::<3889>(a),
                 9721 => finish::<9721>(a),
+                17497 => finish::<17497>(a),
+                19441 => finish::<19441>(a),
                 _ => unreachable!(),
             },
             LimbAcc::Quad(a) => match l.q {
@@ -1081,6 +1149,10 @@ unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
                     (3889, false) => split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
                     (9721, true) => split_batch::<9721, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
                     (9721, false) => split_batch::<9721, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (17497, true) => split_batch::<17497, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (17497, false) => split_batch::<17497, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (19441, true) => split_batch::<19441, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (19441, false) => split_batch::<19441, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
                     _ => unreachable!("no splitting kernel for q = {}", r.q),
                 }
             }

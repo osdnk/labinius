@@ -9,13 +9,17 @@ use Modulus::*;
 const MATRIX_SEED: [u8; 32] = [41u8; 32];
 const WITNESS_SEED: [u8; 32] = [43u8; 32];
 
-const LISTS: [&[Modulus]; 6] = [
+const LISTS: [&[Modulus]; 10] = [
     &[],
     &[Q9721],
     &[Q2917],
     &[Q4861, Q12637],
     &[Q2917, Q4861, Q9721, Q12637],
     &[Q12637, Q2917],
+    &[Q17497],
+    &[Q19441],
+    &[Q9721, Q19441],
+    &[Q2917, Q9721, Q17497, Q19441],
 ];
 
 /// One round over `extra_moduli`, returning the commitment's modulus list and the two verdicts.
@@ -104,4 +108,5 @@ fn every_moduli_list_rejects_a_corrupted_opening() {
 fn the_modulus_order_is_the_one_the_list_gives() {
     assert_eq!(round(&[Q12637, Q2917], None).0, vec![3889, 12637, 2917]);
     assert_eq!(round(&[Q2917, Q12637], None).0, vec![3889, 2917, 12637]);
+    assert_eq!(round(&[Q19441, Q17497], None).0, vec![3889, 19441, 17497]);
 }

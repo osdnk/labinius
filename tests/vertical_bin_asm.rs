@@ -10,6 +10,7 @@ use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_asm as vb;
+use bin_ntt::simd::vertical_bin_large as vl;
 use bin_ntt::types::*;
 
 // ------------------------------------------------------------------ inputs
@@ -326,7 +327,7 @@ fn kernel_9721() {
 /// where the two-multiply `barrett_i16` only guarantees 0.809 q.
 #[test]
 fn barrett_lut_exhaustive() {
-    for &q in QS.iter() {
+    for &q in QS.iter().chain(QS_LARGE.iter()) {
         let (mut worst, mut worst_mul) = (0i32, 0i32);
         for a in i16::MIN..=i16::MAX {
             let r = vb::barrett_lut_i16(a, q);
@@ -336,10 +337,12 @@ fn barrett_lut_exhaustive() {
                 (r as i32).rem_euclid(q as i32),
                 "q={q} a={a}"
             );
-            // the correction really is a multiple of q that fits in i16 (no wraparound)
-            let corr = vb::barrett_lut_corr(((a >> 11) & 31) as usize, q) as i32;
-            assert_eq!(corr % q as i32, 0);
-            assert_eq!(a as i32 + corr, r as i32, "q={q} a={a}: i16 addition wrapped");
+            // the correction really is a multiple of q, and the i16 addition is the one the
+            // kernel does — above 2^14, `-k q` itself can leave i16 (k reaches 2 at 17497) and
+            // only the result has to land back inside it, which the residue check above pins
+            let corr = vb::barrett_lut_corr(((a >> 11) & 31) as usize, q);
+            assert_eq!((a as i32 - r as i32) % q as i32, 0);
+            assert_eq!(a.wrapping_add(corr), r, "q={q} a={a}");
             worst = worst.max((r as i32).abs());
             worst_mul = worst_mul.max((barrett_i16(a, q) as i32).abs());
         }
@@ -351,6 +354,11 @@ fn barrett_lut_exhaustive() {
         assert!(worst < q as i32);
         if q == 9721 {
             assert_eq!(worst, 5625);
+        }
+        // what `vertical_bin_large` reduces to, and what its `barrett_lut_max` sweep returns
+        if vl::is_large(q) {
+            assert_eq!(worst, vl::barrett_lut_max(q));
+            assert!(worst as f64 / q as f64 <= 0.532);
         }
     }
 }

@@ -34,9 +34,11 @@
 //! `vertical_gen_quad` for a quadratic-slot one) and recomputes `A v`.
 use crate::api::{components_of, AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::challenge::ShortChallenge;
-use crate::params::N;
+use crate::params::{N, QS_LARGE};
 use crate::simd::commit as cm;
+use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
+use crate::simd::vertical_gen_large as vgl;
 use crate::simd::vertical_gen_quad::{self as vgq, ntt_quad_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
@@ -73,13 +75,26 @@ const fn fits(q: u16, p: usize) -> bool {
 const _: () = assert!(fits(Q1, FOLD_PERIOD));
 const _: () = assert!(!fits(Q1, 2 * FOLD_PERIOD));
 
-/// `y = A v` accumulates `len_ring/32` batches of `|v| <= (q-1)/2` against `|A| <= (q-1)/2`, four
-/// products per lane, and never folds back; 8 batches of `q = 9721` is `8 * 4 * 4860^2 < 2^31`.
-const fn av_fits(q: u16, batches: usize) -> bool {
-    (batches as i64) * 4 * cm::a_bound(q) * cm::a_bound(q) <= i32::MAX as i64
+/// Batches of `A v` between two fold-backs of a splitting limb's accumulator: both operands are
+/// centered, so a lane grows by `4 ((q-1)/2)^2` per batch. 128 for 3889 and 32 for 9721, where
+/// the whole product used to run unreduced over the eight batches of the basic shape; 4 for the
+/// two primes above `2^14`, which is what forces the fold-back to exist at all.
+pub const fn av_period(q: u16) -> usize {
+    cm::period_for(q, 4 * cm::a_bound(q) * cm::a_bound(q))
 }
-const _: () = assert!(av_fits(Q2, 8));
-const _: () = assert!(av_fits(Q1, 8));
+
+const fn av_fits(q: u16) -> bool {
+    cm::acc_after_reduce(q) + (av_period(q) as i64) * 4 * cm::a_bound(q) * cm::a_bound(q)
+        <= i32::MAX as i64
+}
+const _: () = {
+    let mut i = 0;
+    while i < 2 {
+        assert!(av_fits(PRIMES[i]) && av_period(PRIMES[i]) >= 1);
+        assert!(av_fits(QS_LARGE[i]) && av_period(QS_LARGE[i]) >= 1);
+        i += 1;
+    }
+};
 
 // =============================================================================================
 // small vector helpers
@@ -120,6 +135,8 @@ pub const fn gen_bound(q: u16) -> i32 {
         13231
     } else if q == 9721 {
         20652
+    } else if vl::is_large(q) {
+        vgl::output_bound(q)
     } else {
         vgq::output_bound(q)
     }
@@ -128,7 +145,9 @@ const _: () = assert!(gen_bound(3889) == vg::Tw::<3889>::OUTPUT_BOUND);
 const _: () = assert!(gen_bound(9721) == vg::Tw::<9721>::OUTPUT_BOUND);
 
 /// The shift [`center_epi16`] uses: the smallest power of two `K` with `K q >= gen_bound(q)`
-/// (4 for 3889 and 9721 and 4861, 8 for 2917, 2 for 12637).
+/// (4 for 3889, 9721 and 4861, 8 for 2917, 2 for 12637, and 1 for 17497 and 19441, whose generic
+/// kernel reduces its own output for exactly this reason: at `q = 19441` even `K = 2` puts
+/// `K q + gen_bound` outside a u16 lane).
 pub const fn center_k(q: u16) -> u32 {
     let mut k = 1u32;
     while (k * q as u32) < gen_bound(q) as u32 {
@@ -143,6 +162,8 @@ const fn center_fits(q: u16) -> bool {
 }
 const _: () = assert!(center_fits(3889) && center_fits(9721));
 const _: () = assert!(center_fits(2917) && center_fits(4861) && center_fits(12637));
+const _: () = assert!(center_fits(QS_LARGE[0]) && center_fits(QS_LARGE[1]));
+const _: () = assert!(center_k(QS_LARGE[0]) == 1 && center_k(QS_LARGE[1]) == 1);
 
 /// `x mod q` centered into `[-(q-1)/2, (q-1)/2]` for 32 i16 lanes with `|x| <= K q`: shift by
 /// `K q` into `[0, 2 K q) < 2^16`, `log2 K + 1` unsigned conditional subtracts, then the
@@ -214,14 +235,36 @@ fn embed(challenges: &[ShortChallenge]) -> Vec<Batch32> {
     out
 }
 
+/// Which generic-input kernel a splitting prime runs, as an associated const so the choice is
+/// made before the branches are emitted.
+struct Gen<const Q: u16>;
+
+impl<const Q: u16> Gen<Q> {
+    const LARGE: bool = vl::is_large(Q);
+}
+
+/// `NTT(b)` for a splitting prime, fully reduced and centered: `vertical_gen` below `2^14`,
+/// `vertical_gen_large` above it.
+///
+/// # Safety
+/// AVX-512 F/BW/VL/VBMI; `b` holds coefficients with `|x| <= q`.
+#[inline(always)]
+unsafe fn forward_split<const Q: u16>(b: &mut Batch32) {
+    if Gen::<Q>::LARGE {
+        vgl::ntt_gen_batch32::<Q>(b);
+    } else {
+        ntt_gen_batch32::<Q>(b);
+    }
+    center_batch::<Q>(b);
+}
+
 /// Transform the embedded challenges modulo `Q` and fully reduce them to centered slots, which is
 /// what the accumulation bound of [`FOLD_PERIOD`] assumes.
 pub(crate) fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
     let mut bs = slots(challenges);
     unsafe {
         for b in bs.iter_mut() {
-            ntt_gen_batch32::<Q>(b);
-            center_batch::<Q>(b);
+            forward_split::<Q>(b);
         }
     }
     pack(&bs, challenges.len())
@@ -249,6 +292,8 @@ pub(crate) fn challenge_ntt_limb(
     match (q, quad) {
         (3889, false) => challenge_ntt::<3889>(challenges),
         (9721, false) => challenge_ntt::<9721>(challenges),
+        (17497, false) => challenge_ntt::<17497>(challenges),
+        (19441, false) => challenge_ntt::<19441>(challenges),
         (2917, true) => challenge_ntt_quad::<2917>(challenges),
         (4861, true) => challenge_ntt_quad::<4861>(challenges),
         (12637, true) => challenge_ntt_quad::<12637>(challenges),
@@ -418,8 +463,8 @@ fn accumulate(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
 // =============================================================================================
 
 /// `y[u] = sum_i A_i[u] v_i[u] mod q`, the commitment of the folded witness, on the commitment's
-/// own packed accumulator: `|v| <= (q-1)/2` and `|A| <= (q-1)/2`, so no fold-back is needed
-/// (`av_fits`).
+/// own packed accumulator: `|v| <= (q-1)/2` and `|A| <= (q-1)/2`, folded back every
+/// [`av_period`] batches.
 pub(crate) fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
     assert_eq!(a.len(), v.len());
     let mut acc = cm::Acc::zero();
@@ -428,6 +473,9 @@ pub(crate) fn a_times_v<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] 
         for b in 0..a.len() {
             let ar = a[b].v.as_ptr() as *const i16;
             cm::mac_batch::<false>(v[b].v.as_ptr() as *const i16, ar, ar as *const i8, ap);
+            if (b + 1) % av_period(Q) == 0 {
+                cm::reduce_acc::<Q>(ap);
+            }
         }
     }
     cm::finish::<Q>(&acc)
@@ -454,7 +502,7 @@ pub(crate) fn a_times_v_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32
                 p01,
                 p2,
             );
-            if (b + 1) % av_period(Q) == 0 {
+            if (b + 1) % av_period_quad(Q) == 0 {
                 cm::reduce_quad_acc::<Q>(&mut acc);
             }
         }
@@ -465,7 +513,7 @@ pub(crate) fn a_times_v_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32
 /// Batches of `A v` between two fold-backs of a quadratic limb's accumulators: both operands are
 /// centered (`(q-1)/2`), so the widest lane grows by `16 ((q-1)/2)^2` per batch (the Karatsuba
 /// `P_2`) or `8 ((q-1)/2)^2` (the schoolbook one).
-pub const fn av_period(q: u16) -> usize {
+pub const fn av_period_quad(q: u16) -> usize {
     let per = if cm::karatsuba(q) {
         16 * cm::a_bound(q) * cm::a_bound(q)
     } else {
@@ -473,7 +521,8 @@ pub const fn av_period(q: u16) -> usize {
     };
     cm::period_for(q, per)
 }
-const _: () = assert!(av_period(2917) >= 1 && av_period(4861) >= 1 && av_period(12637) >= 1);
+const _: () = assert!(av_period_quad(2917) >= 1 && av_period_quad(4861) >= 1);
+const _: () = assert!(av_period_quad(12637) >= 1);
 
 
 // =============================================================================================
@@ -543,14 +592,10 @@ pub(crate) fn forward_limb(q: u16, quad: bool, bs: &mut [Batch32]) {
         for b in bs.iter_mut() {
             b.representation = Representation::Coefficients;
             match (q, quad) {
-                (3889, false) => {
-                    ntt_gen_batch32::<3889>(b);
-                    center_batch::<3889>(b);
-                }
-                (9721, false) => {
-                    ntt_gen_batch32::<9721>(b);
-                    center_batch::<9721>(b);
-                }
+                (3889, false) => forward_split::<3889>(b),
+                (9721, false) => forward_split::<9721>(b),
+                (17497, false) => forward_split::<17497>(b),
+                (19441, false) => forward_split::<19441>(b),
                 (2917, true) => {
                     ntt_quad_gen_batch32::<2917>(b);
                     center_batch::<2917>(b);
@@ -574,6 +619,8 @@ pub(crate) fn a_times_v_limb(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -
     match (q, quad) {
         (3889, false) => a_times_v::<3889>(a, v),
         (9721, false) => a_times_v::<9721>(a, v),
+        (17497, false) => a_times_v::<17497>(a, v),
+        (19441, false) => a_times_v::<19441>(a, v),
         (2917, true) => a_times_v_quad::<2917>(a, v),
         (4861, true) => a_times_v_quad::<4861>(a, v),
         (12637, true) => a_times_v_quad::<12637>(a, v),
