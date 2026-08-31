@@ -165,6 +165,11 @@ fn main() {
         "ms",
     );
     row(
+        "decode the opening",
+        [None, Some(off_verifier.decode), None],
+        "ms",
+    );
+    row(
         "BaseFold / our opening",
         [Some(stock_basefold), Some(off_verifier.opening), Some(on_verifier.opening)],
         "ms",

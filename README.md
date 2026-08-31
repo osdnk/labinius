@@ -90,29 +90,36 @@ exceeds its cap — about one round in twenty — and the caller retries with fr
 ## Runtime
 
 `Params::basic()` — 2^18 `F162` = 2^16 ring elements of `R_648` in 256 columns, moduli 3889 and
-9721 — on one core of an i7-11850H, wall clock, best of 3 except the steps that consume what they
-are given, which run once.
+9721 — on one core of an i7-11850H, wall clock, median of 3 except the steps that consume what
+they are given, which run once.
 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit` | 13.09 |
+| `commit` | 13.10 |
 | `row_evaluate` | 0.28 |
-| `fold` | 4.41 |
-| *total* | *17.77* |
+| `fold` | 4.45 |
+| *total* | *17.83* |
 | **statement** | |
-| `derive_evaluation_point` | 0.51 |
-| `mle_evaluate` | 0.28 |
+| `derive_evaluation_point` | 0.50 |
+| `mle_evaluate` | 0.30 |
 | *total* | *0.80* |
 | **verifier** | |
 | `derive_folding_challenges` | 1.12 |
-| `fold_commitment` | 0.30 |
+| `decode` | 1.91 |
+| `fold_commitment` | 0.31 |
 | `fold_row_evaluation` | 0.00 |
 | `verify_evaluation` | 0.01 |
 | `verify_folded_opening` | 0.31 |
-| *total* | *1.74* |
+| *total* | *3.66* |
 
-The wire is 648 KB of commitment, 6 KB of row evaluation and 324 KB of folded witness.
+The wire is 526.5 KB of commitment, 5.1 KB of row evaluation and 156.0 KB of folded witness —
+687.6 KB in all, measured on the encodings themselves rather than assumed. `decode` is the
+verifier reading all three back off the wire; everything after it in the table runs against the
+decoded objects, so the round trip is on the binary's real path. The commitment is `ceil(log2 q)`
+bits a slot and the row evaluation 162 bits an `F162`, both of which are the entropy of uniform
+data; the fold is entropy-coded against its own histogram, which is where the 2.1x comes from
+(see the last implementation note).
 
 The same shape with the recursion on. `PublicParameters::from_seed` additionally inverts the key
 rows, blocks them, converts the 221 184 key-time `phi` and the nine-bit pattern table to `polx`,
@@ -122,40 +129,46 @@ and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 17.16 |
-| `row_evaluate` | 0.29 |
-| `commit_left_expansion` | 0.25 |
-| `prove_opening` | 218.87 |
-| — fold | 4.56 |
-| — encoding | 18.26 |
-| — `T_R` | 1.93 |
-| — masks | 1.99 |
-| — constraint `phi` | 2.40 |
-| — statement build | 7.39 |
-| — `labrador::prove` | 158.84 |
-| *total* | *236.55* |
+| `commit`, including `T_Y` | 16.62 |
+| `row_evaluate` | 0.28 |
+| `commit_left_expansion` | 0.26 |
+| `prove_opening` | 223.87 |
+| — fold | 4.49 |
+| — encoding | 20.86 |
+| — `T_R` | 2.55 |
+| — masks | 4.79 |
+| — constraint `phi` | 2.35 |
+| — statement build | 14.21 |
+| — `labrador::prove` | 171.36 |
+| *total* | *241.03* |
 | **statement** | |
-| `derive_evaluation_point` | 0.00 |
-| `mle_evaluate` | 0.30 |
-| *total* | *0.30* |
+| `derive_evaluation_point` | 0.01 |
+| `mle_evaluate` | 0.33 |
+| *total* | *0.34* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.21 |
-| statement rebuild | 16.53 |
-| — layout | 1.37 |
-| — no-wrap bound | 2.36 |
-| — constraint `phi` | 2.40 |
-| — statement build | 7.39 |
-| `labrador::verify` | 103.94 |
-| *total* | *121.70* |
+| `derive_folding_challenges` | 1.22 |
+| statement rebuild | 16.69 |
+| — layout | 1.67 |
+| — no-wrap bound | 2.21 |
+| — constraint `phi` | 2.37 |
+| — statement build | 7.86 |
+| `labrador::verify` | 102.92 |
+| *total* | *120.83* |
+
+Both breakdowns are the wall clock of the run that produced the proof: `prove_opening` returns
+its stage timings with the proof and `verify_opening` returns its own, so each side does its work
+exactly once and the parts add up to the whole they were measured inside. The indented rows are
+therefore cold — the prover's `masks` and `statement build` cost twice what a second, warm pass
+at them would say.
 
 The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
-LaBRADOR's own 71.2 KB, against 978 KB in the clear. Per proof the constraint `phi` take 1 MB on
-top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident set of one round in
-each mode is 294 MB.
+LaBRADOR's own 71.2 KB, against 687.6 KB in the clear. Per proof the constraint `phi` take 1 MB
+on top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident set of one round
+in each mode is 291 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
-`commit` 49.6 -> 17.0, `prove_opening` 526.4 -> 218.9 and the verifier 287.8 -> 121.7 ms. Inside
-LaBRADOR (300 -> 159 ms proving, 222 -> 104 ms verifying, transcript-neutral): the inner products
+`commit` 49.6 -> 16.6, `prove_opening` 526.4 -> 223.9 and the verifier 287.8 -> 120.8 ms. Inside
+LaBRADOR (300 -> 171 ms proving, 222 -> 103 ms verifying, transcript-neutral): the inner products
 as a VNNI double schoolbook with two exact products per `vpdpwssd` and a per-call reduction
 chunk (Lazer's random-walk chunk on the prover's honest data, the worst-case chunk wherever a
 kernel reads the proof), the chain `phi`
@@ -208,34 +221,39 @@ per-stage numbers read off binius64's own `INFO` phase spans. Everything is one 
 binius64's `rayon` feature is off by default, so its reductions are single-threaded too.
 
 ```
-                                      stock    recursion    recursion
-                                   binius64          off           on
+                                          stock    recursion    recursion
+                                       binius64          off           on
+
 SETUP (once, not per proof)
-  circuit                           1061.82      1061.82      1061.82 ms
-  commitment key and constraints     702.52       665.51       684.79 ms
+  circuit                               1051.17      1051.17      1051.17 ms
+  commitment key and constraints         701.08       664.17       687.53 ms
+
 PROVER
-  witness                              4.65         4.65         4.65 ms
-  packing                                 —         0.60         0.71 ms
-  commit                              12.61        13.47        17.34 ms
-  BitAnd check                        32.31        31.62        34.15 ms
-  shift reduction                     75.44        72.86        73.50 ms
-  ring-switch / cross-field switch     4.40        15.17        15.20 ms
-  opening                                 —         6.18       178.64 ms
-  rest                                 4.45         1.49         0.56 ms
-  total                              129.21       141.40       320.09 ms
+  witness                                  4.59         4.59         4.59 ms
+  packing                                     —         0.66         0.73 ms
+  commit                                  12.41        13.43        17.33 ms
+  BitAnd check                            32.03        32.12        32.28 ms
+  shift reduction                         73.55        73.23        74.05 ms
+  ring-switch / cross-field switch         4.40        16.45        15.32 ms
+  opening                                     —         7.13       179.99 ms
+  rest                                     4.43         1.40         0.53 ms
+  total                                  126.83       144.42       320.22 ms
+
 VERIFIER
-  read the commitment                     —         0.67         0.01 ms
-  reductions                           0.40         0.45         0.42 ms
-  ring-switch / cross-field switch     0.00         0.30         0.29 ms
-  BaseFold / our opening               0.44         2.14       102.21 ms
-  wiring check (native)               41.84        42.21        41.80 ms
-  total                               43.09        45.90       144.80 ms
+  read the commitment                         —         0.65         0.01 ms
+  reductions                               0.37         0.41         0.40 ms
+  ring-switch / cross-field switch         0.00         0.31         0.33 ms
+  decode the opening                          —         0.88            — ms
+  BaseFold / our opening                   0.46         1.99       101.84 ms
+  wiring check (native)                   41.76        42.17        41.93 ms
+  total                                   43.03        46.54       144.58 ms
+
 SIZES
-  binius64 LIOP                           —         5.84         5.84 KB
-  cross-field switch                      —         3.12         3.12 KB
-  commitment (wire form)                  —       648.00         4.12 KB
-  opening                                 —       330.02        75.60 KB
-  total                              243.83       986.99        88.69 KB
+  binius64 LIOP                               —         5.84         5.84 KB
+  cross-field switch                          —         3.12         3.12 KB
+  commitment (wire form)                      —       526.50         4.12 KB
+  opening                                     —       167.10        75.60 KB
+  total                                  243.83       702.57        88.69 KB
 ```
 
 `wiring check (native)` is `WiringEvalClaim::check_native`, which discharges the shift
@@ -245,8 +263,13 @@ column alike, because it is binius64's own step on binius64's own data; the redu
 are 0.4 ms on both paths. It is written as a `par_iter`, so it is 42 ms only because
 `binius-utils/rayon` is off and the process is pinned to one core.
 
-The commitment sizes are the canonical wire form; `T_Y` travels on the tape as its `polx` image,
-which is 11.0 KB. The stock total is its whole proof tape.
+The commitment sizes are the canonical wire form — `ceil(log2 q)` bits a slot, the bit-packing of
+`wire`; `T_Y` travels on the tape as its `polx` image, which is 11.0 KB. The recursion-off
+`opening` is `wire`'s too, measured on the bytes themselves: the claimed value at 21 bytes, the
+row evaluation bit-packed and the folded witness entropy-coded, 167.10 KB against the 330.02 the
+same three take at two bytes a coefficient. `decode the opening` is the verifier reading the last
+two back off the wire, and the rows under it in that column check what it decoded. The stock
+total is its whole proof tape.
 
 ## Running it
 
@@ -361,8 +384,8 @@ ones. `cargo run` prints both modes.
   is the fold-back period, which each prime's `|W| |c|` fixes at compile time: 64 batches for
   2917, 32 for 3889 and 4861, 16 for 9721, 8 for 12637 and 4 for the two above `2^14`, whose
   wider `|A|` is what makes them the only ones to pay for it. At the basic shape the fold is
-  4.43 ms over 2917, 4.44 over 3889, 4.48 over 4861, 4.51 over 9721, 4.69 over 12637, 4.85 over
-  17497 and 4.84 over 19441 — a 9 % spread, all of it the fold-backs. Coming back to coefficients uses
+  4.46 ms over 2917, 4.47 over 3889, 4.48 over 4861, 4.51 over 9721, 4.70 over 12637, 4.89 over
+  17497 and 4.92 over 19441 — a 10 % spread, all of it the fold-backs. Coming back to coefficients uses
   that tree's inverse transform: `vertical_gen`'s below `2^14`, `vertical_gen_large`'s above it,
   and `vertical_gen_quad`'s for the quadratic tree, whose reduction placement is the same kind of
   `const` search as the forward kernel's (1080 lookup Barretts per batch of 32 for 2917 and 4861,
@@ -431,20 +454,21 @@ ones. `cargo run` prints both modes.
   `BLOCK_LIMIT` is 19440, and the `i16` dot product of `recursion::chain` widens its `i32` lanes
   every four `vpmaddwd` instead of every eight (worth 2 % of the block sums, nothing of a proof).
 * **The moduli, quantified.** Committing 2^18 `F162` in 256 columns modulo the base 3889 alone
-  takes 7.3 ms; each extra modulus adds its own transform, base multiplication and fold-down on
-  the shared front end (wall clock, one core, best of 15; the cycle columns are per ring element,
-  cache-resident). The name's suffix is the family: `_FS_S` fully splitting below `2^14`, `_Q_S`
+  takes 7.5 ms; each extra modulus adds its own transform, base multiplication and fold-down on
+  the shared front end (wall clock, one core, median of 15; the cycle columns are per ring
+  element, cache-resident, and are a `perf` count of a fixed number of repetitions rather than a
+  sample statistic). The name's suffix is the family: `_FS_S` fully splitting below `2^14`, `_Q_S`
   quadratic-slot, `_FS_L` fully splitting above `2^14`.
 
   | modulus | added to `commit` | transform | base multiplication | fold-down |
   |---------|------------------:|----------:|--------------------:|----------:|
-  | `Q2917_Q_S`   | +5.97 ms | 247 cycles | 74 cycles | 17 cycles |
-  | `Q4861_Q_S`   | +6.29 ms | 254 | 74 | 17 |
-  | `Q3889_FS_S` (the default base) | 7.34 ms | 280 | 58 | 7 |
-  | `Q9721_FS_S`  | +6.50 ms | 304 | 58 | 7 |
-  | `Q12637_Q_S`  | +7.19 ms | 291 | 75 | 16 |
-  | `Q17497_FS_L` | +8.13 ms | 415 | 58 | 9 |
-  | `Q19441_FS_L` | +9.83 ms | 514 | 58 | 7 |
+  | `Q2917_Q_S`   | +5.87 ms | 247 cycles | 74 cycles | 17 cycles |
+  | `Q4861_Q_S`   | +6.03 ms | 254 | 74 | 17 |
+  | `Q3889_FS_S` (the default base) | 7.49 ms | 280 | 58 | 7 |
+  | `Q9721_FS_S`  | +6.26 ms | 304 | 58 | 7 |
+  | `Q12637_Q_S`  | +6.93 ms | 291 | 75 | 16 |
+  | `Q17497_FS_L` | +8.48 ms | 415 | 58 | 9 |
+  | `Q19441_FS_L` | +10.08 ms | 514 | 58 | 7 |
 
   The front end costs 31 more cycles per ring element and is paid once however many moduli
   follow. A quadratic-slot modulus runs a shorter tree — one radix-2 level fewer, and for 2917
@@ -463,4 +487,30 @@ ones. `cargo run` prints both modes.
   `2^16 mod 17497 = 13045` is the one `R` for which eight lanes do not sum inside `i32` after one
   fold-back. 19441's transform improved by the same software pipelining as 17497's (532 to 514
   cycles) but its `commit` column did not move: what the wall clock of a limb this wide is waiting
-  on is the `A` stream, not the last 3 % of the kernel. All six extra moduli together: 47.5 ms.
+  on is the `A` stream, not the last 3 % of the kernel. All six extra moduli together: 47.2 ms.
+* **What the clear-text round puts on the wire.** `wire` codes the three messages of the
+  non-recursive mode, and `src/main.rs` prints the lengths it measures rather than a padded width.
+  The uniform objects are bit-packed: a commitment slot is a residue, so it takes `ceil(log2 q)`
+  bits per limb — 12 at 3889, 14 at 9721 — and an `F162` is a uniform 162-bit element, so the row
+  evaluation is 162 bits an element back to back, 5184 bytes for 256 rather than 6144. Those are
+  entropy floors, not compression, and nothing can go under them. The folded witness is the one
+  message with structure: `v = sum_j c_j W_j` is 256 binary columns against weight-21 ternary
+  challenges, so its coefficients sit inside `(q-1)/2 = 1944` but are a discrete Gaussian of a few
+  tens, 7.6 bits of entropy against the 16 an `i16` spends. A 32-bit rANS with 16-bit
+  renormalisation codes it against a histogram of the message itself, quantised to a total of
+  2^12 by largest remainder with every occupied symbol floored at one slot; the table covers the
+  occupied range `[offset, offset + length)` and travels in the header as Elias gamma codes of
+  `count + 1`, one bit for each empty symbol in the tails. A symbol the quantisation cannot afford
+  — which needs an adversarial fold spread over more than 4095 values of a large limb — is coded
+  as an escape followed by its index in raw bits, so any `i16` message encodes and the coder is a
+  bijection, not a heuristic. At the basic shape that is 156.0 KB for 165 888 coefficients, 0.6 %
+  above the message's own zeroth-order entropy, in 0.8 ms of encoding and 0.7 ms of decoding; the
+  verifier decodes all three objects in 1.9 ms and checks the ones it decoded. The fold's width
+  varies from round to round more than a sum of 5376 signed bits suggests, because the 256
+  challenges are shared by all 256 output ring elements: each coefficient position carries a
+  common offset, the signed sum of the challenge coefficients that land on it, whose own spread is
+  as wide as the fluctuation around it. Over the fourteen limb lists of the seven bases, with and
+  without a second limb, the measured sigma runs from 46 to 97 and the coded fold from 153.0 to
+  171.9 KB — always within 0.7 % of that message's own entropy. `keccak::Session` sends its
+  clear-text opening through the same code and decodes it on the verifier's side, which is the
+  167.10 KB of the three-column table above against 330.02 uncoded.

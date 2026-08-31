@@ -20,6 +20,8 @@
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
 //! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
 //! - `eval`    : the binary shadow of the fold over `F162`.
+//! - `wire`    : the serialisation of the clear-text round: bit-packing for the uniform objects,
+//!   a static rANS for the folded witness.
 #![allow(clippy::needless_range_loop)]
 
 pub mod api;
@@ -36,6 +38,7 @@ pub mod scalar;
 pub mod scheme;
 pub mod simd;
 pub mod types;
+pub mod wire;
 
 pub use api::Modulus;
 pub use api::PowerOfThreeRingElement as RingElement162;
@@ -44,7 +47,7 @@ pub use challenge::Transcript;
 pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
     FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, OpeningError,
-    OpeningProof, ParamError, Params, Prover, PublicParameters, RowEvaluation, VerificationError,
-    Verifier, Witness, WitnessError,
+    OpeningProof, OpeningTimings, ParamError, Params, Prover, PublicParameters, RowEvaluation,
+    VerificationError, Verifier, VerifyTimings, Witness, WitnessError,
 };
 pub use types::RingElement as RingElement648;

@@ -1,6 +1,7 @@
 //! The recursive opening: an honest round, the two sides agreeing on the statement, the tampers
 //! the relation has to catch, and the retry the fold's norm cap makes necessary.
 use std::sync::Arc;
+use std::time::Instant;
 
 use bin_ntt::labrador;
 use bin_ntt::recursion::setup::Setup;
@@ -123,6 +124,41 @@ fn an_honest_recursive_round_is_accepted() {
         assert_eq!(proof.norms().len(), round.setup.caps.len());
         assert!(proof.norms().iter().zip(&round.setup.caps).all(|(n, c)| n <= c));
     }
+}
+
+/// The stage timings the proof carries account for the run that produced it: they are the real
+/// wall clock of one proving and one verification, so each part is under its whole and the parts
+/// are most of it.
+#[test]
+fn the_stage_timings_account_for_the_run() {
+    let params = small(vec![Modulus::Q9721_FS_S]);
+    let mut round = Round::new(&params, b"bin-ntt/test/opening/timings");
+    let whole = Instant::now();
+    let proof = round.prove().expect("the honest fold is within its cap");
+    let prove = whole.elapsed();
+    let t = proof.timings();
+    let stages =
+        t.fold + t.encoding + t.witness + t.t_r + t.masks + t.phi + t.statement + t.labrador;
+    assert!(stages <= prove, "the stages outlast the proving they were measured inside");
+    assert!(stages.as_secs_f64() > 0.5 * prove.as_secs_f64(), "the stages are most of proving");
+
+    let mut transcript = round.transcript.clone();
+    let whole = Instant::now();
+    let v = round
+        .verifier
+        .verify_opening(
+            &mut transcript,
+            &round.commitment,
+            &round.left,
+            &round.point,
+            &round.claim,
+            &round.challenges,
+            &proof,
+        )
+        .expect("the honest proof verifies");
+    let verify = whole.elapsed();
+    assert!(v.layout + v.bound + v.phi + v.statement <= v.rebuild);
+    assert!(v.rebuild + v.labrador <= verify);
 }
 
 /// A recursive round over a quadratic-slot base and over one above `2^14`: the fold runs in that

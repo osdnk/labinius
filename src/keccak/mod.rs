@@ -7,9 +7,12 @@
 //! `pi1~(r'') = opened`. The opening's own transcript is then seeded from 32 bytes sampled off
 //! that channel, so every challenge it draws is bound to everything before it.
 //!
-//! The opening's own messages travel as the values of [`Opening`] rather than as bytes on that
-//! tape: `labrador::ProofHandle` is an opaque handle over the C prover's proof, so the recursive
-//! opening has no byte form to append. [`Sizes`] counts what each part would take.
+//! The opening's own messages do not go on that tape: `labrador::ProofHandle` is an opaque handle
+//! over the C prover's proof, so the recursive opening has no byte form to append, and [`Opening`]
+//! carries the two shapes side by side. The clear-text one does have a byte form and is held in
+//! it — the row evaluation bit-packed and the folded witness entropy-coded by [`crate::wire`], the
+//! same code the reference binary sends — so its column of [`Sizes`] is measured rather than
+//! assumed, and the verifier decodes what it is given before checking it.
 pub mod channel;
 pub mod circuit;
 pub mod liop;
@@ -23,6 +26,7 @@ use crate::scheme::{
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
     Witness,
 };
+use crate::wire;
 use crate::Transcript;
 use bin_fields::scalar::{B128 as SB, F162};
 use binius_compute::GlobalAllocator;
@@ -73,13 +77,15 @@ pub struct ProverTiming {
     pub total: f64,
 }
 
-/// Milliseconds of wall clock per verifier stage.
+/// Milliseconds of wall clock per verifier stage. `decode` is the clear-text opening coming off
+/// the wire, and is zero when the recursion is on, whose opening never took a byte form.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VerifierTiming {
     pub commitment: f64,
     pub reduce: f64,
     pub wiring: f64,
     pub switch: f64,
+    pub decode: f64,
     pub opening: f64,
     pub total: f64,
 }
@@ -95,7 +101,8 @@ pub struct Sizes {
     pub liop: usize,
     /// The cross-field switch: the 128 partial evaluations and the `l` round messages.
     pub switch: usize,
-    /// Our evaluation proof.
+    /// Our evaluation proof: the claimed value at its packed width, and then either the coded
+    /// row evaluation and folded witness or `T_u` and the recursive proof.
     pub opening: usize,
 }
 
@@ -107,9 +114,11 @@ impl Sizes {
 
 /// The evaluation proof, in the two shapes [`Params::recursion`] gives it.
 pub enum Opening {
+    /// The two messages as [`crate::wire`] codes them: 162 bits an `F162` of row evaluation, and
+    /// the folded witness against its own histogram.
     Clear {
-        row: RowEvaluation,
-        folded: FoldedWitness,
+        row: Vec<u8>,
+        folded: Vec<u8>,
     },
     Recursive {
         left: LeftExpansionCommitment,
@@ -241,13 +250,15 @@ impl Session {
                     &commitment,
                 )
                 .expect("the honest fold is within its cap");
-            sizes.opening = 24 + left.wire_bytes() + proof.wire_bytes();
+            sizes.opening = wire::f162_bytes(1) + left.wire_bytes() + proof.wire_bytes();
             Opening::Recursive { left, proof }
         } else {
             let challenges =
                 self.verifier.derive_folding_challenges(&mut opening_transcript, &row);
             let folded = self.prover.fold(opening, &challenges);
-            sizes.opening = 24 + row.values().len() * 24 + folded.len() * 648 * 2;
+            let row = wire::pack_row_evaluation(&row);
+            let folded = wire::encode(&folded, self.params.base.prime());
+            sizes.opening = wire::f162_bytes(1) + row.len() + folded.len();
             Opening::Clear { row, folded }
         };
         timing.opening = milliseconds(start);
@@ -311,15 +322,20 @@ impl Session {
         ));
         let point = EvaluationPoint::msb_first(&self.params, &check.r_pp);
 
-        let start = Instant::now();
+        let mut start = Instant::now();
         match &proof.opening {
             Opening::Clear { row, folded } => {
+                let reject = |_| Error::Opening(VerificationError::Rejected);
+                let row = wire::unpack_row_evaluation(row, self.params.columns()).map_err(reject)?;
+                let folded = wire::decode(folded).map_err(reject)?;
+                timing.decode = milliseconds(start);
+                start = Instant::now();
                 let challenges =
-                    self.verifier.derive_folding_challenges(&mut opening_transcript, row);
+                    self.verifier.derive_folding_challenges(&mut opening_transcript, &row);
                 self.verifier
-                    .verify_evaluation(&point, &proof.claimed_value, row)
+                    .verify_evaluation(&point, &proof.claimed_value, &row)
                     .map_err(Error::Opening)?;
-                self.check_fold(&commitment, &challenges, row, folded, &point)
+                self.check_fold(&commitment, &challenges, &row, &folded, &point)
                     .map_err(Error::Opening)?;
             }
             Opening::Recursive { left, proof: opening } => {

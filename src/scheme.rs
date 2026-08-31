@@ -43,6 +43,7 @@ use crate::{eval, RingElement162, RingElement648};
 use bin_fields::scalar::F162;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// log2 of the shortest column: one `Batch32` is 32 ring elements of `R_648` = 128 `F162`, and
 /// the kernels commit to a whole number of those.
@@ -352,6 +353,11 @@ pub enum CommitmentValue {
 }
 
 impl Commitment {
+    /// A commitment from its parts, for [`crate::wire`].
+    pub fn of(primes: Vec<u16>, columns: usize, value: CommitmentValue) -> Commitment {
+        Commitment { primes, columns, value }
+    }
+
     pub fn rows(&self) -> usize {
         4
     }
@@ -455,10 +461,11 @@ impl Commitment {
         })
     }
 
-    /// Bytes on the wire: `LOGQ`-bit coefficients for `T_Y`, `i16` slots for the matrix.
+    /// Bytes on the wire: `LOGQ`-bit coefficients for `T_Y`, `ceil(log2 q)`-bit slots for the
+    /// matrix, which is what [`crate::wire::pack_commitment`] writes.
     pub fn wire_bytes(&self) -> usize {
         match &self.value {
-            CommitmentValue::Matrix(m) => 4 * m.cols() * self.primes.len() * N162 * 2,
+            CommitmentValue::Matrix(m) => crate::wire::commitment_bytes(&self.primes, m.cols()),
             CommitmentValue::Recursive(t) => t.len() * labrador::N * labrador::logq().div_ceil(8),
         }
     }
@@ -535,6 +542,11 @@ pub struct RowEvaluation {
 }
 
 impl RowEvaluation {
+    /// A row evaluation from its values, for [`crate::wire`].
+    pub fn of(values: Vec<F162>) -> RowEvaluation {
+        RowEvaluation { values }
+    }
+
     pub fn values(&self) -> &[F162] {
         &self.values
     }
@@ -580,6 +592,11 @@ pub struct FoldedWitness {
 }
 
 impl FoldedWitness {
+    /// A fold from its elements, for [`crate::wire`].
+    pub fn of(elements: Vec<RingElement648>) -> FoldedWitness {
+        FoldedWitness { elements }
+    }
+
     pub fn elements(&self) -> &[RingElement648] {
         &self.elements
     }
@@ -664,11 +681,49 @@ pub struct OpeningProof {
     t_r: Arc<PolxBuf>,
     norms: Vec<u64>,
     proof: labrador::ProofHandle,
+    timings: OpeningTimings,
+    phi_bytes: usize,
+}
+
+/// Wall clock of each stage of [`Prover::prove_opening`], measured on the run that produced the
+/// proof, so that a caller reporting a breakdown does not have to prove twice.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct OpeningTimings {
+    pub fold: Duration,
+    pub encoding: Duration,
+    pub witness: Duration,
+    pub t_r: Duration,
+    pub masks: Duration,
+    pub phi: Duration,
+    pub statement: Duration,
+    pub labrador: Duration,
+}
+
+/// The same for [`Verifier::verify_opening`]; `rebuild` is the whole statement rebuild, of which
+/// `layout`, `bound`, `phi` and `statement` are the four measured parts.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct VerifyTimings {
+    pub rebuild: Duration,
+    pub layout: Duration,
+    pub bound: Duration,
+    pub phi: Duration,
+    pub statement: Duration,
+    pub labrador: Duration,
 }
 
 impl OpeningProof {
     pub fn t_r(&self) -> &Arc<PolxBuf> {
         &self.t_r
+    }
+
+    /// What each stage of the proving run cost.
+    pub fn timings(&self) -> &OpeningTimings {
+        &self.timings
+    }
+
+    /// Bytes the per-proof constraint `phi` took.
+    pub fn phi_footprint(&self) -> usize {
+        self.phi_bytes
     }
 
     /// The LaBRADOR proof itself, for a caller that verifies it against a statement it holds.
@@ -857,7 +912,10 @@ impl Prover {
         let setup = self.setup.clone().expect("recursion is off");
         let CommitmentOpening { aux, residues } = opening;
         let residues = residues.expect("the opening holds no residues");
+        let mut timings = OpeningTimings::default();
+        let clock = Instant::now();
         let folded = self.fold(CommitmentOpening { aux, residues: None }, challenges);
+        timings.fold = clock.elapsed();
         let normsq: u64 =
             folded.elements.iter().flat_map(|e| e.v).map(|x| (x as i64 * x as i64) as u64).sum();
         let cap = setup.fold_cap as u64;
@@ -865,28 +923,43 @@ impl Prover {
             return Err(OpeningError::FoldTooLong { normsq, cap });
         }
 
+        let clock = Instant::now();
         let instance =
             recursion::Instance::new(&setup, &residues, &folded, row, challenges, point, claimed_value);
+        timings.encoding = clock.elapsed();
+        let clock = Instant::now();
         let witness = instance.witness();
+        timings.witness = clock.elapsed();
         let norms: Vec<u64> = instance.vectors.iter().map(|v| v.betasq()).collect();
         let rest: Vec<&[i16]> = setup.rest.iter().map(|&i| witness.vectors[i].as_slice()).collect();
+        let clock = Instant::now();
         let t_r = Arc::new(setup.key_r.commit_blocks(&rest));
+        timings.t_r = clock.elapsed();
 
         absorb_opening(transcript, claimed_value, &t_r, &norms);
+        let clock = Instant::now();
         let masks = recursion::statement::Masks::squeeze(&setup, transcript);
+        timings.masks = clock.elapsed();
         let digest = statement_digest(transcript);
+        let clock = Instant::now();
         let phi = recursion::statement::ProofPhi::new(&setup, &instance);
+        timings.phi = clock.elapsed();
+        let phi_bytes = phi.footprint();
         let opening = recursion::statement::Opening {
             t_y: commitment.t_y(),
             t_u: &left.t_u,
             t_r: &t_r,
             norms: &norms,
         };
+        let clock = Instant::now();
         let statement =
             recursion::statement::build(&setup, &instance, &phi, opening, masks, digest);
+        timings.statement = clock.elapsed();
+        let clock = Instant::now();
         let proof = labrador::prove(&statement, &labrador::Witness::new(witness.vectors))
             .map_err(OpeningError::Labrador)?;
-        Ok(OpeningProof { t_r, norms, proof })
+        timings.labrador = clock.elapsed();
+        Ok(OpeningProof { t_r, norms, proof, timings, phi_bytes })
     }
 }
 
@@ -1120,7 +1193,8 @@ impl Verifier {
 
     /// The recursive opening check: the announced norms against their caps, the no-wraparound
     /// bound of [`recursion::bound`] against `Q / 2`, and one LaBRADOR verification of the
-    /// statement rebuilt from public data alone.
+    /// statement rebuilt from public data alone. What comes back on acceptance is the wall clock
+    /// of each stage, so that a caller reporting a breakdown does not have to verify twice.
     pub fn verify_opening(
         &self,
         transcript: &mut Transcript,
@@ -1130,10 +1204,24 @@ impl Verifier {
         claimed_value: &F162,
         challenges: &FoldingChallenges,
         proof: &OpeningProof,
-    ) -> Result<(), VerificationError> {
-        let statement =
-            self.opening_statement(transcript, commitment, left, point, claimed_value, challenges, proof)?;
-        labrador::verify(&statement, &proof.proof).map_err(|_| VerificationError::Rejected)
+    ) -> Result<VerifyTimings, VerificationError> {
+        let mut timings = VerifyTimings::default();
+        let clock = Instant::now();
+        let statement = self.rebuild(
+            transcript,
+            commitment,
+            left,
+            point,
+            claimed_value,
+            challenges,
+            proof,
+            &mut timings,
+        )?;
+        timings.rebuild = clock.elapsed();
+        let clock = Instant::now();
+        labrador::verify(&statement, &proof.proof).map_err(|_| VerificationError::Rejected)?;
+        timings.labrador = clock.elapsed();
+        Ok(timings)
     }
 
     /// The statement [`verify_opening`](Self::verify_opening) hands to LaBRADOR: the same
@@ -1148,6 +1236,30 @@ impl Verifier {
         challenges: &FoldingChallenges,
         proof: &OpeningProof,
     ) -> Result<labrador::Statement, VerificationError> {
+        self.rebuild(
+            transcript,
+            commitment,
+            left,
+            point,
+            claimed_value,
+            challenges,
+            proof,
+            &mut VerifyTimings::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rebuild(
+        &self,
+        transcript: &mut Transcript,
+        commitment: &Commitment,
+        left: &LeftExpansionCommitment,
+        point: &EvaluationPoint,
+        claimed_value: &F162,
+        challenges: &FoldingChallenges,
+        proof: &OpeningProof,
+        timings: &mut VerifyTimings,
+    ) -> Result<labrador::Statement, VerificationError> {
         let setup = self.setup.as_ref().ok_or(VerificationError::Rejected)?;
         if proof.norms.len() != setup.caps.len()
             || proof.norms.iter().zip(&setup.caps).any(|(n, c)| n > c)
@@ -1157,17 +1269,27 @@ impl Verifier {
         absorb_opening(transcript, claimed_value, &proof.t_r, &proof.norms);
         let masks = recursion::statement::Masks::squeeze(setup, transcript);
         let digest = statement_digest(transcript);
+        let clock = Instant::now();
         let layout = recursion::Instance::layout(setup, challenges, point, claimed_value);
-        if !layout.clears() {
+        timings.layout = clock.elapsed();
+        let clock = Instant::now();
+        let cleared = layout.clears();
+        timings.bound = clock.elapsed();
+        if !cleared {
             return Err(VerificationError::Rejected);
         }
+        let clock = Instant::now();
         let phi = recursion::statement::ProofPhi::new(setup, &layout);
+        timings.phi = clock.elapsed();
         let opening = recursion::statement::Opening {
             t_y: commitment.t_y(),
             t_u: &left.t_u,
             t_r: &proof.t_r,
             norms: &proof.norms,
         };
-        Ok(recursion::statement::build(setup, &layout, &phi, opening, masks, digest))
+        let clock = Instant::now();
+        let statement = recursion::statement::build(setup, &layout, &phi, opening, masks, digest);
+        timings.statement = clock.elapsed();
+        Ok(statement)
     }
 }

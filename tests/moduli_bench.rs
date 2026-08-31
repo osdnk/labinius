@@ -1,7 +1,7 @@
 //! The per-modulus table of the README.
 //!
 //! `the_moduli_quantified` is the wall clock one extra modulus adds to `commit` at the
-//! `Params::basic()` shape (2^18 `F162` in 256 columns), best of 15; run it with
+//! `Params::basic()` shape (2^18 `F162` in 256 columns), median of 15; run it with
 //! `cargo test --release --offline --test moduli_bench -- --nocapture` under `taskset -c 3`.
 //!
 //! `cycles_probe` is the cycle columns. It runs one phase of one modulus `REPS` times and does
@@ -56,18 +56,24 @@ fn transform_once(idx: &BinaryIndex32, out: &mut Batch32, q: u16, quad: bool) {
     }
 }
 
+/// The median of an odd-length sample of wall milliseconds.
+fn median(mut samples: Vec<f64>) -> f64 {
+    samples.sort_by(f64::total_cmp);
+    samples[samples.len() / 2]
+}
+
 fn commit_ms(extra: &[Modulus]) -> f64 {
     let w = witness(COLUMNS * F162_PER_COLUMN);
     let key = CommitmentKey::random(F162_PER_COLUMN, 0xA11CE, Modulus::BASE, extra);
     let mut aux = AuxData::new(RING_PER_COLUMN, COLUMNS, key.limbs());
-    let mut best = f64::INFINITY;
+    let mut samples = Vec::with_capacity(15);
     for _ in 0..15 {
         let t = Instant::now();
         let m = key.commit_into_aux(&w, COLUMNS, &mut aux);
-        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        samples.push(t.elapsed().as_secs_f64() * 1e3);
         core::hint::black_box(m.get(0, 0).limbs[0].v[0]);
     }
-    best
+    median(samples)
 }
 
 /// Every modulus that is not the default base, i.e. every one it can be given as an extra limb.
@@ -186,14 +192,14 @@ fn kernel_fingerprints() {
     }
 }
 
-/// One fold at the `Params::basic()` shape over `base`, best of `reps`, in milliseconds.
+/// One fold at the `Params::basic()` shape over `base`, the median of `reps`, in milliseconds.
 fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
     let params = Params::with_base(18, 8, base, extra, false).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), [0x5A; 32]);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
     let w = Witness::random(&params, [0xC7; 32]);
-    let mut best = f64::INFINITY;
+    let mut samples = Vec::with_capacity(reps);
     for _ in 0..reps {
         let (commitment, opening) = prover.commit(&w);
         let mut transcript = Transcript::new(b"bin-ntt/bench/fold");
@@ -202,10 +208,10 @@ fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
         let start = Instant::now();
         let folded = prover.fold(opening, &challenges);
-        best = best.min(start.elapsed().as_secs_f64() * 1e3);
+        samples.push(start.elapsed().as_secs_f64() * 1e3);
         core::hint::black_box(folded.elements()[0].v[0]);
     }
-    best
+    median(samples)
 }
 
 /// The fold's wall clock at the basic shape with each modulus as the base limb. The 85 MB stream
