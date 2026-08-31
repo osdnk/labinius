@@ -517,3 +517,32 @@ ones. `cargo run` prints both modes.
   171.9 KB — always within 0.7 % of that message's own entropy. `keccak::Session` sends its
   clear-text opening through the same code and decodes it on the verifier's side, which is the
   167.10 KB of the three-column table above against 330.02 uncoded.
+
+## BaseFold baseline
+
+`src/bin/basefold.rs` runs binius64's own polynomial commitment on its own — the Merkle-committed
+oracle, the `B128` ring switch and the BaseFold opening, driven through the same IOP channel
+`Prover::prove` and `Verifier::verify` drive (`send_oracle`, `prove_oracle_relation`, `finish`),
+with no circuit anywhere — over a uniformly random vector of `2^18` `B128` at the keccak example's
+defaults: `--log-inv-rate 1`, `--hash-suite sha256`, one thread on core 3. So the row below is
+that scheme alone rather than its share of a whole proof.
+
+```
+   Comm.   Prover  Verifier        C     |pi|
+      ms       ms        ms       KB       KB
+   12.37    10.04      0.44     0.03   237.95
+```
+
+`Comm.` and `Verifier` are medians of three, the prover a single run. The prover commits, draws
+the 25-coordinate evaluation point off the transcript, evaluates the vector's bit multilinear
+there — 2.2 ms, the statement rather than the proof — and opens that claim; the verifier replays
+the same point off the same tape and closes the opening, and an opening of a vector the root does
+not bind is rejected. `C` is the Merkle root as it travels, 32 bytes, since the FRI parameters the
+verifier reads it with are public; `|pi|` is the rest of the tape, the ring switch and the batched
+BaseFold opening. The stock column of the keccak table above commits the same `2^18` trace in
+12.41 ms and verifies its BaseFold opening in 0.46 ms, which is the same scheme measured from
+inside a proof.
+
+```
+cargo run --release --offline --bin basefold   # taskset -c 3, as above
+```

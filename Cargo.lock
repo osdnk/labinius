@@ -45,6 +45,7 @@ dependencies = [
  "binius-frontend",
  "binius-hash",
  "binius-iop",
+ "binius-iop-prover",
  "binius-ip",
  "binius-ip-prover",
  "binius-math",
