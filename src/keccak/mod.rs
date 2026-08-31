@@ -145,7 +145,7 @@ impl Session {
     /// `constraint_system` must pack to exactly [`Params::witness_len`] field elements.
     pub fn new(constraint_system: ConstraintSystem, recursion: bool, matrix_seed: [u8; 32]) -> Session {
         let liop = Liop::new(constraint_system);
-        let params = Params::new(18, 8, vec![Modulus::Q9721_FS_S], recursion)
+        let params = Params::new(18, if recursion { 8 } else { 7 }, vec![Modulus::Q9721_FS_S], recursion)
             .expect("the basic shape is valid");
         assert_eq!(
             liop.log_witness_elems(),

@@ -17,7 +17,11 @@ const CPU: usize = 3;
 /// committed modulo the base modulus 3889 and every modulus listed in EXTRA_MODULI
 /// (any subset of Modulus::{Q2917_Q_S, Q4861_Q_S, Q9721_FS_S, Q12637_Q_S}).
 const WITNESS_LOG_LEN: u32 = 18;
-const COLUMN_LOG_LEN: u32 = 8;
+/// The clear-text opening ships the commitment and the folded witness, whose sizes trade at
+/// `columns` against `witness / columns`; 2^7 columns sits at that optimum. The recursion's
+/// cost grows with the column length instead, so it stays at 2^8.
+const COLUMN_LOG_LEN_CLEAR: u32 = 7;
+const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
 const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721_FS_S];
 
 extern "C" {
@@ -85,7 +89,12 @@ fn main() {
 }
 
 fn shape(recursion: bool) -> Params {
-    Params::new(WITNESS_LOG_LEN, COLUMN_LOG_LEN, EXTRA_MODULI.to_vec(), recursion)
+    Params::new(
+        WITNESS_LOG_LEN,
+        if recursion { COLUMN_LOG_LEN_RECURSIVE } else { COLUMN_LOG_LEN_CLEAR },
+        EXTRA_MODULI.to_vec(),
+        recursion,
+    )
         .expect("valid parameters")
 }
 

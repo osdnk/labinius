@@ -159,7 +159,7 @@ impl Params {
     /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
     /// the folded opening in the clear.
     pub fn basic() -> Params {
-        Params::new(18, 8, vec![Modulus::Q9721_FS_S], false).expect("the basic parameters are valid")
+        Params::new(18, 7, vec![Modulus::Q9721_FS_S], false).expect("the basic parameters are valid")
     }
 
     /// Witness length in `F162` elements.

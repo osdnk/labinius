@@ -43,10 +43,10 @@ fn params_shape() {
     let basic = Params::basic();
     assert_eq!(basic.witness_log_len, 18);
     assert_eq!(basic.base, Q3889_FS_S);
-    assert_eq!(basic.column_log_len, 8);
+    assert_eq!(basic.column_log_len, 7);
     assert_eq!(basic.extra_moduli, vec![Q9721_FS_S]);
     assert_eq!(basic.witness_len(), 1 << 18);
-    assert_eq!(basic.columns(), 256);
+    assert_eq!(basic.columns(), 128);
 }
 
 #[test]

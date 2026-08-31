@@ -89,32 +89,34 @@ exceeds its cap — about one round in twenty — and the caller retries with fr
 
 ## Runtime
 
-`Params::basic()` — 2^18 `F162` = 2^16 ring elements of `R_648` in 256 columns, moduli 3889 and
-9721 — on one core of an i7-11850H, wall clock, median of 3 except the steps that consume what
+`Params::basic()` — 2^18 `F162` = 2^16 ring elements of `R_648` in 128 columns, moduli 3889 and
+9721 (the clear-text default; the wire trades commitment against folded witness at `columns`
+versus `witness / columns`, and 2^7 columns sits at the optimum, while the recursion, whose cost
+grows with the column length, runs at 2^8) — on one core of an i7-11850H, wall clock, median of 3 except the steps that consume what
 they are given, which run once.
 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit` | 13.10 |
-| `row_evaluate` | 0.28 |
-| `fold` | 4.45 |
-| *total* | *17.83* |
+| `commit` | 13.71 |
+| `row_evaluate` | 0.30 |
+| `fold` | 5.78 |
+| *total* | *19.80* |
 | **statement** | |
-| `derive_evaluation_point` | 0.50 |
-| `mle_evaluate` | 0.30 |
-| *total* | *0.80* |
+| `derive_evaluation_point` | 0.27 |
+| `mle_evaluate` | 0.32 |
+| *total* | *0.59* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.12 |
-| `decode` | 1.91 |
-| `fold_commitment` | 0.31 |
+| `derive_folding_challenges` | 0.63 |
+| `decode` | 2.32 |
+| `fold_commitment` | 0.14 |
 | `fold_row_evaluation` | 0.00 |
-| `verify_evaluation` | 0.01 |
-| `verify_folded_opening` | 0.31 |
-| *total* | *3.66* |
+| `verify_evaluation` | 0.00 |
+| `verify_folded_opening` | 0.65 |
+| *total* | *3.74* |
 
-The wire is 526.5 KB of commitment, 5.1 KB of row evaluation and 156.0 KB of folded witness —
-687.6 KB in all, measured on the encodings themselves rather than assumed. `decode` is the
+The wire is 263.2 KB of commitment, 2.5 KB of row evaluation and 296.9 KB of folded witness —
+562.6 KB in all, measured on the encodings themselves rather than assumed. `decode` is the
 verifier reading all three back off the wire; everything after it in the table runs against the
 decoded objects, so the round trip is on the binary's real path. The commitment is `ceil(log2 q)`
 bits a slot and the row evaluation 162 bits an `F162`, both of which are the entropy of uniform
@@ -162,7 +164,7 @@ therefore cold — the prover's `masks` and `statement build` cost twice what a 
 at them would say.
 
 The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
-LaBRADOR's own 71.2 KB, against 687.6 KB in the clear. Per proof the constraint `phi` take 1 MB
+LaBRADOR's own 71.2 KB, against 562.6 KB in the clear. Per proof the constraint `phi` take 1 MB
 on top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident set of one round
 in each mode is 291 MB.
 
@@ -202,7 +204,7 @@ its BaseFold oracle with the recursion off and on.
 binius64 builds the constraint system and the witness and packs the non-public trace as it
 always does: two 64-bit words per `B128`, zero-padded to `2^18`. That vector lifts to `F162` by
 zero-extension (`phi` carries the `beta` basis of `B128` onto `{1, X, ..., X^127}`) and is
-committed here, at `Params::basic()`'s shape. binius64's reductions then run unchanged down to
+committed here, in 128 columns for the clear-text opening and 256 for the recursion. binius64's reductions then run unchanged down to
 the claim `w~(r) = s` on that trace, and the cross-field switch of `fields::crossfield` — the
 128 partial evaluations, `r' ∈ F162^7` drawn after them, an 18-round sumcheck over `F162` —
 turns it into `pi1~(r'') = opened`, which this crate's opening discharges.
@@ -225,35 +227,35 @@ binius64's `rayon` feature is off by default, so its reductions are single-threa
                                        binius64          off           on
 
 SETUP (once, not per proof)
-  circuit                               1051.17      1051.17      1051.17 ms
-  commitment key and constraints         701.08       664.17       687.53 ms
+  circuit                               1059.31      1059.31      1059.31 ms
+  commitment key and constraints         706.86       683.59       689.77 ms
 
 PROVER
-  witness                                  4.59         4.59         4.59 ms
-  packing                                     —         0.66         0.73 ms
-  commit                                  12.41        13.43        17.33 ms
-  BitAnd check                            32.03        32.12        32.28 ms
-  shift reduction                         73.55        73.23        74.05 ms
-  ring-switch / cross-field switch         4.40        16.45        15.32 ms
-  opening                                     —         7.13       179.99 ms
-  rest                                     4.43         1.40         0.53 ms
-  total                                  126.83       144.42       320.22 ms
+  witness                                  4.97         4.97         4.97 ms
+  packing                                     —         0.65         0.72 ms
+  commit                                  12.41        14.80        17.40 ms
+  BitAnd check                            31.53        32.08        33.17 ms
+  shift reduction                         73.68        73.90        73.47 ms
+  ring-switch / cross-field switch         4.41        15.16        15.20 ms
+  opening                                     —         8.83       179.12 ms
+  rest                                     4.56         1.01         0.56 ms
+  total                                  126.59       146.43       319.64 ms
 
 VERIFIER
-  read the commitment                         —         0.65         0.01 ms
-  reductions                               0.37         0.41         0.40 ms
-  ring-switch / cross-field switch         0.00         0.31         0.33 ms
-  decode the opening                          —         0.88            — ms
-  BaseFold / our opening                   0.46         1.99       101.84 ms
-  wiring check (native)                   41.76        42.17        41.93 ms
-  total                                   43.03        46.54       144.58 ms
+  read the commitment                         —         0.32         0.01 ms
+  reductions                               0.37         0.44         0.40 ms
+  ring-switch / cross-field switch         0.00         0.31         0.31 ms
+  decode the opening                          —         1.66            — ms
+  BaseFold / our opening                   0.46         1.69       103.69 ms
+  wiring check (native)                   41.87        42.21        41.87 ms
+  total                                   43.18        46.73       146.35 ms
 
 SIZES
   binius64 LIOP                               —         5.84         5.84 KB
   cross-field switch                          —         3.12         3.12 KB
-  commitment (wire form)                      —       526.50         4.12 KB
-  opening                                     —       167.10        75.60 KB
-  total                                  243.83       702.57        88.69 KB
+  commitment (wire form)                      —       263.25         4.12 KB
+  opening                                     —       284.38        75.60 KB
+  total                                  243.83       556.60        88.69 KB
 ```
 
 `wiring check (native)` is `WiringEvalClaim::check_native`, which discharges the shift
@@ -266,7 +268,7 @@ are 0.4 ms on both paths. It is written as a `par_iter`, so it is 42 ms only bec
 The commitment sizes are the canonical wire form — `ceil(log2 q)` bits a slot, the bit-packing of
 `wire`; `T_Y` travels on the tape as its `polx` image, which is 11.0 KB. The recursion-off
 `opening` is `wire`'s too, measured on the bytes themselves: the claimed value at 21 bytes, the
-row evaluation bit-packed and the folded witness entropy-coded, 167.10 KB against the 330.02 the
+row evaluation bit-packed and the folded witness entropy-coded, 284.38 KB against the 330.02 the
 same three take at two bytes a coefficient. `decode the opening` is the verifier reading the last
 two back off the wire, and the rows under it in that column check what it decoded. The stock
 total is its whole proof tape.
@@ -289,7 +291,8 @@ file:
 
 ```rust
 const WITNESS_LOG_LEN: u32 = 18;                      // 2^18 elements of F162
-const COLUMN_LOG_LEN: u32 = 8;                        // 256 columns
+const COLUMN_LOG_LEN_CLEAR: u32 = 7;                  // 128 columns for the clear-text opening
+const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;              // 256 for the recursion
 const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721_FS_S];   // plus the default base modulus 3889
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
