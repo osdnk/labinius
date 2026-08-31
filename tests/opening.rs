@@ -367,18 +367,30 @@ fn a_wrong_challenge_set_is_rejected() {
 // =============================================================================================
 
 /// The cap of the plan's D5 is the 95th percentile of the honest fold, so the prover has to be
-/// able to say no and be given fresh challenges.
+/// able to say no and be given fresh challenges. Four challenges put the fold far from
+/// concentrated, so both outcomes are common; the loop is the protocol's own retry.
 #[test]
 fn a_long_fold_is_refused_and_the_retry_succeeds() {
     let params = small(vec![Modulus::Q9721_FS_S]);
-    let mut long = Round::new(&params, b"cap/1");
-    match long.prove() {
-        Err(OpeningError::FoldTooLong { normsq, cap }) => assert!(normsq > cap),
-        other => panic!("expected a fold above the cap, got {other:?}"),
+    let (mut refused, mut accepted) = (false, false);
+    for tag in 0..32u8 {
+        let mut round = Round::new(&params, &[b"cap/"[..].to_vec(), vec![tag]].concat());
+        match round.prove() {
+            Err(OpeningError::FoldTooLong { normsq, cap }) => {
+                assert!(normsq > cap);
+                refused = true;
+            }
+            Ok(proof) => {
+                assert!(round.verify(&proof));
+                accepted = true;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+        if refused && accepted {
+            return;
+        }
     }
-    let mut retry = Round::new(&params, b"cap/0");
-    let proof = retry.prove().expect("fresh challenges");
-    assert!(retry.verify(&proof));
+    panic!("the cap never fired both ways: refused {refused}, accepted {accepted}");
 }
 
 impl Round {

@@ -78,8 +78,10 @@ pub const Q: i128 = (1i128 << 48) - 59;
 pub const PAD: usize = 32;
 
 /// The cap on `‖v‖^2` per ring element and challenge, the plan's D5: the 95th percentile of the
-/// honest fold, so about one fold in twenty is retried with fresh challenges.
-pub const FOLD_CAP: f64 = 47.2;
+/// honest fold at the recursive shape of [`crate::scheme::Params::basic`] — the shape at which
+/// `prove_opening` enforces the cap — measured over 3000 rounds of the real sampler, so about
+/// one fold in twenty is retried with fresh challenges (5.2%; 4.1% at the clear shape).
+pub const FOLD_CAP: f64 = 55.7;
 
 /// Largest witness coefficient: a residue of the widest limb, which is a centered residue modulo
 /// 19441. LaBRADOR's own `int16` norm limit is 23170, so this clears it with a factor of 2.4.

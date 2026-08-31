@@ -1,18 +1,24 @@
 //! Short challenges over the 3^5-th cyclotomic ring `R_162 = Z[Z]/Phi_243(Z)`,
 //! `Phi_243(Z) = Z^162 + Z^81 + 1`, and the blake3 transcript that samples them.
 //!
-//! A challenge is a weight-`w` ternary element of `R_162`: `w` of the 162 coefficients are `+-1`
-//! and the rest are zero, stored sparsely as sorted positions plus signs. Sampling is uniform over
-//! that set (a partial Fisher-Yates driven by the transcript's XOF) and then rejected until the
+//! A challenge is a weight-`w` *binary* element of `R_162`: `w` of the 162 coefficients are `1`
+//! and the rest are zero, stored sparsely as the sorted positions. Sampling is uniform over that
+//! set (a partial Fisher-Yates driven by the transcript's XOF) and then rejected until the
 //! challenge is *short in the canonical embedding*:
 //!
 //! ```text
 //!     max_u |c(zeta^u)|^2 <= bound^2,     zeta = exp(2 pi i / 243), gcd(u, 3) = 1,
 //! ```
 //!
-//! the 162 primitive 243-rd roots of unity. That quantity — [`canonical_inf_norm_sq`] — bounds the
-//! operator norm of multiplication by `c` on `R_162 (x) C`, so a bound on it is what a security
-//! argument needs from a challenge set. The default is `weight = 21`, `bound = 9`.
+//! the 162 primitive 243-rd roots of unity. That quantity — [`canonical_inf_norm_sq`] — is the
+//! squared operator norm of multiplication by `c` on `R_162 (x) C` *in the canonical embedding*.
+//! The power basis of a power-of-three conductor is not orthogonal there, so the expansion factor
+//! on coefficient vectors that a security argument uses is `sqrt(3)` times the canonical bound —
+//! `sqrt(3) * 11 = 19.05` at the default, not `11`. The default is `weight = 28`, `bound = 11`.
+//!
+//! The challenge is binary rather than ternary because the lift into `R_648` is `c(-X^4)`: the
+//! parity of the exponent already carries a `+-` into the `X`-basis, which is where the fold's
+//! cancellation happens, so sign bits bought nothing the positions do not already give.
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
@@ -35,10 +41,10 @@ pub const CONDUCTOR243: usize = 243;
 pub const MAX_WEIGHT: usize = 32;
 
 /// The weight the crate samples at unless told otherwise.
-pub const DEFAULT_WEIGHT: usize = 21;
+pub const DEFAULT_WEIGHT: usize = 28;
 
-/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 9^2 = 81`.
-pub const DEFAULT_BOUND: f64 = 9.0;
+/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 11^2 = 121`.
+pub const DEFAULT_BOUND: f64 = 11.0;
 
 // =============================================================================================
 // transcript
@@ -156,12 +162,11 @@ impl Xof {
 // the challenge
 // =============================================================================================
 
-/// A weight-`w` ternary element of `R_162`: coefficient `positions[i]` is `signs[i]`, all other
-/// coefficients zero. Positions are sorted and distinct; entries beyond `weight` are unused.
+/// A weight-`w` binary element of `R_162`: coefficient `positions[i]` is `1`, every other
+/// coefficient zero. Positions are sorted and distinct; entries beyond `weight` are unused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShortChallenge {
     pub positions: [u8; MAX_WEIGHT],
-    pub signs: [i8; MAX_WEIGHT],
     pub weight: usize,
 }
 
@@ -170,7 +175,6 @@ impl ShortChallenge {
     pub fn zero() -> Self {
         ShortChallenge {
             positions: [0u8; MAX_WEIGHT],
-            signs: [0i8; MAX_WEIGHT],
             weight: 0,
         }
     }
@@ -179,14 +183,14 @@ impl ShortChallenge {
     pub fn coeffs(&self) -> [i8; N162] {
         let mut c = [0i8; N162];
         for i in 0..self.weight {
-            c[self.positions[i] as usize] = self.signs[i];
+            c[self.positions[i] as usize] = 1;
         }
         c
     }
 
     /// The challenge modulo 2, as an element of `F162 = GF(2)[x]/(x^162 + x^81 + 1)`: a bit at
-    /// each of its positions. `R_162 mod 2` *is* that field under the crate's plain lift, and the
-    /// signs vanish there.
+    /// each of its positions. `R_162 mod 2` *is* that field under the crate's plain lift, on which
+    /// a binary challenge is its own reduction.
     pub fn to_f162(&self) -> F162 {
         let mut x = F162::ZERO;
         for i in 0..self.weight {
@@ -196,29 +200,25 @@ impl ShortChallenge {
         x
     }
 
-    /// The sparse form of a ternary coefficient vector. Panics unless every entry is in
-    /// `{-1, 0, 1}` and at most [`MAX_WEIGHT`] of them are nonzero.
+    /// The sparse form of a binary coefficient vector. Panics unless every entry is in `{0, 1}`
+    /// and at most [`MAX_WEIGHT`] of them are nonzero.
     pub fn from_coeffs(c: &[i8; N162]) -> Self {
         let mut out = Self::zero();
         for (p, &x) in c.iter().enumerate() {
-            assert!(
-                x == -1 || x == 0 || x == 1,
-                "coefficient {p} is not ternary"
-            );
+            assert!(x == 0 || x == 1, "coefficient {p} is not binary");
             if x != 0 {
                 assert!(out.weight < MAX_WEIGHT, "weight exceeds MAX_WEIGHT");
                 out.positions[out.weight] = p as u8;
-                out.signs[out.weight] = x;
                 out.weight += 1;
             }
         }
         out
     }
 
-    /// `log2` of the number of weight-`w` challenges: `log2 C(162, w) + w`.
+    /// `log2` of the number of weight-`w` challenges: `log2 C(162, w)`.
     pub fn log2_cardinality(weight: usize) -> f64 {
         assert!(weight <= N162);
-        let mut bits = weight as f64;
+        let mut bits = 0.0f64;
         for i in 0..weight {
             bits += ((N162 - i) as f64 / (i + 1) as f64).log2();
         }
@@ -275,7 +275,7 @@ static PHASE: LazyLock<(Vec<f64>, Vec<f64>)> = LazyLock::new(|| {
     (re, im)
 });
 
-/// Accumulate `sum_i sign_i exp(2 pi i p_i u_k / 243)` over the challenge's nonzero terms, for the
+/// Accumulate `sum_i exp(2 pi i p_i u_k / 243)` over the challenge's nonzero terms, for the
 /// [`BLOCK`] lanes starting at `off`.
 #[inline]
 fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f64; BLOCK]) {
@@ -286,27 +286,22 @@ fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f
         let base = c.positions[i] as usize * LANES + off;
         let pr = &re[base..base + BLOCK];
         let pi = &im[base..base + BLOCK];
-        if c.signs[i] > 0 {
-            for k in 0..BLOCK {
-                ar[k] += pr[k];
-                ai[k] += pi[k];
-            }
-        } else {
-            for k in 0..BLOCK {
-                ar[k] -= pr[k];
-                ai[k] -= pi[k];
-            }
+        for k in 0..BLOCK {
+            ar[k] += pr[k];
+            ai[k] += pi[k];
         }
     }
 }
 
 /// `max_u |c(zeta^u)|^2` over the 162 primitive 243-rd roots of unity — the squared sup norm of
 /// the canonical embedding of `c`, i.e. the squared operator norm of multiplication by `c` on
-/// `R_162 (x) C`.
+/// `R_162 (x) C` *in that embedding*. On coefficient vectors the expansion factor is `sqrt(3)`
+/// times its square root, the power basis of a power-of-three conductor not being orthogonal
+/// under the canonical embedding.
 ///
 /// Evaluated from the `w` nonzero terms only, at half the roots (conjugates give nothing new): the
-/// accumulator is one f64 vector of real and one of imaginary parts, and each term adds `+-` one
-/// row of the phase table to it — contiguous f64 loops, no gathers.
+/// accumulator is one f64 vector of real and one of imaginary parts, and each term adds one row of
+/// the phase table to it — contiguous f64 loops, no gathers.
 pub fn canonical_inf_norm_sq(c: &ShortChallenge) -> f64 {
     let mut ar = [0.0f64; BLOCK];
     let mut ai = [0.0f64; BLOCK];
@@ -366,8 +361,8 @@ pub fn canonical_inf_norm_sq_naive(c: &ShortChallenge) -> f64 {
 // sampling
 // =============================================================================================
 
-/// One uniform weight-`w` ternary element: a partial Fisher-Yates over the 162 positions driven by
-/// the transcript's XOF, uniform signs, then the positions sorted.
+/// One uniform weight-`w` binary element: a partial Fisher-Yates over the 162 positions driven by
+/// the transcript's XOF, then the positions sorted.
 pub fn sample_attempt(t: &mut Transcript, weight: usize) -> ShortChallenge {
     let mut perm = [0u8; N162];
     attempt(
@@ -391,13 +386,11 @@ fn attempt(x: &mut Xof, weight: usize, perm: &mut [u8; N162]) -> ShortChallenge 
         let j = i + x.below((N162 - i) as u16) as usize;
         perm.swap(i, j);
         out.positions[i] = perm[i];
-        out.signs[i] = if x.byte() & 1 == 0 { 1 } else { -1 };
     }
     for i in 1..weight {
         let mut j = i;
         while j > 0 && out.positions[j - 1] > out.positions[j] {
             out.positions.swap(j - 1, j);
-            out.signs.swap(j - 1, j);
             j -= 1;
         }
     }

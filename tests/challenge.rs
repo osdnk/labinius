@@ -1,5 +1,6 @@
-//! Short challenges: determinism of the transcript, the shape of a challenge, the canonical
-//! embedding against a naive reference, the rejection bound, and the acceptance statistics.
+//! Short challenges: determinism of the transcript, the binary shape of a challenge, the
+//! canonical embedding against a naive reference, the rejection bound, and the acceptance
+//! statistics.
 use bin_ntt::api::N162;
 use bin_ntt::challenge::{
     canonical_inf_norm_sq, canonical_inf_norm_sq_naive, sample_attempt, sample_short_challenge,
@@ -17,8 +18,8 @@ fn transcript(tag: u64) -> Transcript {
 fn max_weight_and_default() {
     assert!(MAX_WEIGHT >= 32);
     assert!(DEFAULT_WEIGHT <= MAX_WEIGHT);
-    assert_eq!(DEFAULT_WEIGHT, 21);
-    assert_eq!(DEFAULT_BOUND, 9.0);
+    assert_eq!(DEFAULT_WEIGHT, 28);
+    assert_eq!(DEFAULT_BOUND, 11.0);
 }
 
 #[test]
@@ -81,20 +82,19 @@ fn absorb_elements_binds() {
 #[test]
 fn shape() {
     let mut t = transcript(1);
-    for weight in [1usize, 5, 21, 30, MAX_WEIGHT] {
+    for weight in [1usize, 5, 28, 30, MAX_WEIGHT] {
         for _ in 0..200 {
             let c = sample_attempt(&mut t, weight);
             assert_eq!(c.weight, weight);
             for i in 0..weight {
                 assert!((c.positions[i] as usize) < N162);
-                assert!(c.signs[i] == 1 || c.signs[i] == -1);
             }
             for i in 1..weight {
                 assert!(c.positions[i - 1] < c.positions[i], "not sorted / distinct");
             }
             let d = c.coeffs();
             assert_eq!(d.iter().filter(|&&x| x != 0).count(), weight);
-            assert!(d.iter().all(|&x| x == -1 || x == 0 || x == 1));
+            assert!(d.iter().all(|&x| x == 0 || x == 1), "a challenge is not binary");
             assert_eq!(ShortChallenge::from_coeffs(&d), c);
         }
     }
@@ -138,14 +138,12 @@ fn canonical_norm_matches_naive() {
 
 #[test]
 fn canonical_norm_of_monomials() {
-    // A single +-Z^p has |c(zeta^u)| = 1 everywhere.
+    // A single Z^p has |c(zeta^u)| = 1 everywhere.
     for p in 0..N162 {
-        for s in [1i8, -1] {
-            let mut d = [0i8; N162];
-            d[p] = s;
-            let c = ShortChallenge::from_coeffs(&d);
-            assert!((canonical_inf_norm_sq(&c) - 1.0).abs() < 1e-9);
-        }
+        let mut d = [0i8; N162];
+        d[p] = 1;
+        let c = ShortChallenge::from_coeffs(&d);
+        assert!((canonical_inf_norm_sq(&c) - 1.0).abs() < 1e-9);
     }
 }
 
@@ -159,14 +157,40 @@ fn sampled_challenges_meet_the_bound() {
     }
 }
 
+/// What the rest of the crate is entitled to assume of a folding challenge: exactly
+/// `DEFAULT_WEIGHT` coefficients, all of them `1`, and a canonical norm inside `DEFAULT_BOUND`.
+/// The expansion factor a security argument uses is `sqrt(3)` times that bound, because the power
+/// basis of a power-of-three conductor is not orthogonal under the canonical embedding.
+#[test]
+fn the_default_challenge_is_binary_and_short() {
+    let mut t = transcript(9);
+    let mut worst = 0.0f64;
+    for _ in 0..500 {
+        let (c, _) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
+        let d = c.coeffs();
+        assert!(d.iter().all(|&x| x == 0 || x == 1), "a challenge coefficient is not 0 or 1");
+        assert_eq!(d.iter().filter(|&&x| x == 1).count(), DEFAULT_WEIGHT);
+        let norm = canonical_inf_norm_sq(&c);
+        assert!(norm <= DEFAULT_BOUND * DEFAULT_BOUND + 1e-12);
+        assert!((canonical_inf_norm_sq_naive(&c) - norm).abs() <= 1e-9);
+        worst = worst.max(norm);
+    }
+    println!(
+        "weight {DEFAULT_WEIGHT} binary, worst canonical norm {:.3} of {DEFAULT_BOUND} \
+         (expansion sqrt(3) * {DEFAULT_BOUND} = {:.2})",
+        worst.sqrt(),
+        3f64.sqrt() * DEFAULT_BOUND
+    );
+}
+
 #[test]
 fn cardinality() {
     let bits = ShortChallenge::log2_cardinality(DEFAULT_WEIGHT);
     println!("log2 |challenge set| at weight {DEFAULT_WEIGHT}: {bits:.2}");
     assert!(bits >= 100.0);
-    assert!((ShortChallenge::log2_cardinality(1) - (162f64.log2() + 1.0)).abs() < 1e-9);
+    assert!((ShortChallenge::log2_cardinality(1) - 162f64.log2()).abs() < 1e-9);
     assert!((ShortChallenge::log2_cardinality(0)).abs() < 1e-12);
-    for w in [10usize, 20, 21, 30, 40] {
+    for w in [10usize, 20, 28, 30, 40] {
         println!(
             "  weight {w:2}: {:.2} bits",
             ShortChallenge::log2_cardinality(w)
@@ -189,7 +213,7 @@ fn acceptance_statistics() {
     let us = t0.elapsed().as_secs_f64() * 1e6 / n_att as f64;
     println!("isolated attempt (own XOF derivation + full canonical_inf_norm_sq): {us:.3} us  [{sink:.0}]");
 
-    for bound in [7.5f64, 8.0, 9.0, 10.0, 13.0] {
+    for bound in [9.0f64, 10.0, 11.0, 12.0, 15.0] {
         let mut t = transcript(6);
         let mut total = 0u64;
         let mut worst = 0u64;
@@ -208,8 +232,8 @@ fn acceptance_statistics() {
             ms * 1e3 / samples as f64,
             ms * 1e3 / total as f64
         );
-        if bound == 13.0 {
-            assert!(mean < 2.0, "bound 13 rejects too often: {mean}");
+        if bound == 15.0 {
+            assert!(mean < 2.0, "bound 15 rejects too often: {mean}");
         }
     }
 }

@@ -11,9 +11,9 @@
 //!   parameters the verifier already holds. No code can beat those floors on honest data — if
 //!   one measures below them, it is a bug, not a win.
 //! * **The folded witness is entropy-coded.** `v = sum_j c_j W_j` is a sum of a few hundred
-//!   binary columns against short ternary challenges, so its coefficients are a discrete
-//!   Gaussian of a few tens — sigma 46 to 97 across the crate's limb lists, and 53 at
-//!   [`Params::basic`] — well inside the bound `(q-1)/2`, which is 7.5 to 8.5 bits of entropy
+//!   binary columns against short binary challenges, so its coefficients are a discrete
+//!   Gaussian of a few tens — sigma 53 to 120 across the crate's limb lists, and 56 at
+//!   [`Params::basic`] — well inside the bound `(q-1)/2`, which is 7.8 to 8.8 bits of entropy
 //!   against the 16 bits an `i16` spends. [`encode`] measures the distribution of the message it
 //!   is given, transmits it in the header, and codes against it with a static rANS.
 //!

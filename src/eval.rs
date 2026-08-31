@@ -6,8 +6,8 @@
 //! The witness is the `wdim x r` matrix `W` over `F` held as the flat `&[F162]` the commitment
 //! takes: entry `(i, j)` is `witness[i + wdim * j]`, so a column is one chunk of the commitment.
 //! `F` is exactly `R_162 mod 2` under the crate's plain lift — the coefficients of an `R_162`
-//! element reduced mod 2 are the bits of an `F162`, and the signs vanish — so the whole fold has
-//! a shadow over `F`.
+//! element reduced mod 2 are the bits of an `F162`, and a binary challenge is its own reduction —
+//! so the whole fold has a shadow over `F`.
 //!
 //! Both sides of that shadow are multilinear extensions in `nu = log2(wdim) + log2(r)` variables,
 //! split as `p0` (the row index `i`, low variables) and `p1` (the column index `j`, high ones),

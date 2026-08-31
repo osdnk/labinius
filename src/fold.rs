@@ -5,7 +5,7 @@
 //!
 //! A witness of `r` chunks `W_0, .., W_{r-1}`, each `len_ring` elements of
 //! `R_648 = Z_q[X]/(X^648 - X^324 + 1)`, is committed under one key `A` to the `r` elements
-//! `C_j = sum_i A_i W_{j,i}`. A challenge `c_j` is a short ternary element of the subring
+//! `C_j = sum_i A_i W_{j,i}`. A challenge `c_j` is a short binary element of the subring
 //! `R_162 = Z_q[Z]/Phi_243(Z)`, embedded into `R_648` as `c_j(-X^4)` (coefficient of `X^{4m}` is
 //! `(-1)^m c_{j,m}`, everything else zero — the embedding of "The lift is a ring extension of
 //! degree 4"). The folded witness and its commitment are

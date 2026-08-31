@@ -4,7 +4,7 @@
 //!
 //! The witness is committed modulo the base modulus 3889 and any of
 //! `2917, 4861, 9721, 12637, 17497, 19441`,
-//! folded against short ternary challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the
+//! folded against short binary challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the
 //! folded opening is checked against the multilinear extension of the same witness over `F162`.
 //! Everything is one AVX-512 thread; see [`scheme`] for the round and `src/main.rs` for the
 //! reference usage.
@@ -17,7 +17,7 @@
 //! - `rng`     : tiny deterministic RNG (no external crates).
 //! - `simd`    : the AVX-512 kernels.
 //! - `api`     : the commitment key, the commitment and its height-4 view over `R_162`.
-//! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
+//! - `challenge`: short (fixed-weight binary) challenges over `R_162` and the blake3 transcript.
 //! - `fields`  : the binary fields `B128` and `F162`, their AVX-512 kernels and the
 //!   cross-field switch, inlined from `bin-fields`.
 //! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.

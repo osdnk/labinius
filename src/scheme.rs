@@ -1062,7 +1062,7 @@ impl Verifier {
         }
     }
 
-    /// Absorb `u`, then derive the `columns()` challenges — weight 21, canonical bound 9, one
+    /// Absorb `u`, then derive the `columns()` challenges — weight 28, canonical bound 11, one
     /// transcript derivation per challenge index.
     pub fn derive_folding_challenges(
         &self,

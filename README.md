@@ -4,10 +4,10 @@ An Ajtai commitment, a folding step and their verifier over `R_648 = Z_q[X]/(X^6
 the 1944-th cyclotomic ring, for a witness of binary ring elements carried as elements of
 `F162 = GF(2)[x]/(x^162 + x^81 + 1)`. The witness is committed modulo any subset of
 `2917, 3889, 4861, 9721, 12637, 17497, 19441`, one of which is the base — 3889 by default —
-folded against short ternary challenges of the
-subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the folded opening is checked against the multilinear
-extension of the same witness over `F162` — one AVX-512 thread throughout. The opening is either
-sent in the clear or recursed into a single LaBRADOR proof of 80 KB.
+folded against short binary challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, 28 of whose
+162 coefficients are 1, and the folded opening is checked against the multilinear extension of
+the same witness over `F162` — one AVX-512 thread throughout. The opening is either sent in the
+clear or recursed into a single LaBRADOR proof of 80 KB.
 
 ## The flow
 
@@ -82,8 +82,11 @@ verifier
     .unwrap();
 ```
 
-`prove_opening` returns `Err(OpeningError::FoldTooLong { .. })` when the fold's squared norm
-exceeds its cap — about one round in twenty — and the caller retries with fresh challenges.
+Each folding challenge is 28 distinct positions out of 162 drawn from the transcript's XOF and
+rejected until its canonical infinity norm is at most 11: a set of size `2^104`, one attempt in
+seven accepted, 0.73 ms for the whole 128. `prove_opening` returns
+`Err(OpeningError::FoldTooLong { .. })` when the fold's squared norm exceeds its cap — about one
+round in twenty — and the caller retries with fresh challenges.
 `verify_opening` runs no field arithmetic of its own: `u . eq(p1) == t` and
 `eq(p0) . (v mod 2) == sum_j u_j (c_j mod 2)` are two of the identities inside the proof.
 
@@ -98,64 +101,64 @@ they are given, which run once.
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit` | 13.71 |
-| `row_evaluate` | 0.30 |
-| `fold` | 5.78 |
-| *total* | *19.80* |
+| `commit` | 13.86 |
+| `row_evaluate` | 0.31 |
+| `fold` | 6.01 |
+| *total* | *20.19* |
 | **statement** | |
-| `derive_evaluation_point` | 0.27 |
-| `mle_evaluate` | 0.32 |
-| *total* | *0.59* |
+| `derive_evaluation_point` | 0.28 |
+| `mle_evaluate` | 0.34 |
+| *total* | *0.62* |
 | **verifier** | |
-| `derive_folding_challenges` | 0.63 |
-| `decode` | 2.32 |
-| `fold_commitment` | 0.14 |
+| `derive_folding_challenges` | 0.73 |
+| `decode` | 2.00 |
+| `fold_commitment` | 0.15 |
 | `fold_row_evaluation` | 0.00 |
 | `verify_evaluation` | 0.00 |
 | `verify_folded_opening` | 0.65 |
-| *total* | *3.74* |
+| *total* | *3.53* |
 
-The wire is 263.2 KB of commitment, 2.5 KB of row evaluation and 296.9 KB of folded witness —
-562.6 KB in all, measured on the encodings themselves rather than assumed. `decode` is the
+The wire is 263.2 KB of commitment, 2.5 KB of row evaluation and 335.6 KB of folded witness —
+601.3 KB in all, measured on the encodings themselves rather than assumed. `decode` is the
 verifier reading all three back off the wire; everything after it in the table runs against the
 decoded objects, so the round trip is on the binary's real path. The commitment is `ceil(log2 q)`
 bits a slot and the row evaluation 162 bits an `F162`, both of which are the entropy of uniform
-data; the fold is entropy-coded against its own histogram, which is where the 2.1x comes from
+data; the fold is entropy-coded against its own histogram, which is where the 1.9x comes from
 (see the last implementation note).
 
 The same shape with the recursion on. `PublicParameters::from_seed` additionally inverts the key
 rows, blocks them, converts the 221 184 key-time `phi` and the nine-bit pattern table to `polx`,
-and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 34 ms and
-20 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
+and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 35 ms and
+21 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
 
 | step | ms |
 |------|---:|
 | **prover** | |
-| `commit`, including `T_Y` | 16.62 |
-| `row_evaluate` | 0.28 |
-| `commit_left_expansion` | 0.26 |
-| `prove_opening` | 223.87 |
-| — fold | 4.49 |
-| — encoding | 20.86 |
-| — `T_R` | 2.55 |
-| — masks | 4.79 |
-| — constraint `phi` | 2.35 |
-| — statement build | 14.21 |
-| — `labrador::prove` | 171.36 |
-| *total* | *241.03* |
+| `commit`, including `T_Y` | 17.04 |
+| `row_evaluate` | 0.30 |
+| `commit_left_expansion` | 0.25 |
+| `prove_opening` | 222.42 |
+| — fold | 4.51 |
+| — encoding | 21.25 |
+| — `T_R` | 2.49 |
+| — masks | 5.16 |
+| — constraint `phi` | 2.37 |
+| — statement build | 14.88 |
+| — `labrador::prove` | 170.04 |
+| *total* | *240.00* |
 | **statement** | |
 | `derive_evaluation_point` | 0.01 |
 | `mle_evaluate` | 0.33 |
-| *total* | *0.34* |
+| *total* | *0.33* |
 | **verifier** | |
-| `derive_folding_challenges` | 1.22 |
-| statement rebuild | 16.69 |
-| — layout | 1.67 |
-| — no-wrap bound | 2.21 |
-| — constraint `phi` | 2.37 |
-| — statement build | 7.86 |
-| `labrador::verify` | 102.92 |
-| *total* | *120.83* |
+| `derive_folding_challenges` | 1.61 |
+| statement rebuild | 16.73 |
+| — layout | 1.68 |
+| — no-wrap bound | 2.24 |
+| — constraint `phi` | 2.36 |
+| — statement build | 7.88 |
+| `labrador::verify` | 102.22 |
+| *total* | *120.67* |
 
 Both breakdowns are the wall clock of the run that produced the proof: `prove_opening` returns
 its stage timings with the proof and `verify_opening` returns its own, so each side does its work
@@ -163,13 +166,13 @@ exactly once and the parts add up to the whole they were measured inside. The in
 therefore cold — the prover's `masks` and `statement build` cost twice what a second, warm pass
 at them would say.
 
-The proof is 79.6 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
-LaBRADOR's own 71.2 KB, against 562.6 KB in the clear. Per proof the constraint `phi` take 1 MB
-on top of the key's 20 MB, plus 33 MB for the three mask rows; the peak resident set of one round
-in each mode is 291 MB.
+The proof is 79.5 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
+LaBRADOR's own 71.1 KB, against 601.3 KB in the clear. Per proof the constraint `phi` take 1 MB
+on top of the key's 21 MB, plus 33 MB for the three mask rows; the peak resident set of one round
+in each mode is 292 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
-`commit` 49.6 -> 16.6, `prove_opening` 526.4 -> 223.9 and the verifier 287.8 -> 120.8 ms. Inside
+`commit` 49.6 -> 17.0, `prove_opening` 526.4 -> 222.4 and the verifier 287.8 -> 120.7 ms. Inside
 LaBRADOR (300 -> 171 ms proving, 222 -> 103 ms verifying, transcript-neutral): the inner products
 as a VNNI double schoolbook with two exact products per `vpdpwssd` and a per-call reduction
 chunk (Lazer's random-walk chunk on the prover's honest data, the worst-case chunk wherever a
@@ -254,8 +257,8 @@ SIZES
   binius64 LIOP                               —         5.84         5.84 KB
   cross-field switch                          —         3.12         3.12 KB
   commitment (wire form)                      —       263.25         4.12 KB
-  opening                                     —       284.38        75.60 KB
-  total                                  243.83       556.60        88.69 KB
+  opening                                     —       289.08        75.63 KB
+  total                                  243.83       561.30        88.72 KB
 ```
 
 `wiring check (native)` is `WiringEvalClaim::check_native`, which discharges the shift
@@ -268,8 +271,8 @@ are 0.4 ms on both paths. It is written as a `par_iter`, so it is 42 ms only bec
 The commitment sizes are the canonical wire form — `ceil(log2 q)` bits a slot, the bit-packing of
 `wire`; `T_Y` travels on the tape as its `polx` image, which is 11.0 KB. The recursion-off
 `opening` is `wire`'s too, measured on the bytes themselves: the claimed value at 21 bytes, the
-row evaluation bit-packed and the folded witness entropy-coded, 284.38 KB against the 330.02 the
-same three take at two bytes a coefficient. `decode the opening` is the verifier reading the last
+row evaluation bit-packed and the folded witness entropy-coded, 289.08 KB against the 650.55 the
+same three take at two bytes a coefficient over its 331 776. `decode the opening` is the verifier reading the last
 two back off the wire, and the rows under it in that column check what it decoded. The stock
 total is its whole proof tape.
 
@@ -497,26 +500,27 @@ ones. `cargo run` prints both modes.
   bits per limb — 12 at 3889, 14 at 9721 — and an `F162` is a uniform 162-bit element, so the row
   evaluation is 162 bits an element back to back, 5184 bytes for 256 rather than 6144. Those are
   entropy floors, not compression, and nothing can go under them. The folded witness is the one
-  message with structure: `v = sum_j c_j W_j` is 256 binary columns against weight-21 ternary
+  message with structure: `v = sum_j c_j W_j` is 256 binary columns against weight-28 binary
   challenges, so its coefficients sit inside `(q-1)/2 = 1944` but are a discrete Gaussian of a few
-  tens, 7.6 bits of entropy against the 16 an `i16` spends. A 32-bit rANS with 16-bit
+  tens, 8.1 bits of entropy against the 16 an `i16` spends. A 32-bit rANS with 16-bit
   renormalisation codes it against a histogram of the message itself, quantised to a total of
   2^12 by largest remainder with every occupied symbol floored at one slot; the table covers the
   occupied range `[offset, offset + length)` and travels in the header as Elias gamma codes of
   `count + 1`, one bit for each empty symbol in the tails. A symbol the quantisation cannot afford
   — which needs an adversarial fold spread over more than 4095 values of a large limb — is coded
   as an escape followed by its index in raw bits, so any `i16` message encodes and the coder is a
-  bijection, not a heuristic. At the basic shape that is 156.0 KB for 165 888 coefficients, 0.6 %
+  bijection, not a heuristic. At the basic shape that is 163.5 KB for 165 888 coefficients, 0.7 %
   above the message's own zeroth-order entropy, in 0.8 ms of encoding and 0.7 ms of decoding; the
-  verifier decodes all three objects in 1.9 ms and checks the ones it decoded. The fold's width
+  verifier decodes all three objects in 2.0 ms and checks the ones it decoded. The fold's width
   varies from round to round more than a sum of 5376 signed bits suggests, because the 256
   challenges are shared by all 256 output ring elements: each coefficient position carries a
-  common offset, the signed sum of the challenge coefficients that land on it, whose own spread is
-  as wide as the fluctuation around it. Over the fourteen limb lists of the seven bases, with and
-  without a second limb, the measured sigma runs from 46 to 97 and the coded fold from 153.0 to
-  171.9 KB — always within 0.7 % of that message's own entropy. `keccak::Session` sends its
-  clear-text opening through the same code and decodes it on the verifier's side, which is the
-  167.10 KB of the three-column table above against 330.02 uncoded.
+  common offset, the signed sum of the challenge coefficients that land on it — signed because the
+  lift is `c(-X^4)`, so the parity of the exponent decides it — whose own spread is as wide as the
+  fluctuation around it. Over the fourteen limb lists of the seven bases, with and without a
+  second limb, the measured sigma runs from 53 to 120 and the coded fold from 158.3 to 177.7 KB —
+  always within 0.72 % of that message's own entropy. `keccak::Session` sends its clear-text
+  opening through the same code and decodes it on the verifier's side, which is the 289.08 KB of
+  the three-column table above against 650.55 uncoded.
 
 ## BaseFold baseline
 

@@ -17,8 +17,11 @@ use crate::eval::eq_table;
 use crate::scheme::EvaluationPoint;
 use crate::fields::scalar::F162;
 
-/// The carries and quotients of the two binary chains.
-pub const CARRY_GADGET: Gadget = Gadget { base: 1024, levels: 2 };
+/// The carries and quotients of the two binary chains. The carry reaches `base^2 / 2 = 2^21`:
+/// the binary fold sums `sum_j c_j lift(u_j)` in the `Z` basis, where a binary challenge brings no
+/// sign cancellation at all, and its honest carry measures `2^19.0` at the basic shape — 3.5x the
+/// ternary challenge's, and just past what a base of 1024 reaches.
+pub const CARRY_GADGET: Gadget = Gadget { base: 2048, levels: 2 };
 pub const QUOTIENT_GADGET: Gadget = Gadget { base: 1024, levels: 2 };
 
 /// An `F162` element as the `S`-element with its bits as coefficients.
