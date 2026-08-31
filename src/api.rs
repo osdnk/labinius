@@ -65,7 +65,7 @@ use crate::params::{
 use crate::rng::Rng;
 use crate::simd::commit as cm;
 use crate::types::{Batch32, Representation};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use core::arch::x86_64::*;
 
 /// The primes of the default limb list: the default base and [`Modulus::Q9721_FS_S`]. Both are

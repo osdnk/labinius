@@ -2,12 +2,12 @@
 //! reference against the definition, all three SIMD kernels — binary, generic and the generic
 //! inverse — against the scalar reference slot for slot, the declared bounds, an i32 shadow model
 //! of the binary kernel's schedule, and the `R_162` decomposition of a transform.
+use bin_ntt::F162;
+use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::recursion::limbs;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar::{self, Coeffs};
-use bin_fields::scalar::F162;
-use bin_ntt::f162;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_quad as vq;
 use bin_ntt::simd::vertical_gen_quad as vgq;

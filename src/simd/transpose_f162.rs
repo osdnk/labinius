@@ -31,7 +31,7 @@
 //!    nibble and sets the +16 of the odd byte — three port-5 uops per two rows where the
 //!    one-row-at-a-time form would need four, and no masked load (a merge-masked
 //!    `vmovdqu64` costs a p0/p5 uop on top of the load on this core).
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use core::arch::x86_64::*;
 use core::mem::MaybeUninit;
 

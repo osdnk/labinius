@@ -1,7 +1,7 @@
 //! The keccak pipeline: the coordinate mapping the switch and the commitment agree on, and the
 //! real 482-permutation instance end to end in both PCS modes, honest and tampered.
-use bin_fields::crossfield::eval_pi1;
-use bin_fields::scalar::B128;
+use bin_ntt::fields::crossfield::eval_pi1;
+use bin_ntt::fields::scalar::B128;
 use bin_ntt::keccak::{Circuit, Error, MESSAGE_LEN, Session};
 use bin_ntt::rng::Rng;
 use bin_ntt::{EvaluationPoint, F162, Modulus, Params, Witness};

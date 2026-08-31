@@ -15,7 +15,7 @@ use super::{Build, Gadget, SElem, CHUNKS, U};
 use crate::api::N162;
 use crate::eval::eq_table;
 use crate::scheme::EvaluationPoint;
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 
 /// The carries and quotients of the two binary chains.
 pub const CARRY_GADGET: Gadget = Gadget { base: 1024, levels: 2 };

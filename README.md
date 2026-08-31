@@ -203,7 +203,7 @@ binius64 builds the constraint system and the witness and packs the non-public t
 always does: two 64-bit words per `B128`, zero-padded to `2^18`. That vector lifts to `F162` by
 zero-extension (`phi` carries the `beta` basis of `B128` onto `{1, X, ..., X^127}`) and is
 committed here, at `Params::basic()`'s shape. binius64's reductions then run unchanged down to
-the claim `w~(r) = s` on that trace, and the cross-field switch of `bin_fields::crossfield` — the
+the claim `w~(r) = s` on that trace, and the cross-field switch of `fields::crossfield` — the
 128 partial evaluations, `r' ∈ F162^7` drawn after them, an 18-round sumcheck over `F162` —
 turns it into `pi1~(r'') = opened`, which this crate's opening discharges.
 
@@ -398,7 +398,7 @@ ones. `cargo run` prints both modes.
   q = 3889, equal modulo q for q = 9721, where the `asm!` kernel's lookup Barrett leaves smaller
   representatives.
 * **Word-sliced `F162` arithmetic.** The binary side is one dot product over `F162` per step,
-  computed with `bin_fields`' word-sliced kernels — limb `k` of 8 consecutive elements in one
+  computed with `fields::f162`'s word-sliced kernels — limb `k` of 8 consecutive elements in one
   `zmm`, 12 unreduced `clmul` products per block and a single reduction at the end of the whole
   product. The witness never leaves its own layout; it is transposed 8 elements at a time inside
   the loop.

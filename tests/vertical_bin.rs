@@ -9,7 +9,7 @@
 //! butterfly, so the two outputs are **bit-identical**. For q = 9721 they reduce at different
 //! levels and with a different Barrett (reference: `params::barrett_i16` at levels 4, 5 and 6;
 //! asm: the lookup Barrett at level 4 and `barrett_i16` at level 6), so they agree only modulo q.
-use bin_fields::scalar::F162;
+use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;

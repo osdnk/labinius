@@ -37,7 +37,7 @@ use crate::api::N162;
 use crate::params::{QS, QS_LARGE, QS_QUAD};
 use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
 use chain::{At, Carries, Chain, Product, Scaled};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use setup::Setup;
 
 pub mod binary;

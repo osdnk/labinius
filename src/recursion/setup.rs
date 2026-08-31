@@ -15,7 +15,7 @@ use crate::challenge::ShortChallenge;
 use crate::labrador::{sis_rank, sizeof_polx, CommitmentKey, PolxBuf, ShortPhi};
 use crate::params::N;
 use crate::scheme::{EvaluationPoint, FoldingChallenges, Params, PublicParameters};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 
 /// LaBRADOR's own slack in front of a commitment's norm when it picks a rank, `6 T SLACK`.
 const SIS_SLACK: f64 = 6.0 * 14.0 * 2.0;

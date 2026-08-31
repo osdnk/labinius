@@ -18,6 +18,8 @@
 //! - `simd`    : the AVX-512 kernels.
 //! - `api`     : the commitment key, the commitment and its height-4 view over `R_162`.
 //! - `challenge`: short (fixed-weight ternary) challenges over `R_162` and the blake3 transcript.
+//! - `fields`  : the binary fields `B128` and `F162`, their AVX-512 kernels and the
+//!   cross-field switch, inlined from `bin-fields`.
 //! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
 //! - `eval`    : the binary shadow of the fold over `F162`.
 //! - `wire`    : the serialisation of the clear-text round: bit-packing for the uniform objects,
@@ -28,6 +30,7 @@ pub mod api;
 pub mod challenge;
 pub mod eval;
 pub mod f162;
+pub mod fields;
 pub mod fold;
 pub mod keccak;
 pub mod labrador;
@@ -42,7 +45,7 @@ pub mod wire;
 
 pub use api::Modulus;
 pub use api::PowerOfThreeRingElement as RingElement162;
-pub use bin_fields::scalar::F162;
+pub use fields::scalar::F162;
 pub use challenge::Transcript;
 pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,

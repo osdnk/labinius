@@ -1,4 +1,4 @@
-//! The `bin_fields::scalar::F162` input front end: how a stream of F162 elements is read as ring
+//! The [`fields::scalar::F162`](crate::fields::scalar::F162) input front end: how a stream of F162 elements is read as ring
 //! elements of R_q = Z_q[X]/(X^648 - X^324 + 1), plus the scalar reference for the SIMD slicer.
 //!
 //! Four consecutive elements a, b, c, d (indices 4r..4r+3 of the stream) form ring element r by
@@ -14,7 +14,7 @@
 use crate::params::N;
 use crate::rng::Rng;
 use crate::simd::transpose_f162::BinaryIndex32;
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 
 /// Number of significant bits of an `F162` (limbs 0 and 1 full, limb 2 holds bits 128..161).
 pub const BITS: usize = 162;

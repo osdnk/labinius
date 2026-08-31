@@ -28,7 +28,7 @@ use crate::scheme::{
 };
 use crate::wire;
 use crate::Transcript;
-use bin_fields::scalar::{B128 as SB, F162};
+use crate::fields::scalar::{B128 as SB, F162};
 use binius_compute::GlobalAllocator;
 use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;

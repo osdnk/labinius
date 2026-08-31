@@ -98,7 +98,7 @@ use crate::simd::transpose_f162::slice_f162_into;
 use crate::simd::vertical_bin_asm::{self as vb, BlockSink};
 use crate::simd::vertical_bin_large as vl;
 use crate::types::*;
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use core::arch::x86_64::*;
 
 // =============================================================================================

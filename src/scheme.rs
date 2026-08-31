@@ -40,7 +40,7 @@ use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
 use crate::{eval, RingElement162, RingElement648};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

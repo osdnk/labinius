@@ -2,7 +2,7 @@
 //! commitment against the scalar reference for both primes, the raw accumulator's exact fold-back
 //! and its overflow bound (replayed in i64 against the real kernel output), and the two-limb
 //! commitment against two single-limb ones.
-use bin_fields::scalar::F162;
+use bin_ntt::F162;
 use bin_ntt::f162::{self, RandomF162};
 use bin_ntt::params::N;
 use bin_ntt::rng::Rng;

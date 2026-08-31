@@ -33,7 +33,7 @@ use crate::api::{
 use crate::params::N;
 use crate::scheme::{Commitment, CommitmentValue, FoldedWitness, Params, RowEvaluation};
 use crate::types::{Representation, RingElement};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 
 /// Significant bits of an `F162`.
 pub const F162_BITS: u32 = 162;

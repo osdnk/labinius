@@ -321,7 +321,7 @@ fn the_exported_constraints_are_satisfied() {
 /// A lift and its reduction agree with `F162`.
 #[test]
 fn lifts_reduce_to_f162() {
-    use bin_fields::scalar::F162;
+    use bin_ntt::F162;
     let mut rng = Rng::new(23);
     for _ in 0..16 {
         let x = F162([rng.next_u64(), rng.next_u64(), rng.next_u64() & ((1 << 34) - 1)]);

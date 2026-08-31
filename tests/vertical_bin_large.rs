@@ -4,7 +4,7 @@
 //! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
 //! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
 //! what a commitment feeds it.
-use bin_fields::scalar::F162;
+use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;

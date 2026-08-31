@@ -31,7 +31,7 @@
 //!
 //! # How it is computed
 //!
-//! Every step is one dot product over `F`. The kernels are `bin_fields`' word-sliced AVX-512
+//! Every step is one dot product over `F`. The kernels are [`fields::f162`](crate::fields::f162)' word-sliced AVX-512
 //! ones — limb `k` of 8 consecutive elements in one `zmm`, `mac_soa8` accumulating the 12
 //! unreduced `clmul` products of a block and a single `reduce_soa8` at the end of the whole
 //! product, exactly as that crate's sumcheck round does. One operand (the `eq` table, or the
@@ -40,9 +40,9 @@
 //! pairs inside the loop ([`load_soa8`]).
 use crate::challenge::ShortChallenge;
 use crate::types::RingElement;
-use bin_fields::f162 as bf;
-use bin_fields::scalar::F162;
-use bin_fields::sumcheck::Poly;
+use crate::fields::f162 as bf;
+use crate::fields::scalar::F162;
+use crate::fields::sumcheck::Poly;
 use core::arch::x86_64::*;
 
 /// `eq(ps, b) = prod_k (ps_k if bit k of b is 1 else 1 + ps_k)`, all `2^ps.len()` of them, by
@@ -93,7 +93,7 @@ unsafe fn idx() -> Idx {
 }
 
 /// 8 consecutive `F162` (192 contiguous bytes) read as the word-sliced `[limb0, limb1, limb2]`
-/// the `bin_fields` kernels take.
+/// the [`fields::f162`](crate::fields::f162) kernels take.
 ///
 /// # Safety
 /// `p` addresses 24 readable `u64`.

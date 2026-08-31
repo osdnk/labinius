@@ -23,7 +23,7 @@
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
 use crate::api::{PowerOfThreeRingElementWithLimbs, N162};
-use bin_fields::scalar::F162;
+use crate::fields::scalar::F162;
 use blake3::Hasher;
 use std::f64::consts::PI;
 use std::sync::LazyLock;

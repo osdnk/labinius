@@ -1,11 +1,11 @@
-//! The cross-field switch, on top of [`bin_fields::crossfield`]: binius64's `B128` claim
+//! The cross-field switch, on top of [`crate::fields::crossfield`]: binius64's `B128` claim
 //! `w~(r) = s` on the packed trace becomes an `F162` evaluation claim on the same trace lifted by
 //! `phi` (the `beta` basis of `B128` onto `{1, X, ..., X^127} ⊂ F162`, so a zero-extension).
 //!
 //! The prover sends the 128 partial evaluations `v_i`, both sides draw `r' ∈ F162^7` after them,
 //! and an `l`-round sumcheck over `F162` reduces to `pi1~(r'')`, which the PCS opens.
-use bin_fields::crossfield as cf;
-use bin_fields::scalar::{B128 as SB, F162};
+use crate::fields::crossfield as cf;
+use crate::fields::scalar::{B128 as SB, F162};
 use binius_ip::channel::IPVerifierChannel;
 use binius_ip_prover::channel::IPProverChannel;
 use binius_verifier::config::B128;
