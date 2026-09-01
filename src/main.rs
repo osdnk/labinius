@@ -157,6 +157,7 @@ fn plain() {
 
     let moduli: Vec<String> = commitment.moduli().iter().map(|q| q.to_string()).collect();
     println!("bin-ntt, core {CPU}, one thread, moduli {}", moduli.join(", "));
+    println!("\n=== recursion off ===");
     println!(
         "witness: 2^{} F162 = {} ring elements of R_648, {} columns of {} F162",
         params.witness_log_len,
@@ -169,7 +170,6 @@ fn plain() {
         folded_witness.len(),
         row_evaluation.values().len()
     );
-    println!("\n=== recursion off ===");
     row("public parameters", setup_ms);
 
     println!("\nPROVER");
@@ -270,6 +270,14 @@ fn recursive() {
     let verify = verified.unwrap_or_default();
 
     println!("\n=== recursion on ===");
+    println!(
+        "witness: 2^{} F162 = {} ring elements of R_648, {} columns of {} F162",
+        params.witness_log_len,
+        params.witness_len() / 4,
+        params.columns(),
+        params.witness_len() / params.columns()
+    );
+
     row("public parameters", setup_ms);
     println!(
         "  key-time buffers            {:>9.0} MB",
