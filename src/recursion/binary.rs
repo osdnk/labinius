@@ -11,24 +11,39 @@
 //! over `Z` are exactly `eq(p0) . (v mod 2) = sum_j u_j (c_j mod 2)` and `u . eq(p1) = t`, and both
 //! quotients exist precisely when those hold.
 use super::chain::{At, Carries, Chain, Product};
-use super::{Build, Gadget, SElem, CHUNKS, U};
+use super::{Build, Gadget, Overflow, SElem, CHUNKS, U};
 use crate::api::N162;
 use crate::eval::eq_table;
 use crate::fields::scalar::F162;
 use crate::scheme::EvaluationPoint;
 
-/// The carries and quotients of the two binary chains. The carry reaches `base^2 / 2 = 2^21`:
-/// the binary fold sums `sum_j c_j lift(u_j)` in the `Z` basis, where a binary challenge brings no
-/// sign cancellation at all, and its honest carry measures `2^19.0` at the basic shape — 3.5x the
-/// ternary challenge's, and just past what a base of 1024 reaches.
-pub const CARRY_GADGET: Gadget = Gadget {
-    base: 2048,
-    levels: 2,
-};
-pub const QUOTIENT_GADGET: Gadget = Gadget {
-    base: 1024,
-    levels: 2,
-};
+/// The quotient and carry gadgets of the two binary chains, sized from the shape.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Shape {
+    pub quotient: Gadget,
+    pub carry: Gadget,
+}
+
+/// The binary fold sums in the `Z` basis, where a binary challenge against a binary lift brings no
+/// sign cancellation at all, so its quotient and carry grow with the number of terms: the largest
+/// quotient coefficient measured `7.05 n r` and the largest carry `10.5 n r` over 25 calibration
+/// rounds (`examples/gadget.rs` under `GADGET_STATS`) across every limb list and shapes from
+/// `(n, r) = (256, 64)` to `(1024, 256)`, with a spread of 6% and 30% between rounds. The
+/// constants carry a 1.1 margin over those maxima, which keeps the basic shape at two levels of
+/// each. The evaluation chain is a few hundredths of the fold chain and shares its gadgets.
+pub const QUOTIENT_PER_TERM: f64 = 7.8;
+pub const CARRY_PER_TERM: f64 = 12.0;
+
+impl Shape {
+    /// The gadgets at `n` ring elements per column and `r` columns.
+    pub fn of(n: usize, r: usize) -> Shape {
+        let terms = (n * r) as f64;
+        Shape {
+            quotient: Gadget::covering(1024, QUOTIENT_PER_TERM * terms),
+            carry: Gadget::covering(2048, CARRY_PER_TERM * terms),
+        }
+    }
+}
 
 /// An `F162` element as the `S`-element with its bits as coefficients.
 pub fn lift(x: &F162) -> SElem {
@@ -45,7 +60,7 @@ pub fn reduce_mod_2(x: &SElem) -> F162 {
 }
 
 /// Append the two lifted identities to `build`.
-pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
+pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) -> Result<(), Overflow> {
     let (n, r) = (build.n, build.r);
     let eq0 = eq_table(point.p0());
     assert_eq!(eq0.len(), 4 * n, "the row table does not match the key");
@@ -90,7 +105,7 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
             });
         }
     }
-    chain(build, "binary fold".into(), products, [0i64; N162], "w");
+    chain(build, "binary fold".into(), products, [0i64; N162], "w")?;
 
     let products = (0..CHUNKS)
         .flat_map(|b| {
@@ -110,13 +125,20 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
         products,
         lift(claim),
         "w'",
-    );
+    )
 }
 
 /// One lifted identity: quotient by 2, digits, carries.
-fn chain(build: &mut Build, name: String, products: Vec<Product>, output: SElem, tag: &str) {
-    let quotient = build.digit_vectors(tag, QUOTIENT_GADGET);
-    let carry = build.carry_vectors(tag, CARRY_GADGET);
+fn chain(
+    build: &mut Build,
+    name: String,
+    products: Vec<Product>,
+    output: SElem,
+    tag: &str,
+) -> Result<(), Overflow> {
+    let Shape { quotient, carry } = build.binary_chains;
+    let digits = build.digit_vectors(tag, quotient);
+    let carries = build.carry_vectors(tag, carry);
     build.seal(
         Chain {
             name,
@@ -124,12 +146,12 @@ fn chain(build: &mut Build, name: String, products: Vec<Product>, output: SElem,
             scaled: Vec::new(),
             output,
             carries: Carries {
-                gadget: CARRY_GADGET,
+                gadget: carry,
                 at: Vec::new(),
             },
         },
         2,
-        (QUOTIENT_GADGET, &quotient),
-        &carry,
-    );
+        (quotient, &digits),
+        &carries,
+    )
 }

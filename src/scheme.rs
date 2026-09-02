@@ -764,6 +764,8 @@ impl OpeningProof {
 pub enum OpeningError {
     /// `‖v‖^2` exceeded its cap; the caller retries the round with fresh challenges.
     FoldTooLong { normsq: u64, cap: u64 },
+    /// A chain's honest quotient or carry exceeded its gadget's reach; likewise retried.
+    GadgetOverflow(recursion::Overflow),
     /// LaBRADOR refused the statement or the witness.
     Labrador(String),
 }
@@ -774,6 +776,11 @@ impl fmt::Display for OpeningError {
             OpeningError::FoldTooLong { normsq, cap } => {
                 write!(f, "the fold has squared norm {normsq}, above the cap {cap}")
             }
+            OpeningError::GadgetOverflow(o) => write!(
+                f,
+                "{}: {} does not fit {} base-{} digits",
+                o.chain, o.magnitude, o.gadget.levels, o.gadget.base
+            ),
             OpeningError::Labrador(e) => write!(f, "LaBRADOR refused the opening: {e}"),
         }
     }
@@ -943,6 +950,12 @@ impl Prover {
             .map(|x| (x as i64 * x as i64) as u64)
             .sum();
         let cap = setup.fold_cap as u64;
+        if std::env::var_os("GADGET_STATS").is_some() {
+            eprintln!(
+                "gadget-stats fold normsq {normsq} cap {cap} fill {:.3}",
+                normsq as f64 / cap as f64
+            );
+        }
         if normsq > cap {
             return Err(OpeningError::FoldTooLong { normsq, cap });
         }
@@ -956,7 +969,8 @@ impl Prover {
             challenges,
             point,
             claimed_value,
-        );
+        )
+        .map_err(OpeningError::GadgetOverflow)?;
         timings.encoding = clock.elapsed();
         let clock = Instant::now();
         let witness = instance.witness();

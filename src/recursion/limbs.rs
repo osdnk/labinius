@@ -10,7 +10,7 @@
 //! when `l > m`.
 use super::chain::{At, Carries, Chain, Product};
 use super::setup::Setup;
-use super::{centre, Build, Cap, Gadget, Kind, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
+use super::{centre, Build, Cap, Gadget, Kind, Overflow, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
 use crate::api::{
     PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
     POW3_SLOT_EXP, SLOT_648,
@@ -27,8 +27,8 @@ use crate::simd::vertical_gen_large as vgl;
 use crate::simd::vertical_gen_quad::intt_quad_gen_batch32;
 use crate::types::{Batch32, Representation, RingElement};
 
-/// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the two
-/// base-512 digits of the wraparound quotient.
+/// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the
+/// base-512 digits of the wraparound quotient, both sized from the shape.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Shape {
     pub q: u16,
@@ -37,23 +37,36 @@ pub struct Shape {
     pub quotient: Gadget,
 }
 
+/// The limb's quotient and carries are linear in the fold, whose length the cap holds under
+/// `sqrt(FOLD_CAP n N r)`; at the cap the largest quotient coefficient measured `226 sqrt(n r)`
+/// and the largest carry `207 q sqrt(n r)`, each over 33 calibration rounds (`examples/gadget.rs`
+/// under `GADGET_STATS`) across every limb and shapes from `(n, r) = (256, 64)` to
+/// `(1024, 256)`, with a two-fold spread between rounds once normalised. The constants carry a
+/// 1.4 margin over those maxima.
+pub const QUOTIENT_PER_ROOT: f64 = 320.0;
+pub const CARRY_PER_ROOT: f64 = 300.0;
+
+/// Whether `q` splits `X^648 + 1` into quadratic slots rather than linear ones.
+pub fn quad(q: u16) -> bool {
+    !matches!(q, 3889 | 9721 | 17497 | 19441)
+}
+
 impl Shape {
-    pub fn of(q: u16) -> Shape {
-        // a product's coefficients have standard deviation about `q 2^14`, so a carry needs a
-        // range near `2^31`: three base-1024 digits below `2^13`, four base-256 digits above it.
-        let (base, levels) = match q {
-            2917 | 3889 => (1024, 3),
-            4861 | 9721 | 12637 | 17497 | 19441 => (256, 4),
+    /// The shape of limb `q` at `n` ring elements per column and `r` columns.
+    pub fn of(q: u16, n: usize, r: usize) -> Shape {
+        // the carry base: 1024 below `2^13`, 256 above it, so that a carry level stays a
+        // per-coefficient cap of the size the keys' SIS rule is set for.
+        let base = match q {
+            2917 | 3889 => 1024,
+            4861 | 9721 | 12637 | 17497 | 19441 => 256,
             _ => unreachable!("no limb with q = {q}"),
         };
+        let root = ((n * r) as f64).sqrt();
         Shape {
             q,
-            quad: !matches!(q, 3889 | 9721 | 17497 | 19441),
-            carry: Gadget { base, levels },
-            quotient: Gadget {
-                base: 512,
-                levels: 2,
-            },
+            quad: quad(q),
+            carry: Gadget::covering(base, CARRY_PER_ROOT * q as f64 * root),
+            quotient: Gadget::covering(512, QUOTIENT_PER_ROOT * root),
         }
     }
 }
@@ -384,7 +397,7 @@ pub fn residues(
     let r = matrix.cols();
     let mut vectors = Vec::with_capacity(4 * primes.len());
     for (limb, &prime) in primes.iter().enumerate() {
-        let Shape { q, quad, .. } = Shape::of(prime);
+        let (q, quad) = (prime, quad(prime));
         let mut out: Vec<Vec<Poly>> = (0..4)
             .map(|_| vec![[0i16; DEG]; (CHUNKS * r).next_multiple_of(PAD)])
             .collect();
@@ -408,7 +421,12 @@ pub fn residues(
 // =============================================================================================
 
 /// Append the four component identities of one limb to `build`.
-pub fn encode(build: &mut Build, setup: &Setup, residues: Option<&Residues>, limb: usize) {
+pub fn encode(
+    build: &mut Build,
+    setup: &Setup,
+    residues: Option<&Residues>,
+    limb: usize,
+) -> Result<(), Overflow> {
     let shape = setup.limbs[limb];
     let q = shape.q as i64;
     let (n, r) = (build.n, build.r);
@@ -485,6 +503,7 @@ pub fn encode(build: &mut Build, setup: &Setup, residues: Option<&Residues>, lim
             q,
             (shape.quotient, &quotient),
             &carry,
-        );
+        )?;
     }
+    Ok(())
 }
