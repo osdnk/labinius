@@ -11,12 +11,19 @@ pub fn reduce(p: &[i64]) -> SElem {
 }
 
 /// The same over a caller-owned buffer, which [`blocks`] reuses across the shifts of one element.
+/// The positions above `Z^161` are folded 81 at a time from the top, so that within one band no
+/// fold lands on a position the band still has to read.
 fn reduce_in_place(c: &mut [i64]) -> SElem {
-    for t in (N162..c.len()).rev() {
-        let x = c[t];
-        c[t] = 0;
-        c[t - 81] -= x;
-        c[t - N162] -= x;
+    let mut top = c.len();
+    while top > N162 {
+        let low = top.saturating_sub(81).max(N162);
+        let (rest, band) = c[..top].split_at_mut(low);
+        for (t, x) in band.iter_mut().enumerate() {
+            rest[low + t - 81] -= *x;
+            rest[low + t - N162] -= *x;
+            *x = 0;
+        }
+        top = low;
     }
     let mut out = [0i64; N162];
     out.copy_from_slice(&c[..N162]);

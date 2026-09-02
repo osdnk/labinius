@@ -37,7 +37,7 @@ use crate::api::N162;
 use crate::fields::scalar::F162;
 use crate::params::{QS, QS_LARGE, QS_QUAD};
 use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
-use chain::{At, Carries, Chain, Product, Scaled};
+use chain::{At, Carries, Chain, Prepared, Product, Run, Scaled};
 use setup::Setup;
 
 pub mod binary;
@@ -90,17 +90,6 @@ pub const COEFF_LIMIT: i64 = ((QS_LARGE[1] - 1) / 2) as i64;
 /// centered key row, and the two foldings `Z^162 = -Z^81 - 1` can perform leave it inside
 /// `2 |g|` — measured, 1.98 to 2.00 |g| for every prime (`tests/recursion.rs`).
 pub const BLOCK_LIMIT: i64 = 2 * COEFF_LIMIT;
-/// `vpmaddwd` accumulations [`chain`] takes before it widens its i32 lanes to i64: the largest
-/// power of two W with `2 W * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX`. It was 8 while the widest
-/// limb was 12637 and is 4 now that a residue coefficient reaches 9720.
-pub const WIDEN: usize = {
-    let mut w = 1usize;
-    while 2 * (2 * w as i64) * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX as i64 {
-        w *= 2;
-    }
-    w
-};
-const _: () = assert!(2 * (WIDEN as i64) * BLOCK_LIMIT * COEFF_LIMIT <= i32::MAX as i64);
 const _: () = {
     let mut i = 0;
     while i < 2 {
@@ -310,8 +299,6 @@ pub struct Instance {
     /// For a [`Kind::Lift`] group, the `SUB`-bit windows of each of its elements; empty otherwise.
     pub windows: Vec<Vec<u16>>,
     pub chains: Vec<chain::Chain>,
-    /// The term-major public sub-chunks of every chain; empty in a layout-only instance.
-    pub prepared: Vec<chain::Prepared>,
     pub limbs: Vec<limbs::Shape>,
     pub hooks: Hooks,
 }
@@ -367,12 +354,9 @@ impl Instance {
     /// The exact left-hand side of every block equation, over `Z`, reduced negacyclically in
     /// `X^DEG + 1` exactly as LaBRADOR would: the reference checker.
     pub fn residuals(&self) -> Vec<[[i128; DEG]; BLOCKS]> {
-        assert!(
-            !self.prepared.is_empty(),
-            "a layout-only instance has no witness to check"
-        );
-        (0..self.chains.len())
-            .map(|c| self.chains[c].residuals(&self.prepared[c], &self.vectors))
+        self.chains
+            .iter()
+            .map(|c| c.residuals(&self.public, &self.vectors))
             .collect()
     }
 
@@ -419,6 +403,13 @@ impl Instance {
                 })
             })
             .collect();
+        let runs = (0..CHUNKS)
+            .map(|b| Run {
+                g: chain::public_table(&build.public, public[0], g.len(), b),
+                x: chain::witness_table(&build.vectors[xs].polys, b, g.len(), CHUNKS),
+                terms: chain::padded(g.len()),
+            })
+            .collect();
         let carries = build.carry_vectors("x", carry);
         build
             .seal(
@@ -432,6 +423,7 @@ impl Instance {
                         at: Vec::new(),
                     },
                 },
+                runs,
                 1,
                 (Gadget { base: 1, levels: 0 }, &[]),
                 &carries,
@@ -461,7 +453,6 @@ pub struct Build {
     pub group_of: Vec<usize>,
     pub windows: Vec<Vec<u16>>,
     pub chains: Vec<chain::Chain>,
-    pub prepared: Vec<chain::Prepared>,
     pub limbs: Vec<limbs::Shape>,
     pub binary_chains: binary::Shape,
     /// Ring elements of the folded witness, and columns of the commitment.
@@ -469,6 +460,13 @@ pub struct Build {
     pub r: usize,
     /// The first public entry of the challenge group, shared by every chain.
     pub challenges: usize,
+    /// The term-major challenge blocks at every chunk, the public side of every chain's tail.
+    pub challenge_tables: Vec<chain::Table>,
+    /// The term-major coefficients of the `(l, b)` runs of `v`, `v_tables[l * CHUNKS + b]`: the
+    /// witness side of every limb chain's prefix and of the binary fold's.
+    pub v_tables: Vec<chain::Table>,
+    /// The same for the `CHUNKS` runs of `u`.
+    pub u_tables: Vec<chain::Table>,
     /// Whether the witness is filled in: a layout-only build sizes every vector and leaves it zero.
     pub witness: bool,
     /// `residues` and `rest` of [`Hooks`], filled as the vectors are created.
@@ -492,12 +490,14 @@ impl Build {
             group_of: Vec::new(),
             windows: Vec::new(),
             chains: Vec::new(),
-            prepared: Vec::new(),
             limbs: Vec::new(),
             binary_chains: binary::Shape::of(1, 1),
             n: 0,
             r: 0,
             challenges: 0,
+            challenge_tables: Vec::new(),
+            v_tables: Vec::new(),
+            u_tables: Vec::new(),
             witness: true,
             residues: Vec::new(),
             left_expansion: U,
@@ -557,6 +557,7 @@ impl Build {
         }
         let mut build = Build {
             vectors: vec![vv, uu],
+            public: Vec::with_capacity((setup.limbs.len() * 8 + 4) * n + 2 * r),
             n,
             r,
             binary_chains: setup.binary_chains,
@@ -573,6 +574,17 @@ impl Build {
             })
             .collect();
         build.challenges = build.group(Kind::Challenge, &negated);
+        if build.witness {
+            build.challenge_tables = (0..CHUNKS)
+                .map(|b| chain::public_table(&build.public, build.challenges, r, b))
+                .collect();
+            build.v_tables = (0..4 * CHUNKS)
+                .map(|run| chain::witness_table(&build.vectors[V].polys, run * n, n, 1))
+                .collect();
+            build.u_tables = (0..CHUNKS)
+                .map(|b| chain::witness_table(&build.vectors[U].polys, b * r, r, 1))
+                .collect();
+        }
         build
     }
 
@@ -661,6 +673,7 @@ impl Build {
     pub fn seal(
         &mut self,
         mut chain: Chain,
+        prep: Prepared,
         divisor: i64,
         quotient: (Gadget, &[usize]),
         carry: &[usize],
@@ -689,8 +702,7 @@ impl Build {
             self.chains.push(chain);
             return Ok(());
         }
-        let prep = chain.prepare(&self.public);
-        let mut sums = chain.sums(&prep, &self.vectors);
+        let mut sums = Chain::sums(&prep);
         let value = Chain::value(&sums);
         let k: SElem = core::array::from_fn(|t| {
             let x = value[t] - chain.output[t];
@@ -780,7 +792,6 @@ impl Build {
                 self.vectors[vector].push(p);
             }
         }
-        self.prepared.push(prep);
         self.chains.push(chain);
         Ok(())
     }
@@ -797,7 +808,6 @@ impl Build {
             group_of: self.group_of,
             windows: self.windows,
             chains: self.chains,
-            prepared: self.prepared,
             limbs: self.limbs,
             hooks: Hooks {
                 residues: self.residues,

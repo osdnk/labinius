@@ -10,7 +10,7 @@
 //!
 //! over `Z` are exactly `eq(p0) . (v mod 2) = sum_j u_j (c_j mod 2)` and `u . eq(p1) = t`, and both
 //! quotients exist precisely when those hold.
-use super::chain::{At, Carries, Chain, Product};
+use super::chain::{padded, public_table, At, Carries, Chain, Prepared, Product, Run};
 use super::{Build, Gadget, Overflow, SElem, CHUNKS, U};
 use crate::api::N162;
 use crate::eval::eq_table;
@@ -82,6 +82,7 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) -> Resul
     );
 
     let mut products = Vec::with_capacity(4 * CHUNKS * n + CHUNKS * r);
+    let mut runs = Vec::with_capacity(4 * CHUNKS + CHUNKS);
     for l in 0..4 {
         for b in 0..CHUNKS {
             for i in 0..n {
@@ -89,6 +90,13 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) -> Resul
                     blocks: base_eq0 + l * n + i,
                     chunk: b,
                     at: build.v_at(l, b, i),
+                });
+            }
+            if build.witness {
+                runs.push(Run {
+                    g: public_table(&build.public, base_eq0 + l * n, n, b),
+                    x: build.v_tables[l * CHUNKS + b].clone(),
+                    terms: padded(n),
                 });
             }
         }
@@ -104,8 +112,22 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) -> Resul
                 },
             });
         }
+        if build.witness {
+            runs.push(Run {
+                g: build.challenge_tables[b].clone(),
+                x: build.u_tables[b].clone(),
+                terms: padded(r),
+            });
+        }
     }
-    chain(build, "binary fold".into(), products, [0i64; N162], "w")?;
+    chain(
+        build,
+        "binary fold".into(),
+        products,
+        runs,
+        [0i64; N162],
+        "w",
+    )?;
 
     let products = (0..CHUNKS)
         .flat_map(|b| {
@@ -119,10 +141,19 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) -> Resul
             })
         })
         .collect();
+    let runs = (0..CHUNKS)
+        .filter(|_| build.witness)
+        .map(|b| Run {
+            g: public_table(&build.public, base_eq1, r, b),
+            x: build.u_tables[b].clone(),
+            terms: padded(r),
+        })
+        .collect();
     chain(
         build,
         "binary evaluation".into(),
         products,
+        runs,
         lift(claim),
         "w'",
     )
@@ -133,6 +164,7 @@ fn chain(
     build: &mut Build,
     name: String,
     products: Vec<Product>,
+    runs: Prepared,
     output: SElem,
     tag: &str,
 ) -> Result<(), Overflow> {
@@ -150,6 +182,7 @@ fn chain(
                 at: Vec::new(),
             },
         },
+        runs,
         2,
         (quotient, &digits),
         &carries,

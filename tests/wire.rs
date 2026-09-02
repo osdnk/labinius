@@ -133,6 +133,42 @@ fn the_commitment_packer_takes_the_extremes() {
     }
 }
 
+/// A field at or above its modulus is refused wherever it sits: the first slot, the two slots
+/// of a limb's tail group, the last slot of the buffer.
+#[test]
+fn an_out_of_range_residue_is_refused() {
+    let params = Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], false).unwrap();
+    let r = round(params.clone());
+    let bytes = wire::pack_commitment(&r.commitment);
+    let primes = params.primes();
+    let widths: Vec<usize> = primes
+        .iter()
+        .map(|&q| wire::residue_bits(q) as usize)
+        .collect();
+    let per_element: usize = widths.iter().map(|w| 162 * w).sum();
+    let last = 4 * params.columns() - 1;
+    for (element, limb, slot) in [
+        (0usize, 0usize, 0usize),
+        (0, 0, 160),
+        (0, 1, 161),
+        (1, 0, 17),
+        (last, 1, 161),
+        (last, 0, 161),
+    ] {
+        let offset: usize = widths[..limb].iter().map(|w| 162 * w).sum();
+        let bit = element * per_element + offset + slot * widths[limb];
+        let mut bad = bytes.clone();
+        for b in bit..bit + widths[limb] {
+            bad[b / 8] |= 1 << (b % 8);
+        }
+        assert_eq!(
+            wire::unpack_commitment(&params, &bad),
+            Err(WireError::Malformed),
+            "element {element}, limb {limb}, slot {slot}"
+        );
+    }
+}
+
 // =============================================================================================
 // the entropy coder
 // =============================================================================================
@@ -266,6 +302,98 @@ fn a_broken_stream_is_refused() {
     let mut wrong = bytes.clone();
     wrong[0] = 2;
     assert_eq!(wire::decode(&wrong), Err(WireError::Malformed));
+}
+
+/// Every element count leaves a different tail group — `648 mod LANES` lanes per element — so
+/// the lockstep decoder meets the odd-sized group at every offset; the empty fold, too.
+#[test]
+fn an_interleaved_fold_round_trips_at_every_length() {
+    assert!(wire::decode(&wire::encode(&fold_of(Vec::new()), 3889))
+        .unwrap()
+        .is_empty());
+    let mut state = 0x1234_5678_9ABC_DEF1u64;
+    for count in [1usize, 2, 3, 5, 7, 8] {
+        let folded = fold_of(
+            (0..count)
+                .map(|_| {
+                    (0..648)
+                        .map(|_| {
+                            state = state
+                                .wrapping_mul(6364136223846793005)
+                                .wrapping_add(1442695040888963407);
+                            let sum: u32 = (0..6)
+                                .map(|i| (state >> (10 * i)) & 0x3F)
+                                .map(|v| v as u32)
+                                .sum();
+                            sum as i16 - 189
+                        })
+                        .collect()
+                })
+                .collect(),
+        );
+        let bytes = wire::encode(&folded, 3889);
+        assert_eq!(
+            wire::decode(&bytes).unwrap().elements(),
+            folded.elements(),
+            "{count} elements"
+        );
+        assert!(
+            bytes.len() as f64
+                <= wire::entropy_bytes(&folded) * 1.02 + 4.0 * wire::LANES as f64 + 200.0,
+            "{count} elements: {} bytes against {:.0} of entropy",
+            bytes.len(),
+            wire::entropy_bytes(&folded)
+        );
+    }
+}
+
+/// Per lane: a message whose only expensive symbols sit in lane `k`, so that lane alone emits
+/// exactly one word. Cutting it is a stream that ends early on lane `k`; appending one is a word
+/// no lane consumes.
+#[test]
+fn a_stream_short_or_long_by_one_word_on_any_lane_is_refused() {
+    for k in 0..wire::LANES {
+        let mut values = vec![0i16; 648];
+        for i in (k..648).step_by(wire::LANES).take(3) {
+            values[i] = 1;
+        }
+        let folded = fold_of(vec![values]);
+        let bytes = wire::encode(&folded, 3889);
+        assert_eq!(bytes.len(), 16 + 5 + 4 * wire::LANES + 2, "lane {k}");
+        assert_eq!(wire::decode(&bytes).unwrap().elements(), folded.elements());
+        assert_eq!(
+            wire::decode(&bytes[..bytes.len() - 2]),
+            Err(WireError::Truncated),
+            "lane {k}, its word cut"
+        );
+        assert_eq!(
+            wire::decode(&bytes[..bytes.len() - 3]),
+            Err(WireError::Truncated),
+            "lane {k}, its word half cut"
+        );
+        let mut long = bytes.clone();
+        long.extend_from_slice(&[0, 0]);
+        assert_eq!(
+            wire::decode(&long),
+            Err(WireError::Malformed),
+            "lane {k}, a word left over"
+        );
+        let mut states_cut = bytes.clone();
+        states_cut.truncate(16 + 5 + 4 * k + 2);
+        assert_eq!(
+            wire::decode(&states_cut),
+            Err(WireError::Truncated),
+            "lane {k}, its state cut"
+        );
+        let mut state_low = bytes.clone();
+        state_low[16 + 5 + 4 * k + 2] = 0;
+        state_low[16 + 5 + 4 * k + 3] = 0;
+        assert_eq!(
+            wire::decode(&state_low),
+            Err(WireError::Malformed),
+            "lane {k}, its state below the interval"
+        );
+    }
 }
 
 /// The verifier accepts what came off the wire, and rejects it once a byte of the stream moves.
