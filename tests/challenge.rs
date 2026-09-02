@@ -19,7 +19,7 @@ fn max_weight_and_default() {
     assert!(MAX_WEIGHT >= 32);
     assert!(DEFAULT_WEIGHT <= MAX_WEIGHT);
     assert_eq!(DEFAULT_WEIGHT, 28);
-    assert_eq!(DEFAULT_BOUND, 11.0);
+    assert_eq!(DEFAULT_BOUND, 12.0);
 }
 
 #[test]

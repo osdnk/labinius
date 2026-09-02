@@ -14,7 +14,7 @@
 //! squared operator norm of multiplication by `c` on `R_162 (x) C` *in the canonical embedding*.
 //! The power basis of a power-of-three conductor is not orthogonal there, so the expansion factor
 //! on coefficient vectors that a security argument uses is `sqrt(3)` times the canonical bound —
-//! `sqrt(3) * 11 = 19.05` at the default, not `11`. The default is `weight = 28`, `bound = 11`.
+//! `sqrt(3) * 12 = 20.78` at the default, not `12`. The default is `weight = 28`, `bound = 12`.
 //!
 //! The challenge is binary rather than ternary because the lift into `R_648` is `c(-X^4)`: the
 //! parity of the exponent already carries a `+-` into the `X`-basis, which is where the fold's
