@@ -16,7 +16,10 @@ fn shadow<const Q: u16>(input: &[i16; N], lmax: &mut [i32; 7]) -> [i32; N] {
         assert!(v[i].abs() <= Q as i32, "input bound");
     }
     let mont = |a: i32, x: u16| -> i32 {
-        assert!(a.abs() < 32768, "i16 overflow feeding a multiplication: {a}");
+        assert!(
+            a.abs() < 32768,
+            "i16 overflow feeding a multiplication: {a}"
+        );
         let w = Params::<Q>::to_mont(x);
         params_mont(a as i16, w, Params::<Q>::mont_pre(w), Q) as i32
     };
@@ -97,13 +100,19 @@ fn check<const Q: u16>(cols: &[[i16; N]; 32], what: &str) {
         let want = scalar::ntt::<Q>(&coeffs);
         for j in 0..N {
             let got = b.v[j][p] as i32;
-            assert_eq!(got, want_shadow[j], "{what} q={Q} poly {p} slot {j}: shadow mismatch");
+            assert_eq!(
+                got, want_shadow[j],
+                "{what} q={Q} poly {p} slot {j}: shadow mismatch"
+            );
             assert_eq!(
                 got.rem_euclid(Q as i32) as u32,
                 want[j],
                 "{what} q={Q} poly {p} slot {j}"
             );
-            assert!(got.abs() <= bound, "{what} q={Q} poly {p} slot {j}: |{got}| > {bound}");
+            assert!(
+                got.abs() <= bound,
+                "{what} q={Q} poly {p} slot {j}: |{got}| > {bound}"
+            );
         }
     }
 }
@@ -125,7 +134,9 @@ fn adversarial<const Q: u16>() -> Vec<[[i16; N]; 32]> {
     out.push([[0i16; N]; 32]);
     out.push([[q; N]; 32]);
     out.push([[-q; N]; 32]);
-    out.push(std::array::from_fn(|_| std::array::from_fn(|j| if j % 2 == 0 { q } else { -q })));
+    out.push(std::array::from_fn(|_| {
+        std::array::from_fn(|j| if j % 2 == 0 { q } else { -q })
+    }));
     out.push(std::array::from_fn(|p| {
         std::array::from_fn(|j| if (j + p) % 2 == 0 { q } else { -q })
     }));
@@ -199,7 +210,11 @@ fn bounds<const Q: u16>() {
     let claim = level_bounds::<Q>();
     for l in 0..7 {
         let c = claim[l];
-        assert!(worst[l] <= c, "q={Q} level {l}: observed {} > claimed {c}", worst[l]);
+        assert!(
+            worst[l] <= c,
+            "q={Q} level {l}: observed {} > claimed {c}",
+            worst[l]
+        );
         assert!(c < 32768, "q={Q} level {l}: claimed bound {c} exceeds i16");
         println!(
             "q={Q} level {l}: observed {} ({:.3} q), claimed {c} ({:.4} q)",
@@ -233,7 +248,10 @@ fn shadow_inv<const Q: u16>(input: &[i16; N], lmax: &mut [i32; 7]) -> [i32; N] {
         assert!(v[i].abs() <= TwI::<Q>::IN_BOUND, "input bound: {}", v[i]);
     }
     let mont = |a: i32, x: u16| -> i32 {
-        assert!(a.abs() < 32768, "i16 overflow feeding a multiplication: {a}");
+        assert!(
+            a.abs() < 32768,
+            "i16 overflow feeding a multiplication: {a}"
+        );
         let w = Params::<Q>::to_mont(x);
         mont_mul_i16(a as i16, w, Params::<Q>::mont_pre(w), Q) as i32
     };
@@ -247,7 +265,10 @@ fn shadow_inv<const Q: u16>(input: &[i16; N], lmax: &mut [i32; 7]) -> [i32; N] {
     };
     let w1 = Params::<Q>::OMEGA;
     let zi = |level: usize, k: usize| -> u16 {
-        inv_mod(pow_mod(Params::<Q>::PSI as u64, twiddle_exp(level, k) as u64, q), q) as u16
+        inv_mod(
+            pow_mod(Params::<Q>::PSI as u64, twiddle_exp(level, k) as u64, q),
+            q,
+        ) as u16
     };
     // one inverse radix-3 butterfly on the three positions, returning the untwiddled sum first
     let r3i = |v: &mut [i32; N], i0: usize, i1: usize, i2: usize, z: u16, bar_s: bool| {
@@ -277,7 +298,14 @@ fn shadow_inv<const Q: u16>(input: &[i16; N], lmax: &mut [i32; 7]) -> [i32; N] {
         for bb in 0..3 {
             for j in 0..3 {
                 let b = 27 * k4 + 9 * bb + j;
-                r3i(&mut v, b, b + 3, b + 6, zi(5, 3 * k4 + bb), TwI::<Q>::BAR_S5[j]);
+                r3i(
+                    &mut v,
+                    b,
+                    b + 3,
+                    b + 6,
+                    zi(5, 3 * k4 + bb),
+                    TwI::<Q>::BAR_S5[j],
+                );
             }
         }
     }
@@ -368,8 +396,14 @@ fn check_inv<const Q: u16>(cols: &[[i16; N]; 32], what: &str, worst: &mut [i32; 
         let want = scalar::intt::<Q>(&scalar::normalize_i16(&cols[p], Q));
         for j in 0..N {
             let got = b.v[j][p] as i32;
-            assert_eq!(got, want_shadow[j], "{what} q={Q} poly {p} coeff {j}: shadow mismatch");
-            assert!(got.abs() <= half, "{what} q={Q} poly {p} coeff {j}: |{got}| > {half}");
+            assert_eq!(
+                got, want_shadow[j],
+                "{what} q={Q} poly {p} coeff {j}: shadow mismatch"
+            );
+            assert!(
+                got.abs() <= half,
+                "{what} q={Q} poly {p} coeff {j}: |{got}| > {half}"
+            );
             assert_eq!(
                 got.rem_euclid(Q as i32) as u32,
                 want[j],
@@ -392,8 +426,12 @@ fn adversarial_ntt<const Q: u16>() -> Vec<[[i16; N]; 32]> {
     out.push([[0i16; N]; 32]);
     out.push([[m; N]; 32]);
     out.push([[-m; N]; 32]);
-    out.push(std::array::from_fn(|_| std::array::from_fn(|j| if j % 2 == 0 { m } else { -m })));
-    out.push(std::array::from_fn(|_| std::array::from_fn(|j| if j % 3 == 0 { m } else { -m })));
+    out.push(std::array::from_fn(|_| {
+        std::array::from_fn(|j| if j % 2 == 0 { m } else { -m })
+    }));
+    out.push(std::array::from_fn(|_| {
+        std::array::from_fn(|j| if j % 3 == 0 { m } else { -m })
+    }));
     out.push(std::array::from_fn(|p| {
         std::array::from_fn(|j| if (j / 27 + p) % 2 == 0 { m } else { -m })
     }));
@@ -431,8 +469,17 @@ fn run_inv<const Q: u16>() {
     }
     let claim = TwI::<Q>::BOUND;
     for l in 0..7 {
-        assert!(worst[l] <= claim[l], "q={Q} inverse level {l}: {} > claimed {}", worst[l], claim[l]);
-        assert!(claim[l] < 32768, "q={Q} inverse level {l}: claimed {} exceeds i16", claim[l]);
+        assert!(
+            worst[l] <= claim[l],
+            "q={Q} inverse level {l}: {} > claimed {}",
+            worst[l],
+            claim[l]
+        );
+        assert!(
+            claim[l] < 32768,
+            "q={Q} inverse level {l}: claimed {} exceeds i16",
+            claim[l]
+        );
         println!(
             "q={Q} inverse level {l}: observed {} ({:.3} q), claimed {} ({:.4} q)",
             worst[l],
@@ -490,7 +537,10 @@ fn round_trip<const Q: u16>() {
                 if want > half {
                     want -= Q as i32;
                 }
-                assert_eq!(b.v[j][p] as i32, want, "round trip #{c} q={Q} poly {p} coeff {j}");
+                assert_eq!(
+                    b.v[j][p] as i32, want,
+                    "round trip #{c} q={Q} poly {p} coeff {j}"
+                );
             }
         }
     }

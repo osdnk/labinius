@@ -30,10 +30,10 @@
 use crate::api::{
     PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
 };
+use crate::fields::scalar::F162;
 use crate::params::N;
 use crate::scheme::{Commitment, CommitmentValue, FoldedWitness, Params, RowEvaluation};
 use crate::types::{Representation, RingElement};
-use crate::fields::scalar::F162;
 
 /// Significant bits of an `F162`.
 pub const F162_BITS: u32 = 162;
@@ -73,7 +73,11 @@ struct BitWriter {
 
 impl BitWriter {
     fn with_capacity(bytes: usize) -> BitWriter {
-        BitWriter { bytes: Vec::with_capacity(bytes), acc: 0, n: 0 }
+        BitWriter {
+            bytes: Vec::with_capacity(bytes),
+            acc: 0,
+            n: 0,
+        }
     }
 
     /// `bits` low bits of `value`, least significant first, `bits <= 32`.
@@ -125,7 +129,12 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(bytes: &'a [u8]) -> BitReader<'a> {
-        BitReader { bytes, pos: 0, acc: 0, n: 0 }
+        BitReader {
+            bytes,
+            pos: 0,
+            acc: 0,
+            n: 0,
+        }
     }
 
     fn get(&mut self, bits: u32) -> Result<u64, WireError> {
@@ -213,7 +222,11 @@ pub fn unpack_commitment(params: &Params, bytes: &[u8]) -> Result<Commitment, Wi
                 if value >= q as i32 {
                     return Err(WireError::Malformed);
                 }
-                *slot = if value > half { (value - q as i32) as i16 } else { value as i16 };
+                *slot = if value > half {
+                    (value - q as i32) as i16
+                } else {
+                    value as i16
+                };
             }
             limbs.push(element);
         }
@@ -354,8 +367,11 @@ pub fn decode(bytes: &[u8]) -> Result<FoldedWitness, WireError> {
     if bytes[0] != 1 || bytes[1] > 1 {
         return Err(WireError::Malformed);
     }
-    let representation =
-        if bytes[1] == 1 { Representation::Ntt } else { Representation::Coefficients };
+    let representation = if bytes[1] == 1 {
+        Representation::Ntt
+    } else {
+        Representation::Coefficients
+    };
     let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
     let low = i32::from_le_bytes(bytes[8..12].try_into().unwrap());
     let length = u32::from_le_bytes(bytes[12..HEADER].try_into().unwrap()) as usize;
@@ -396,7 +412,9 @@ pub fn decode(bytes: &[u8]) -> Result<FoldedWitness, WireError> {
     if stream.len() % 2 != 0 || stream.len() < 4 {
         return Err(WireError::Malformed);
     }
-    let mut words = stream.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let mut words = stream
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]));
     let mut x = ((words.next().unwrap() as u32) << 16) | words.next().unwrap() as u32;
     let escape = length as u32;
     let raw = raw_bits(length);

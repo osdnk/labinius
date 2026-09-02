@@ -80,7 +80,11 @@ fn from_arr(x: [u64; 8]) -> __m512i {
 }
 
 fn rand162(r: &mut Rng) -> [u64; 3] {
-    [r.next_u64(), r.next_u64(), r.next_u64() & ((1u64 << 34) - 1)]
+    [
+        r.next_u64(),
+        r.next_u64(),
+        r.next_u64() & ((1u64 << 34) - 1),
+    ]
 }
 
 fn rand128(r: &mut Rng) -> u128 {
@@ -95,8 +99,14 @@ fn funnel_shift_semantics() {
         let b = 0xfedc_ba98_7654_3210u64;
         let va = _mm512_set1_epi64(a as i64);
         let vb = _mm512_set1_epi64(b as i64);
-        assert_eq!(to_arr(_mm512_shrdi_epi64::<17>(va, vb))[0], (a >> 17) | (b << 47));
-        assert_eq!(to_arr(_mm512_shldi_epi64::<17>(va, vb))[0], (a << 17) | (b >> 47));
+        assert_eq!(
+            to_arr(_mm512_shrdi_epi64::<17>(va, vb))[0],
+            (a >> 17) | (b << 47)
+        );
+        assert_eq!(
+            to_arr(_mm512_shldi_epi64::<17>(va, vb))[0],
+            (a << 17) | (b >> 47)
+        );
     }
 }
 
@@ -244,7 +254,9 @@ fn true_claim(pi0: &[B128], r_lo: &[B128], r_hi: &[B128]) -> B128 {
 
 fn true_pi1_eval(pi0: &[B128], r_pp: &[F162]) -> F162 {
     let eq = eq_expand_f162(r_pp);
-    pi0.iter().zip(&eq).fold(F162::ZERO, |a, (&p, &e)| a + F162::from_b128(p) * e)
+    pi0.iter()
+        .zip(&eq)
+        .fold(F162::ZERO, |a, (&p, &e)| a + F162::from_b128(p) * e)
 }
 
 #[test]
@@ -254,7 +266,11 @@ fn switch_end_to_end() {
         let claim = true_claim(&pi0, &r_lo, &r_hi);
         let proof = prove(&pi0, &r_lo, &r_hi, &ch);
         let z = verify(&proof, claim, &r_lo, &r_hi, &ch).expect("verify");
-        assert_eq!(z, true_pi1_eval(&pi0, &ch.r_pp), "l={l}: opened wrong value");
+        assert_eq!(
+            z,
+            true_pi1_eval(&pi0, &ch.r_pp),
+            "l={l}: opened wrong value"
+        );
     }
 }
 
@@ -295,7 +311,10 @@ fn transparent_coeff_matches_definition() {
     let tab = psi_table(&batch);
     let eq_hi = eq_expand_b128(&r_hi);
     let eq_pp = eq_expand_f162(&ch.r_pp);
-    let want = eq_hi.iter().zip(&eq_pp).fold(F162::ZERO, |a, (&h, &v)| a + v * psi(&tab, h));
+    let want = eq_hi
+        .iter()
+        .zip(&eq_pp)
+        .fold(F162::ZERO, |a, (&h, &v)| a + v * psi(&tab, h));
     assert_eq!(transparent_coeff(&r_hi, &ch.r_pp, &batch), want);
 }
 

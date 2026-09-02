@@ -4,7 +4,7 @@
 #[path = "../src/bin/basefold.rs"]
 mod basefold;
 
-use basefold::{Pcs, prove, random_words, verify};
+use basefold::{prove, random_words, verify, Pcs};
 use binius_compute::BufferPool;
 
 const LOG_LEN: usize = 12;

@@ -91,11 +91,19 @@ pub struct VectorSpec {
 
 impl VectorSpec {
     pub fn norm_bounded(n: usize, betasq: u64) -> Self {
-        Self { n, betasq, binary: false }
+        Self {
+            n,
+            betasq,
+            binary: false,
+        }
     }
 
     pub fn binary(n: usize) -> Self {
-        Self { n, betasq: 0, binary: true }
+        Self {
+            n,
+            betasq: 0,
+            binary: true,
+        }
     }
 
     fn c_betasq(&self) -> u64 {
@@ -155,8 +163,15 @@ pub struct ShortPhi {
 
 impl ShortPhi {
     pub fn new(off: usize, wid: usize, c: Vec<i16>) -> Self {
-        assert!(wid > 0 && off + wid <= N, "a short phi must fit the ring degree");
-        assert_eq!(c.len() % wid, 0, "coefficients are element major, {wid} per element");
+        assert!(
+            wid > 0 && off + wid <= N,
+            "a short phi must fit the ring degree"
+        );
+        assert_eq!(
+            c.len() % wid,
+            0,
+            "coefficients are element major, {wid} per element"
+        );
         Self { off, wid, c }
     }
 
@@ -252,17 +267,29 @@ impl BlockPtrs {
 
 impl Constraint {
     pub fn new(deg: usize, blocks: Vec<Block>, phi: PhiSource, b: Option<BSource>) -> Self {
-        Self { deg, blocks, phi, b, phi_cache: OnceLock::new() }
+        Self {
+            deg,
+            blocks,
+            phi,
+            b,
+            phi_cache: OnceLock::new(),
+        }
     }
 
     /// Total `phi` length: the blocks' lengths, each padded to `philen(len, deg)`.
     pub fn phi_len(&self) -> usize {
-        self.blocks.iter().map(|blk| philen(blk.len, self.deg)).sum()
+        self.blocks
+            .iter()
+            .map(|blk| philen(blk.len, self.deg))
+            .sum()
     }
 
     /// Offset of block `j` within `phi`.
     pub fn phi_offset(&self, j: usize) -> usize {
-        self.blocks[..j].iter().map(|blk| philen(blk.len, self.deg)).sum()
+        self.blocks[..j]
+            .iter()
+            .map(|blk| philen(blk.len, self.deg))
+            .sum()
     }
 
     /// The `phi` buffer, converting and caching the owned forms on first use.
@@ -309,7 +336,9 @@ impl Constraint {
         }
         let buf = self.phi_buf();
         let base = self.phi_base();
-        p.phi = (0..self.blocks.len()).map(|j| buf.ptr_at(base + self.phi_offset(j))).collect();
+        p.phi = (0..self.blocks.len())
+            .map(|j| buf.ptr_at(base + self.phi_offset(j)))
+            .collect();
         p
     }
 
@@ -362,7 +391,11 @@ pub struct Statement {
 
 impl Statement {
     pub fn new(vectors: Vec<VectorSpec>, constraints: Vec<Constraint>) -> Self {
-        let mut st = Self { vectors, constraints, digest: [0u8; 32] };
+        let mut st = Self {
+            vectors,
+            constraints,
+            digest: [0u8; 32],
+        };
         st.digest = st.content_digest();
         st
     }
@@ -375,7 +408,11 @@ impl Statement {
         constraints: Vec<Constraint>,
         digest: [u8; 32],
     ) -> Self {
-        Self { vectors, constraints, digest }
+        Self {
+            vectors,
+            constraints,
+            digest,
+        }
     }
 
     /// Total rank over all vectors.
@@ -502,7 +539,10 @@ impl Witness {
 
     /// Squared l2-norm of vector `i`, the value LaBRADOR will recompute.
     pub fn normsq(&self, i: usize) -> u64 {
-        self.vectors[i].iter().map(|&c| (c as i64 * c as i64) as u64).sum()
+        self.vectors[i]
+            .iter()
+            .map(|&c| (c as i64 * c as i64) as u64)
+            .sum()
     }
 
     /// Convert to `polx` once, for constraint evaluation.
@@ -541,7 +581,9 @@ impl Drop for Quiet {
 
 fn labrador_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// A commitment-key length that covers a statement of this total witness rank.
@@ -670,10 +712,15 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
             return Err(format!("vector {i}: rank 0"));
         }
         if !v.binary && v.betasq == 0 {
-            return Err(format!("vector {i}: betasq 0 on a non-binary vector (use VectorSpec::binary)"));
+            return Err(format!(
+                "vector {i}: betasq 0 on a non-binary vector (use VectorSpec::binary)"
+            ));
         }
         if v.betasq >= 1u64 << (logq() - 1) {
-            return Err(format!("vector {i}: betasq {} exceeds 2^(LOGQ-1)", v.betasq));
+            return Err(format!(
+                "vector {i}: betasq {} exceeds 2^(LOGQ-1)",
+                v.betasq
+            ));
         }
     }
     for (ci, c) in stmt.constraints.iter().enumerate() {
@@ -682,7 +729,10 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
         }
         for (j, blk) in c.blocks.iter().enumerate() {
             if blk.idx >= stmt.vectors.len() {
-                return Err(format!("constraint {ci}: block {j} idx {} out of range", blk.idx));
+                return Err(format!(
+                    "constraint {ci}: block {j} idx {} out of range",
+                    blk.idx
+                ));
             }
             if blk.len == 0 {
                 return Err(format!("constraint {ci}: block {j} has length 0"));
@@ -715,7 +765,9 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
                 match part {
                     PhiBlock::Polx(buf, off) => {
                         if off + philen(blk.len, c.deg) > buf.len() {
-                            return Err(format!("constraint {ci}: phi block {j} runs past its buffer"));
+                            return Err(format!(
+                                "constraint {ci}: phi block {j} runs past its buffer"
+                            ));
                         }
                     }
                     PhiBlock::Short(sp, off) => {
@@ -727,7 +779,9 @@ fn check_statement(stmt: &Statement) -> Result<(), String> {
                             ));
                         }
                         if off + philen(blk.len, c.deg) > sp.len() {
-                            return Err(format!("constraint {ci}: short phi block {j} runs past its buffer"));
+                            return Err(format!(
+                                "constraint {ci}: short phi block {j} runs past its buffer"
+                            ));
                         }
                     }
                 }
@@ -775,7 +829,9 @@ fn check_witness(stmt: &Statement, wit: &Witness) -> Result<(), String> {
         ));
     }
     for (i, (v, coeffs)) in stmt.vectors.iter().zip(wit.vectors.iter()).enumerate() {
-        let expected = v.n.checked_mul(N).ok_or_else(|| format!("vector {i}: n*64 overflowed usize"))?;
+        let expected =
+            v.n.checked_mul(N)
+                .ok_or_else(|| format!("vector {i}: n*64 overflowed usize"))?;
         if coeffs.len() != expected {
             return Err(format!(
                 "vector {i}: witness has {} coefficients, statement rank {} wants {expected}",
@@ -798,7 +854,10 @@ fn check_witness(stmt: &Statement, wit: &Witness) -> Result<(), String> {
             }
             let normsq = wit.normsq(i);
             if normsq > v.betasq {
-                return Err(format!("vector {i}: normsq {normsq} exceeds betasq {}", v.betasq));
+                return Err(format!(
+                    "vector {i}: normsq {normsq} exceeds betasq {}",
+                    v.betasq
+                ));
             }
         }
     }
@@ -818,7 +877,13 @@ fn build_raw_statement(stmt: &Statement) -> Result<RawStatement, String> {
     }
     let raw = RawStatement(ptr);
     let ret = unsafe {
-        ffi::labrador48_init_smplstmnt_raw(raw.0, n.len(), n.as_ptr(), betasq.as_ptr(), stmt.constraints.len())
+        ffi::labrador48_init_smplstmnt_raw(
+            raw.0,
+            n.len(),
+            n.as_ptr(),
+            betasq.as_ptr(),
+            stmt.constraints.len(),
+        )
     };
     if ret != 0 {
         return Err(format!("init_smplstmnt_raw failed with code {ret}"));
@@ -857,7 +922,9 @@ fn build_raw_statement(stmt: &Statement) -> Result<RawStatement, String> {
             )
         };
         if ret != 0 {
-            return Err(format!("bn_smplstmnt_set_constraint({ci}) failed with code {ret}"));
+            return Err(format!(
+                "bn_smplstmnt_set_constraint({ci}) failed with code {ret}"
+            ));
         }
     }
     Ok(raw)
@@ -933,7 +1000,12 @@ fn prove_inner(stmt: &Statement, wit: &Witness, verify: bool) -> Result<ProofHan
     let composite_guard = RawComposite(composite);
     let commitment_guard = RawCommitment(commitment);
     let ret = unsafe {
-        ffi::labrador48_composite_prove_simple(composite_guard.0, commitment_guard.0, raw_stmt.0, raw_wit.0)
+        ffi::labrador48_composite_prove_simple(
+            composite_guard.0,
+            commitment_guard.0,
+            raw_stmt.0,
+            raw_wit.0,
+        )
     };
     if ret != 0 {
         return Err(format!("composite_prove_simple: FAIL (code {ret})"));
@@ -944,7 +1016,11 @@ fn prove_inner(stmt: &Statement, wit: &Witness, verify: bool) -> Result<ProofHan
     let commitment = commitment_guard.0;
     std::mem::forget(composite_guard);
     std::mem::forget(commitment_guard);
-    Ok(ProofHandle { composite, commitment, size_kb })
+    Ok(ProofHandle {
+        composite,
+        commitment,
+        size_kb,
+    })
 }
 
 /// Rebuild the statement and run `composite_verify_simple` against it.
@@ -954,8 +1030,9 @@ pub fn verify(stmt: &Statement, proof: &ProofHandle) -> Result<(), String> {
     let _guard = labrador_lock();
     let _quiet = Quiet::new();
     let raw_stmt = build_raw_statement(stmt)?;
-    let ret =
-        unsafe { ffi::labrador48_composite_verify_simple(proof.composite, proof.commitment, raw_stmt.0) };
+    let ret = unsafe {
+        ffi::labrador48_composite_verify_simple(proof.composite, proof.commitment, raw_stmt.0)
+    };
     if ret != 0 {
         return Err(format!("composite_verify_simple: FAIL (code {ret})"));
     }

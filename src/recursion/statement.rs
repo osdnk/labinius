@@ -11,8 +11,7 @@ use super::setup::Setup;
 use super::{Instance, Kind, BLOCKS, CHUNKS, DEG, Q, SPAN, SUB};
 use crate::challenge::Transcript;
 use crate::labrador::{
-    logq, BSource, Block, Constraint, PhiBlock, PhiSource, PolxBuf, ShortPhi, Statement,
-    VectorSpec,
+    logq, BSource, Block, Constraint, PhiBlock, PhiSource, PolxBuf, ShortPhi, Statement, VectorSpec,
 };
 
 /// Independent repetitions of the zero-part test, `ceil(128 / LOGQ)`.
@@ -36,9 +35,7 @@ impl ProofPhi {
                 Kind::Key { .. } => Vec::new(),
                 Kind::Lift => (0..CHUNKS)
                     .flat_map(|b| (0..BLOCKS).map(move |a| (b, a)))
-                    .map(|(b, a)| {
-                        Arc::new(setup.lift_phi(&layout.windows[g], group.len, b, a))
-                    })
+                    .map(|(b, a)| Arc::new(setup.lift_phi(&layout.windows[g], group.len, b, a)))
                     .collect(),
                 Kind::Challenge | Kind::Loose => (0..CHUNKS)
                     .flat_map(|b| (0..BLOCKS).map(move |a| (b, a)))
@@ -165,14 +162,16 @@ pub fn build(
             for &ci in &family {
                 let c = &layout.chains[ci];
                 let runs = &runs[ci];
-                let mut blocks = Vec::with_capacity(runs.len() + c.scaled.len() + c.carries.at.len());
+                let mut blocks =
+                    Vec::with_capacity(runs.len() + c.scaled.len() + c.carries.at.len());
                 let mut parts = Vec::with_capacity(blocks.capacity());
                 for r in runs {
                     blocks.push(Block::new(r.at.vector, r.at.off, r.len));
                     parts.push(match layout.groups[r.group].kind {
-                        Kind::Key { limb, part } => {
-                            PhiBlock::Short(Arc::clone(setup.key_phi(limb, part, r.chunk, a)), r.offset)
-                        }
+                        Kind::Key { limb, part } => PhiBlock::Short(
+                            Arc::clone(setup.key_phi(limb, part, r.chunk, a)),
+                            r.offset,
+                        ),
                         _ => PhiBlock::Short(Arc::clone(phi.get(r.group, r.chunk, a)), r.offset),
                     });
                 }
@@ -198,21 +197,27 @@ pub fn build(
         }
     }
 
-    let mut commitment = |key: &crate::labrador::CommitmentKey, group: &[usize], t: &Arc<PolxBuf>| {
-        let blocks = group.iter().map(|&i| Block::new(i, 0, setup.ranks[i])).collect();
-        constraints.push(Constraint::new(
-            key.rank(),
-            blocks,
-            PhiSource::polx(key.buf_arc()),
-            Some(BSource::Polx(Arc::clone(t))),
-        ));
-    };
+    let mut commitment =
+        |key: &crate::labrador::CommitmentKey, group: &[usize], t: &Arc<PolxBuf>| {
+            let blocks = group
+                .iter()
+                .map(|&i| Block::new(i, 0, setup.ranks[i]))
+                .collect();
+            constraints.push(Constraint::new(
+                key.rank(),
+                blocks,
+                PhiSource::polx(key.buf_arc()),
+                Some(BSource::Polx(Arc::clone(t))),
+            ));
+        };
     commitment(&setup.key_y, &setup.residues, opening.t_y);
     commitment(&setup.key_u, &[setup.left_expansion], opening.t_u);
     commitment(&setup.key_r, &setup.rest, opening.t_r);
 
     for row in masks.rows {
-        let blocks = (0..setup.ranks.len()).map(|i| Block::new(i, 0, setup.ranks[i])).collect();
+        let blocks = (0..setup.ranks.len())
+            .map(|i| Block::new(i, 0, setup.ranks[i]))
+            .collect();
         constraints.push(Constraint::new(0, blocks, PhiSource::Int64(row), None));
     }
     let statement = Statement::with_digest(vectors, constraints, digest);

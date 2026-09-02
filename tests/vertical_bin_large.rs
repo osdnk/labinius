@@ -4,16 +4,16 @@
 //! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
 //! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
 //! what a commitment feeds it.
-use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_asm::{barrett_lut_corr, barrett_lut_i16};
-use bin_ntt::simd::vertical_bin_large::{RED_LUT, RED_MUL};
 use bin_ntt::simd::vertical_bin_large as vl;
+use bin_ntt::simd::vertical_bin_large::{RED_LUT, RED_MUL};
 use bin_ntt::types::*;
+use bin_ntt::F162;
 
 type Bin = [u32; N];
 
@@ -43,7 +43,9 @@ fn adversarial() -> Vec<Bin> {
         }
         v.push(p);
     }
-    for d in [0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647] {
+    for d in [
+        0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647,
+    ] {
         let mut p = [0u32; N];
         p[d] = 1;
         v.push(p);
@@ -100,7 +102,10 @@ struct Shadow<const Q: u16> {
 
 impl<const Q: u16> Shadow<Q> {
     fn new() -> Self {
-        Shadow { max: [0; 5], max_any: 0 }
+        Shadow {
+            max: [0; 5],
+            max_any: 0,
+        }
     }
     fn see(&mut self, x: i32) -> i16 {
         let a = x.abs();
@@ -174,7 +179,9 @@ impl<const Q: u16> Shadow<Q> {
                     let x = entry(c.min(1), c, 0, m);
                     let y = entry(c.min(1), c, 1, mh);
                     b[c] = self.see(x - y);
-                    self.max[0] = self.max[0].max((a[c] as i32).abs()).max((b[c] as i32).abs());
+                    self.max[0] = self.max[0]
+                        .max((a[c] as i32).abs())
+                        .max((b[c] as i32).abs());
                 }
                 let (u0, u1, u2) = self.r3_folded(a[0], a[1], a[2], 0);
                 let (w0, w1, w2) = self.r3_folded(b[0], b[1], b[2], 0);
@@ -190,8 +197,13 @@ impl<const Q: u16> Shadow<Q> {
                 let kk = 6 * k + j;
                 let o = 162 * k + 27 * j;
                 for i in 0..9 {
-                    let (r0, r1, r2) =
-                        self.r3(v[o + i], v[o + i + 9], v[o + i + 18], Params::<Q>::ZETA_L4[kk], 1);
+                    let (r0, r1, r2) = self.r3(
+                        v[o + i],
+                        v[o + i + 9],
+                        v[o + i + 18],
+                        Params::<Q>::ZETA_L4[kk],
+                        1,
+                    );
                     v[o + i] = r0;
                     v[o + i + 9] = r1;
                     v[o + i + 18] = r2;
@@ -277,26 +289,50 @@ fn kernel<const Q: u16>() {
     }
     let (model, peak) = vl::bin_model(Q, vl::bar_levels(Q));
     assert!(sh.max_any < 32768);
-    assert!(sh.max_any <= peak, "shadow peak {} > model {peak}", sh.max_any);
+    assert!(
+        sh.max_any <= peak,
+        "shadow peak {} > model {peak}",
+        sh.max_any
+    );
     for l in 0..5 {
-        assert!(sh.max[l] <= model[l], "level {l}: {} > {}", sh.max[l], model[l]);
+        assert!(
+            sh.max[l] <= model[l],
+            "level {l}: {} > {}",
+            sh.max[l],
+            model[l]
+        );
     }
     let m = vl::bar_levels(Q);
     let flags: Vec<String> = (0..4)
         .map(|l| {
             let n = ["a0", "t12", "u"];
-            let kind = |i| if vl::bar_kind(m, l, i) == RED_LUT { "L" } else { "M" };
+            let kind = |i| {
+                if vl::bar_kind(m, l, i) == RED_LUT {
+                    "L"
+                } else {
+                    "M"
+                }
+            };
             let on: Vec<String> = (0..3)
                 .filter(|&i| vl::bar_kind(m, l, i) != 0)
                 .map(|i| format!("{}{}", n[i], kind(i)))
                 .collect();
-            format!("L{}: {}", 3 + l, if on.is_empty() { "-".into() } else { on.join("+") })
+            format!(
+                "L{}: {}",
+                3 + l,
+                if on.is_empty() {
+                    "-".into()
+                } else {
+                    on.join("+")
+                }
+            )
         })
         .collect();
     println!(
         "q={Q}  {}  |  per level {:?} q (model {:?}), peak {} = {:.3} q of 32767",
         flags.join("  "),
-        sh.max.map(|x| (x as f64 / Q as f64 * 1000.0).round() / 1000.0),
+        sh.max
+            .map(|x| (x as f64 / Q as f64 * 1000.0).round() / 1000.0),
         model,
         sh.max_any,
         sh.max_any as f64 / Q as f64
@@ -336,14 +372,20 @@ fn sink<const Q: u16>() {
             self.seen.push(blk);
         }
     }
-    let mut c =
-        Collect { buf: (0..24).map(|_| Blk27([0i16; 27 * 32])).collect(), seen: Vec::new() };
+    let mut c = Collect {
+        buf: (0..24).map(|_| Blk27([0i16; 27 * 32])).collect(),
+        seen: Vec::new(),
+    };
     unsafe { vl::ntt_bin_batch32_sink::<Q, _>(&idx, &mut c) };
     assert_eq!(c.seen, (0..24).collect::<Vec<_>>());
     for blk in 0..24 {
         for r in 0..27 {
             for p in 0..32 {
-                assert_eq!(c.buf[blk].0[32 * r + p], out.v[27 * blk + r][p], "block {blk} row {r}");
+                assert_eq!(
+                    c.buf[blk].0[32 * r + p],
+                    out.v[27 * blk + r][p],
+                    "block {blk} row {r}"
+                );
             }
         }
     }
@@ -500,7 +542,10 @@ fn unsigned_is_the_same_butterfly<const Q: u16>() {
         ];
         for k in 0..3 {
             let got = out[k][p] as u16 as u64;
-            assert!(got < 3 * q + 2048, "q={Q} lane {p} output {k}: {got} over 3q + 2^11");
+            assert!(
+                got < 3 * q + 2048,
+                "q={Q} lane {p} output {k}: {got} over 3q + 2^11"
+            );
             assert_eq!(got % q, want[k], "q={Q} lane {p} output {k}");
         }
     }
@@ -539,7 +584,10 @@ unsafe fn sr3<const Q: u16>(
     };
     let t1 = red(mont(a1, w1, w1p), vl::bar_kind(m, 3, 1));
     let t2 = red(mont(a2, w2, w2p), vl::bar_kind(m, 3, 1));
-    let u = red(mont(_mm512_sub_epi16(t1, t2), c.om, c.omp), vl::bar_kind(m, 3, 2));
+    let u = red(
+        mont(_mm512_sub_epi16(t1, t2), c.om, c.omp),
+        vl::bar_kind(m, 3, 2),
+    );
     let a0 = red(a0, vl::bar_kind(m, 3, 0));
     (
         _mm512_add_epi16(a0, _mm512_add_epi16(t1, t2)),
@@ -578,7 +626,10 @@ fn compare<const Q: u16>() {
             unsafe {
                 let corr = _mm512_loadu_si512(bytes.as_ptr() as *const __m512i);
                 let (w1, w1p) = if form == 0 {
-                    (_mm512_set1_epi16(z as i16), _mm512_set1_epi16(shoup_pre(z, Q) as i16))
+                    (
+                        _mm512_set1_epi16(z as i16),
+                        _mm512_set1_epi16(shoup_pre(z, Q) as i16),
+                    )
                 } else {
                     (
                         _mm512_set1_epi16(mw),
@@ -586,7 +637,10 @@ fn compare<const Q: u16>() {
                     )
                 };
                 let (w2, w2p) = if form == 0 {
-                    (_mm512_set1_epi16(z2 as i16), _mm512_set1_epi16(shoup_pre(z2, Q) as i16))
+                    (
+                        _mm512_set1_epi16(z2 as i16),
+                        _mm512_set1_epi16(shoup_pre(z2, Q) as i16),
+                    )
                 } else {
                     (
                         _mm512_set1_epi16(mw2),

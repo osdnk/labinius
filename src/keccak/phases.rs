@@ -29,7 +29,12 @@ impl Phases {
 
     /// Milliseconds spent in the span of that name, zero if it never ran.
     pub fn milliseconds(&self, name: &str) -> f64 {
-        self.0.lock().unwrap().total.get(name).map_or(0.0, |d| d.as_secs_f64() * 1e3)
+        self.0
+            .lock()
+            .unwrap()
+            .total
+            .get(name)
+            .map_or(0.0, |d| d.as_secs_f64() * 1e3)
     }
 }
 
@@ -53,7 +58,11 @@ impl Subscriber for Phases {
     fn event(&self, _event: &Event<'_>) {}
 
     fn enter(&self, span: &Id) {
-        self.0.lock().unwrap().entered.insert(span.into_u64(), Instant::now());
+        self.0
+            .lock()
+            .unwrap()
+            .entered
+            .insert(span.into_u64(), Instant::now());
     }
 
     fn exit(&self, span: &Id) {

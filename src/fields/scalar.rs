@@ -12,10 +12,8 @@ pub struct F162(pub [u64; 3]);
 #[inline]
 fn clmul(a: u64, b: u64) -> u128 {
     unsafe {
-        let r = _mm_clmulepi64_si128::<0x00>(
-            _mm_set_epi64x(0, a as i64),
-            _mm_set_epi64x(0, b as i64),
-        );
+        let r =
+            _mm_clmulepi64_si128::<0x00>(_mm_set_epi64x(0, a as i64), _mm_set_epi64x(0, b as i64));
         let lo = _mm_cvtsi128_si64(r) as u64;
         let hi = _mm_extract_epi64::<1>(r) as u64;
         (lo as u128) | ((hi as u128) << 64)
@@ -54,7 +52,8 @@ impl Mul for B128 {
         let mut acc = p_lo;
         let mut h = p_hi;
         for _ in 0..2 {
-            let c = clmul(h as u64, GHASH_MOD as u64) ^ ((clmul((h >> 64) as u64, GHASH_MOD as u64)) << 64);
+            let c = clmul(h as u64, GHASH_MOD as u64)
+                ^ ((clmul((h >> 64) as u64, GHASH_MOD as u64)) << 64);
             let carry = clmul((h >> 64) as u64, GHASH_MOD as u64) >> 64;
             acc ^= c;
             h = carry;
@@ -73,7 +72,6 @@ impl F162 {
     pub fn from_b128(x: B128) -> Self {
         Self([x.0 as u64, (x.0 >> 64) as u64, 0])
     }
-
 }
 
 impl Add for F162 {

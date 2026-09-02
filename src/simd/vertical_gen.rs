@@ -237,7 +237,11 @@ unsafe fn r3(
     let t1 = mont(a1, bc(tw), bc(tw.add(1)), q);
     let t2 = mont(a2, bc(tw.add(2)), bc(tw.add(3)), q);
     let u = mont(sub(t1, t2), omp, om, q);
-    (add(a0, add(t1, t2)), add(sub(a0, t2), u), sub(sub(a0, t1), u))
+    (
+        add(a0, add(t1, t2)),
+        add(sub(a0, t2), u),
+        sub(sub(a0, t1), u),
+    )
 }
 
 /// Levels 0 and 1 fused into one radix-4 pass over the 648 vectors.
@@ -456,7 +460,8 @@ impl<const Q: u16> TwI<Q> {
     pub const IL6: [u32; 864] = Self::r3i::<864>(6, 216);
 
     /// `d = (2 zeta6 - 1)^-1`, the determinant of the Phi_6 split.
-    const DET: u16 = Self::inv((2 * Params::<Q>::ZETA6 as u32 % Q as u32 + Q as u32 - 1) as u16 % Q);
+    const DET: u16 =
+        Self::inv((2 * Params::<Q>::ZETA6 as u32 % Q as u32 + Q as u32 - 1) as u16 % Q);
     /// The whole normalisation, folded into the three level-0 constants.
     ///
     /// Levels 6..1 run un-normalised (`y0+y1+y2` instead of `(y0+y1+y2)/3`, `(y0-y1+u) zeta^-1`
@@ -476,9 +481,8 @@ impl<const Q: u16> TwI<Q> {
     pub const KA: [u32; 2] =
         Tw::<Q>::pair((Self::DET as u64 * inv_mod(324, Q as u64) % Q as u64) as u16);
     pub const KB: [u32; 2] = Tw::<Q>::pair(inv_mod(648, Q as u64) as u16);
-    pub const KC: [u32; 2] = Tw::<Q>::pair(
-        (Q as u64 - Self::DET as u64 * inv_mod(648, Q as u64) % Q as u64) as u16 % Q,
-    );
+    pub const KC: [u32; 2] =
+        Tw::<Q>::pair((Q as u64 - Self::DET as u64 * inv_mod(648, Q as u64) % Q as u64) as u16 % Q);
     /// `(q-1)/2` and `-(q-1)/2`, the centering constants of the output.
     pub const HALF: u32 = dup(((Q - 1) / 2) as i16);
     pub const NHALF: u32 = dup(-(((Q - 1) / 2) as i16));
@@ -502,7 +506,11 @@ impl<const Q: u16> TwI<Q> {
     /// keeps every intermediate inside i16 (984 Barretts per batch for 3889, 1836 for 9721,
     /// found by exhaustive search over this flag set); `BOUND` replays it.
     pub const BAR_S6: bool = Q == 9721;
-    pub const BAR_S5: [bool; 3] = if Q == 9721 { [true; 3] } else { [true, false, false] };
+    pub const BAR_S5: [bool; 3] = if Q == 9721 {
+        [true; 3]
+    } else {
+        [true, false, false]
+    };
     pub const BAR_S4: [bool; 9] = if Q == 9721 {
         [true; 9]
     } else {
@@ -714,13 +722,7 @@ unsafe fn ir3(
 
 /// Inverse radix-2 butterfly, normalisation deferred: `(y0+y1, (y0-y1) zeta^-1)` = `2 (a0, a1)`.
 #[inline(always)]
-unsafe fn ir2(
-    y0: __m512i,
-    y1: __m512i,
-    zp: __m512i,
-    z: __m512i,
-    q: __m512i,
-) -> (__m512i, __m512i) {
+unsafe fn ir2(y0: __m512i, y1: __m512i, zp: __m512i, z: __m512i, q: __m512i) -> (__m512i, __m512i) {
     (add(y0, y1), mont(sub(y0, y1), zp, z, q))
 }
 
@@ -779,8 +781,15 @@ unsafe fn ipass_c5<const Q: u16>(p: *mut __m512i, k4: usize) {
         macro_rules! bf {
             ($j:literal) => {{
                 let b = base + 9 * bb + $j;
-                let (mut s, a1, a2) =
-                    ir3(ld(p, b), ld(p, b + 3), ld(p, b + 6), t5.add(4 * bb), omp, om, q);
+                let (mut s, a1, a2) = ir3(
+                    ld(p, b),
+                    ld(p, b + 3),
+                    ld(p, b + 6),
+                    t5.add(4 * bb),
+                    omp,
+                    om,
+                    q,
+                );
                 if TwI::<Q>::BAR_S5[$j] {
                     s = barrett(s, bv, q);
                 }
@@ -845,8 +854,15 @@ unsafe fn ipass_b<const Q: u16>(p: *mut __m512i, blk: usize) {
     for j in 0..27 {
         let b = base + j;
         let (mut n0, n1, n2) = ir3(ld(p, b), ld(p, b + 27), ld(p, b + 54), ta, omp, om, q);
-        let (mut m0, m1, m2) =
-            ir3(ld(p, b + 81), ld(p, b + 108), ld(p, b + 135), tb, omp, om, q);
+        let (mut m0, m1, m2) = ir3(
+            ld(p, b + 81),
+            ld(p, b + 108),
+            ld(p, b + 135),
+            tb,
+            omp,
+            om,
+            q,
+        );
         if TwI::<Q>::BAR_S3 {
             n0 = barrett(n0, bv, q);
             m0 = barrett(m0, bv, q);
@@ -939,4 +955,3 @@ pub unsafe fn intt_gen_batch32<const Q: u16>(b: &mut Batch32) {
     ipass_a::<Q>(p);
     b.representation = Representation::Coefficients;
 }
-

@@ -6,12 +6,12 @@
 //! `VerifierTranscript` that forwards every interactive-protocol method and answers the oracle
 //! ones with nothing: no oracle is ever received on the keccak path.
 use binius_core::word::Word;
-use binius_ip::channel::{
-    Error as IPError, IPVerifierChannel, WordIPVerifierChannel, pack_words_concrete, select_word,
-    subset_sum_word,
-};
 use binius_iop::channel::{Error as IOPError, IOPVerifierChannel, OracleSpec, TransparentEvalFn};
-use binius_transcript::{VerifierTranscript, fiat_shamir::Challenger};
+use binius_ip::channel::{
+    pack_words_concrete, select_word, subset_sum_word, Error as IPError, IPVerifierChannel,
+    WordIPVerifierChannel,
+};
+use binius_transcript::{fiat_shamir::Challenger, VerifierTranscript};
 use binius_verifier::config::B128;
 
 pub struct OracleFreeChannel<'a, C> {
@@ -81,7 +81,11 @@ impl<C: Challenger> IOPVerifierChannel<B128> for OracleFreeChannel<'_, C> {
         &[]
     }
 
-    fn recv_oracle(&mut self, _log_msg_len: usize, _witness_dependent: bool) -> Result<(), IOPError> {
+    fn recv_oracle(
+        &mut self,
+        _log_msg_len: usize,
+        _witness_dependent: bool,
+    ) -> Result<(), IOPError> {
         unreachable!("the keccak constraint system commits no binius64 oracle")
     }
 

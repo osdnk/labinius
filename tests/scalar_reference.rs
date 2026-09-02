@@ -18,7 +18,11 @@ fn random_bin(rng: &mut Rng) -> [u32; N] {
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 #[test]
@@ -53,12 +57,22 @@ fn check_prime<const Q: u16>() {
         let r = mont_mul_i16(a, wm, wp, Q);
         assert!((r as i32).abs() < Q as i32);
         let want = ((a as i64).rem_euclid(q as i64) * x as i64) % q as i64;
-        assert_eq!((r as i64).rem_euclid(q as i64), want, "mont_mul a={a} x={x}");
+        assert_eq!(
+            (r as i64).rem_euclid(q as i64),
+            want,
+            "mont_mul a={a} x={x}"
+        );
         let b = barrett_i16(a, Q);
-        assert_eq!((b as i64).rem_euclid(q as i64), (a as i64).rem_euclid(q as i64));
+        assert_eq!(
+            (b as i64).rem_euclid(q as i64),
+            (a as i64).rem_euclid(q as i64)
+        );
         assert!((b as i32).abs() < Q as i32, "barrett |r|={} a={a}", b);
         let b = red16_i16(a, Q);
-        assert_eq!((b as i64).rem_euclid(q as i64), (a as i64).rem_euclid(q as i64));
+        assert_eq!(
+            (b as i64).rem_euclid(q as i64),
+            (a as i64).rem_euclid(q as i64)
+        );
         assert!(b >= 0 && b <= Q as i16, "red16 r={} a={a}", b);
     }
     // NTT = direct evaluation at psi^SLOT_EXP[j], and it is a ring homomorphism.
@@ -66,7 +80,11 @@ fn check_prime<const Q: u16>() {
     let b = random_bin(&mut rng);
     let na = scalar::ntt::<Q>(&a);
     for j in (0..N).step_by(37) {
-        assert_eq!(na[j], scalar::eval_at::<Q>(&a, SLOT_EXP[j] as u32), "slot {j}");
+        assert_eq!(
+            na[j],
+            scalar::eval_at::<Q>(&a, SLOT_EXP[j] as u32),
+            "slot {j}"
+        );
     }
     let nb = scalar::ntt::<Q>(&b);
     let ab = scalar::mul_mod_phi(&a, &b, Q);

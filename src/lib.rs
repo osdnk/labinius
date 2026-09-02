@@ -45,8 +45,8 @@ pub mod wire;
 
 pub use api::Modulus;
 pub use api::PowerOfThreeRingElement as RingElement162;
-pub use fields::scalar::F162;
 pub use challenge::Transcript;
+pub use fields::scalar::F162;
 pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
     FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, OpeningError,

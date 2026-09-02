@@ -374,9 +374,6 @@ unsafe fn st(p: *mut i16, j: usize, v: __m512i) {
     _mm512_store_si512(p.add(32 * j) as *mut __m512i, v);
 }
 
-
-
-
 /// Levels 4, 5 and 6 of one 27-block, entirely in registers (deep schedule).
 #[inline(always)]
 unsafe fn tail27_p(
@@ -2022,8 +2019,11 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
         for j in 0..6 {
             let kk = 6 * k + j;
             let (bpj, opj) = (bp.add(32 * 27 * j), sink.dst(kk));
-            let (t4, t5, t6) =
-                (t.tw4[kk].as_ptr(), t.tw5[3 * kk].as_ptr(), t.tw6[9 * kk].as_ptr());
+            let (t4, t5, t6) = (
+                t.tw4[kk].as_ptr(),
+                t.tw5[3 * kk].as_ptr(),
+                t.tw6[9 * kk].as_ptr(),
+            );
             if bar {
                 tail27_b(bpj, opj, t4, t5, t6, cv);
             } else {
@@ -2049,6 +2049,9 @@ pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Bat
 /// # Safety
 /// See [`BlockSink`]: `sink.dst` must give 27 writable 64-byte aligned vectors per block.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-pub unsafe fn ntt_bin_batch32_sink<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut S) {
+pub unsafe fn ntt_bin_batch32_sink<const Q: u16, S: BlockSink>(
+    input: &BinaryIndex32,
+    sink: &mut S,
+) {
     ntt_core::<Q, S>(input, sink);
 }

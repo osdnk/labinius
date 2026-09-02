@@ -2,7 +2,6 @@
 //! commitment against the scalar reference for both primes, the raw accumulator's exact fold-back
 //! and its overflow bound (replayed in i64 against the real kernel output), and the two-limb
 //! commitment against two single-limb ones.
-use bin_ntt::F162;
 use bin_ntt::f162::{self, RandomF162};
 use bin_ntt::params::N;
 use bin_ntt::rng::Rng;
@@ -12,6 +11,7 @@ use bin_ntt::simd::transpose_f162 as tf;
 use bin_ntt::simd::vertical_bin_asm as vb;
 use bin_ntt::simd::vertical_bin_large as vl;
 use bin_ntt::types::*;
+use bin_ntt::F162;
 
 /// The binary kernel of a splitting prime: `vertical_bin_asm` below `2^14`, `vertical_bin_large`
 /// above it.
@@ -28,10 +28,18 @@ unsafe fn transform<const Q: u16>(idx: &tf::BinaryIndex32, out: &mut Batch32) {
 
 /// The production commitment over a single splitting limb.
 fn commit<const Q: u16>(elems: &[F162], a: &[Batch32]) -> [u32; N] {
-    cm::commit_limbs(elems, &[cm::Limb { q: Q, quad: false, a }], None)
-        .into_iter()
-        .next()
-        .unwrap()
+    cm::commit_limbs(
+        elems,
+        &[cm::Limb {
+            q: Q,
+            quad: false,
+            a,
+        }],
+        None,
+    )
+    .into_iter()
+    .next()
+    .unwrap()
 }
 
 const FULL: F162 = F162([!0u64, !0u64, (1u64 << 34) - 1]);
@@ -96,7 +104,12 @@ fn check<const Q: u16>(label: &str, elems: &[F162], a: &[Batch32]) {
     let want = reference::<Q>(elems, a);
     let got = commit::<Q>(elems, a);
     for j in 0..N {
-        assert_eq!(got[j], want[j], "{label}: q = {Q}, slot {j} ({} batches)", a.len());
+        assert_eq!(
+            got[j],
+            want[j],
+            "{label}: q = {Q}, slot {j} ({} batches)",
+            a.len()
+        );
     }
 }
 
@@ -139,7 +152,17 @@ fn reduce_scheme_exact() {
         assert!(lim <= i32::MAX as i64);
         assert!(8 * cm::acc_after_hsum(q) <= i32::MAX as i64);
         let mut rng = Rng::new(0xC0FFEE ^ q as u64);
-        let mut xs: Vec<i32> = vec![0, 1, -1, i32::MAX, i32::MIN + 1, 32767, 32768, -32768, -32769];
+        let mut xs: Vec<i32> = vec![
+            0,
+            1,
+            -1,
+            i32::MAX,
+            i32::MIN + 1,
+            32767,
+            32768,
+            -32768,
+            -32769,
+        ];
         xs.push(lim as i32);
         xs.push(-(lim as i32));
         for _ in 0..200_000 {
@@ -171,11 +194,16 @@ fn bound_adversarial<const Q: u16>() {
     let elems = vec![FULL; 128 * nb];
     let a = extreme_a(nb, Q, 0xBEEF);
 
-    let mut w: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
+    let mut w: Vec<Batch32> = (0..nb)
+        .map(|_| Batch32::zero(Representation::Ntt))
+        .collect();
     let mut idx = bin_ntt::simd::transpose_f162::BinaryIndex32::zero();
     for (b, o) in w.iter_mut().enumerate() {
         unsafe {
-            tf::slice_f162_into(&*(elems.as_ptr().add(128 * b) as *const [F162; 128]), &mut idx);
+            tf::slice_f162_into(
+                &*(elems.as_ptr().add(128 * b) as *const [F162; 128]),
+                &mut idx,
+            );
             transform::<Q>(&idx, o);
         }
     }
@@ -188,7 +216,10 @@ fn bound_adversarial<const Q: u16>() {
             }
         }
     }
-    assert!(maxw <= cm::w_bound(Q), "kernel output {maxw} above the declared bound for q = {Q}");
+    assert!(
+        maxw <= cm::w_bound(Q),
+        "kernel output {maxw} above the declared bound for q = {Q}"
+    );
 
     // i64 shadow of the 8 i32 lanes of every slot: lane l carries the ring elements
     // 2l, 2l+1, 2l+16, 2l+17 of every batch, in the order `mac27` accumulates them.
@@ -219,7 +250,11 @@ fn bound_adversarial<const Q: u16>() {
     let want = reference::<Q>(&elems, &a);
     for j in 0..N {
         let s: i64 = lanes[j].iter().sum();
-        assert_eq!(s.rem_euclid(q) as u32, want[j], "shadow model disagrees at slot {j}");
+        assert_eq!(
+            s.rem_euclid(q) as u32,
+            want[j],
+            "shadow model disagrees at slot {j}"
+        );
     }
 
     check::<Q>("adversarial", &elems, &a);
@@ -264,11 +299,25 @@ fn two_limbs() {
     assert_eq!(y9, reference::<9721>(&elems, &a9));
     assert_eq!(y19, reference::<19441>(&elems, &a19));
 
-    let mut w: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
+    let mut w: Vec<Batch32> = (0..nb)
+        .map(|_| Batch32::zero(Representation::Ntt))
+        .collect();
     let limbs = [
-        cm::Limb { q: 3889, quad: false, a: &a3 },
-        cm::Limb { q: 9721, quad: false, a: &a9 },
-        cm::Limb { q: 19441, quad: false, a: &a19 },
+        cm::Limb {
+            q: 3889,
+            quad: false,
+            a: &a3,
+        },
+        cm::Limb {
+            q: 9721,
+            quad: false,
+            a: &a9,
+        },
+        cm::Limb {
+            q: 19441,
+            quad: false,
+            a: &a19,
+        },
     ];
     let z = cm::commit_limbs(&elems, &limbs, Some(&mut w));
     assert_eq!(z[0], y3);
@@ -279,7 +328,10 @@ fn two_limbs() {
     let mut want = Batch32::zero(Representation::Ntt);
     for (b, got) in w.iter().enumerate() {
         unsafe {
-            tf::slice_f162_into(&*(elems.as_ptr().add(128 * b) as *const [F162; 128]), &mut idx);
+            tf::slice_f162_into(
+                &*(elems.as_ptr().add(128 * b) as *const [F162; 128]),
+                &mut idx,
+            );
             vb::ntt_bin_batch32::<3889>(&idx, &mut want);
         }
         assert!(got.v == want.v, "kept transform, batch {b}");
@@ -295,7 +347,9 @@ fn degenerate() {
     let a = random_a(nb, 3889, 21);
     assert_eq!(commit::<3889>(&zero, &a), [0u32; N]);
     let elems = random_elems(nb, 22);
-    let za: Vec<Batch32> = (0..nb).map(|_| Batch32::zero(Representation::Ntt)).collect();
+    let za: Vec<Batch32> = (0..nb)
+        .map(|_| Batch32::zero(Representation::Ntt))
+        .collect();
     assert_eq!(commit::<9721>(&elems, &za), [0u32; N]);
 }
 

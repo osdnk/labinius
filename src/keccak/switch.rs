@@ -20,12 +20,19 @@ fn compose(a: u128, b: u128) -> F162 {
 
 fn sample_prover<C: IPProverChannel<B128>>(channel: &mut C, n: usize) -> Vec<F162> {
     let raw = channel.sample_many(2 * n);
-    (0..n).map(|i| compose(u128::from(raw[2 * i]), u128::from(raw[2 * i + 1]))).collect()
+    (0..n)
+        .map(|i| compose(u128::from(raw[2 * i]), u128::from(raw[2 * i + 1])))
+        .collect()
 }
 
-fn sample_verifier<C: IPVerifierChannel<B128, Elem = B128>>(channel: &mut C, n: usize) -> Vec<F162> {
+fn sample_verifier<C: IPVerifierChannel<B128, Elem = B128>>(
+    channel: &mut C,
+    n: usize,
+) -> Vec<F162> {
     let raw = channel.sample_many(2 * n);
-    (0..n).map(|i| compose(u128::from(raw[2 * i]), u128::from(raw[2 * i + 1]))).collect()
+    (0..n)
+        .map(|i| compose(u128::from(raw[2 * i]), u128::from(raw[2 * i + 1])))
+        .collect()
 }
 
 /// Two `B128` per `F162`, the way a round message travels on a `B128` channel.
@@ -62,9 +69,17 @@ pub fn prove<Channel: IPProverChannel<B128>>(
     channel: &mut Channel,
 ) -> Output {
     let l = eval_point.len() - LOG_PACKING;
-    assert_eq!(trace.len(), 1 << l, "the trace does not match the claim point");
+    assert_eq!(
+        trace.len(),
+        1 << l,
+        "the trace does not match the claim point"
+    );
 
-    let r_hi: Vec<SB> = eval_point[LOG_PACKING..].iter().rev().map(|&x| SB(u128::from(x))).collect();
+    let r_hi: Vec<SB> = eval_point[LOG_PACKING..]
+        .iter()
+        .rev()
+        .map(|&x| SB(u128::from(x)))
+        .collect();
     let (v, eq_hi) = cf::SwitchProver::partial_evals_and_eq(trace, &r_hi);
     channel.send_many(&v.iter().map(|&x| B128::from(x.0)).collect::<Vec<_>>());
 
@@ -98,7 +113,8 @@ pub fn verify<Channel: IPVerifierChannel<B128, Elem = B128>>(
     channel: &mut Channel,
 ) -> Result<Check, &'static str> {
     let l = eval_point.len() - LOG_PACKING;
-    let coordinate = |x: &[B128]| -> Vec<SB> { x.iter().rev().map(|&y| SB(u128::from(y))).collect() };
+    let coordinate =
+        |x: &[B128]| -> Vec<SB> { x.iter().rev().map(|&y| SB(u128::from(y))).collect() };
     let r_lo = coordinate(&eval_point[..LOG_PACKING]);
     let r_hi = coordinate(&eval_point[LOG_PACKING..]);
 
@@ -114,7 +130,11 @@ pub fn verify<Channel: IPVerifierChannel<B128, Elem = B128>>(
 
     let mut r_pp = Vec::with_capacity(l);
     for _ in 0..l {
-        let msg = decode(&channel.recv_many(4).map_err(|_| "truncated round message")?);
+        let msg = decode(
+            &channel
+                .recv_many(4)
+                .map_err(|_| "truncated round message")?,
+        );
         let r = sample_verifier(channel, 1)[0];
         verifier.round([msg[0], msg[1]], r);
         r_pp.push(r);

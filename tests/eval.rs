@@ -160,7 +160,8 @@ fn the_binary_fold_is_linear_in_the_row_evaluation() {
     };
     assert_eq!(
         s.verifier.fold_row_evaluation(&shifted, &s.challenges),
-        s.verifier.fold_row_evaluation(&s.row_evaluation, &s.challenges)
+        s.verifier
+            .fold_row_evaluation(&s.row_evaluation, &s.challenges)
             + s.verifier.fold_row_evaluation(&ones, &s.challenges)
     );
 }

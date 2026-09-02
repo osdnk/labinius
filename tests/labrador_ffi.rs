@@ -48,7 +48,9 @@ impl Xof {
     }
 
     fn uniform_polys(&mut self, len: usize) -> Vec<[i64; N]> {
-        (0..len).map(|_| std::array::from_fn(|_| self.zq())).collect()
+        (0..len)
+            .map(|_| std::array::from_fn(|_| self.zq()))
+            .collect()
     }
 
     fn ternary(&mut self, coeffs: usize) -> Vec<i16> {
@@ -133,7 +135,16 @@ fn shape_statement(wit: &Witness) -> (Statement, ShapeTimings) {
     let stmt = Statement::new(vectors, constraints);
     let digest = t.elapsed();
 
-    (stmt, ShapeTimings { sample, convert, evaluate, digest, phi_polys })
+    (
+        stmt,
+        ShapeTimings {
+            sample,
+            convert,
+            evaluate,
+            digest,
+            phi_polys,
+        },
+    )
 }
 
 struct ShapeTimings {
@@ -155,8 +166,15 @@ fn shape_prove_and_verify() {
     let build = build.elapsed();
 
     let warm = warm.join().unwrap();
-    println!("--- shape (a): r=3, n={SHAPE_N:?}, k={} ---", stmt.constraints.len());
-    println!("  comkey warm-up (background)     {:>9.3?}  -> {} polx", warm, labrador::comkey_len());
+    println!(
+        "--- shape (a): r=3, n={SHAPE_N:?}, k={} ---",
+        stmt.constraints.len()
+    );
+    println!(
+        "  comkey warm-up (background)     {:>9.3?}  -> {} polx",
+        warm,
+        labrador::comkey_len()
+    );
     println!("  statement build (total)         {:>9.3?}", build);
     println!("    phi sampling                  {:>9.3?}", timings.sample);
     println!(
@@ -165,7 +183,10 @@ fn shape_prove_and_verify() {
         timings.convert,
         timings.convert / (timings.phi_polys as u32) * 1000
     );
-    println!("    b = <phi, s> (70 constraints)  {:>9.3?}", timings.evaluate);
+    println!(
+        "    b = <phi, s> (70 constraints)  {:>9.3?}",
+        timings.evaluate
+    );
     println!("    content digest                {:>9.3?}", timings.digest);
 
     let t = Instant::now();
@@ -178,8 +199,14 @@ fn shape_prove_and_verify() {
 
     println!("  composite_prove_simple          {:>9.3?}", prove_time);
     println!("  composite_verify_simple         {:>9.3?}", verify_time);
-    println!("  proof size                      {:>9.2} KB", proof.size_kb());
-    println!("  comkey after proving            {} polx", labrador::comkey_len());
+    println!(
+        "  proof size                      {:>9.2} KB",
+        proof.size_kb()
+    );
+    println!(
+        "  comkey after proving            {} polx",
+        labrador::comkey_len()
+    );
     assert!(proof.size_kb() > 0.0);
 }
 
@@ -218,15 +245,25 @@ fn commitment_constraint() {
         Some(BSource::Polx(Arc::new(u))),
     );
     // The degree-kappa linear form of the constraint is exactly the commitment.
-    assert_eq!(&cnst.eval(&sx), match &cnst.b {
-        Some(BSource::Polx(b)) => b.as_ref(),
-        _ => unreachable!(),
-    });
+    assert_eq!(
+        &cnst.eval(&sx),
+        match &cnst.b {
+            Some(BSource::Polx(b)) => b.as_ref(),
+            _ => unreachable!(),
+        }
+    );
 
-    let stmt = Statement::new(vec![VectorSpec::norm_bounded(COMMIT_N, wit.normsq(0))], vec![cnst]);
+    let stmt = Statement::new(
+        vec![VectorSpec::norm_bounded(COMMIT_N, wit.normsq(0))],
+        vec![cnst],
+    );
 
     println!("--- (b) degree-{COMMIT_KAPPA} commitment constraint, n={COMMIT_N} ---");
-    println!("  key expansion ({} polx)       {:>9.3?}", key.buf().len(), expand_time);
+    println!(
+        "  key expansion ({} polx)       {:>9.3?}",
+        key.buf().len(),
+        expand_time
+    );
     println!("  Ajtai commit                    {:>9.3?}", commit_time);
 
     let t = Instant::now();
@@ -237,7 +274,10 @@ fn commitment_constraint() {
     let verify_time = t.elapsed();
     println!("  prove                           {:>9.3?}", prove_time);
     println!("  verify                          {:>9.3?}", verify_time);
-    println!("  proof size                      {:>9.2} KB", proof.size_kb());
+    println!(
+        "  proof size                      {:>9.2} KB",
+        proof.size_kb()
+    );
 }
 
 /// The same key aliased as the `phi` of two constraints at once, over two witness vectors:
@@ -262,12 +302,17 @@ fn commitment_key_shared_across_constraints() {
             )
         })
         .collect();
-    let vectors = (0..2).map(|i| VectorSpec::norm_bounded(n, wit.normsq(i))).collect();
+    let vectors = (0..2)
+        .map(|i| VectorSpec::norm_bounded(n, wit.normsq(i)))
+        .collect();
     let stmt = Statement::new(vectors, constraints);
 
     let proof = labrador::prove(&stmt, &wit).expect("prove");
     labrador::verify(&stmt, &proof).expect("verify");
-    println!("--- (b') shared key, 2 x degree-{kappa} constraints: {:.2} KB", proof.size_kb());
+    println!(
+        "--- (b') shared key, 2 x degree-{kappa} constraints: {:.2} KB",
+        proof.size_kb()
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -281,7 +326,12 @@ fn binary_vector() {
     let wit = Witness::new(vec![xof.binary(n * N)]);
     let sx = wit.to_sx();
 
-    let cnst = Constraint::new(1, vec![Block::new(0, 0, n)], PhiSource::Int64(xof.uniform_polys(n)), None);
+    let cnst = Constraint::new(
+        1,
+        vec![Block::new(0, 0, n)],
+        PhiSource::Int64(xof.uniform_polys(n)),
+        None,
+    );
     let b = cnst.eval(&sx);
     let mut cnst = cnst;
     cnst.b = Some(BSource::Polx(Arc::new(b)));
@@ -318,7 +368,9 @@ fn tamper_setup() -> (Statement, Witness) {
         cnst.b = Some(BSource::Polx(Arc::new(b)));
         constraints.push(cnst);
     }
-    let vectors = (0..2).map(|i| VectorSpec::norm_bounded(TAMPER_N, wit.normsq(i))).collect();
+    let vectors = (0..2)
+        .map(|i| VectorSpec::norm_bounded(TAMPER_N, wit.normsq(i)))
+        .collect();
     (Statement::new(vectors, constraints), wit)
 }
 
@@ -351,7 +403,8 @@ fn tamper_wrong_witness_coefficient() {
     let i = flipped.vectors[1].iter().position(|&c| c != 0).unwrap();
     flipped.vectors[1][i] = -flipped.vectors[1][i];
     assert_eq!(flipped.normsq(1), wit.normsq(1));
-    let err = labrador::prove_verified(&stmt, &flipped).expect_err("tampered witness must not prove");
+    let err =
+        labrador::prove_verified(&stmt, &flipped).expect_err("tampered witness must not prove");
     println!("--- (d) wrong witness coefficient (norm preserved): {err}");
     assert!(err.contains("simple_verify"), "unexpected error: {err}");
 
@@ -384,7 +437,9 @@ fn bench_polx_conversion() {
     let mut xof = Xof::new("bin-ntt/labrador_ffi/bench");
     const LEN: usize = 8192;
     let i64s = xof.uniform_polys(LEN);
-    let i16s: Vec<[i16; N]> = (0..LEN).map(|_| std::array::from_fn(|_| (xof.u64() % 3) as i16 - 1)).collect();
+    let i16s: Vec<[i16; N]> = (0..LEN)
+        .map(|_| std::array::from_fn(|_| (xof.u64() % 3) as i16 - 1))
+        .collect();
 
     let t = Instant::now();
     let a = PolxBuf::from_int64(&i64s);
@@ -396,9 +451,22 @@ fn bench_polx_conversion() {
     assert_eq!(b.len(), LEN);
 
     println!("--- polx conversion, {LEN} polys ---");
-    println!("  polxvec_fromint64vec            {:>9.3?}  = {:.3?} / 1000 polys", d64, d64 / (LEN as u32) * 1000);
-    println!("  int16 -> polxvec_frompolyvec    {:>9.3?}  = {:.3?} / 1000 polys", d16, d16 / (LEN as u32) * 1000);
-    println!("  sizeof(polx) = {} bytes, LOGQ = {}, q = {}", labrador::sizeof_polx(), labrador::logq(), labrador::compiled_q());
+    println!(
+        "  polxvec_fromint64vec            {:>9.3?}  = {:.3?} / 1000 polys",
+        d64,
+        d64 / (LEN as u32) * 1000
+    );
+    println!(
+        "  int16 -> polxvec_frompolyvec    {:>9.3?}  = {:.3?} / 1000 polys",
+        d16,
+        d16 / (LEN as u32) * 1000
+    );
+    println!(
+        "  sizeof(polx) = {} bytes, LOGQ = {}, q = {}",
+        labrador::sizeof_polx(),
+        labrador::logq(),
+        labrador::compiled_q()
+    );
 }
 
 #[test]
@@ -428,14 +496,24 @@ fn rejects_out_of_range_blocks() {
 
     let stmt = Statement::new(
         vec![VectorSpec::norm_bounded(64, wit.normsq(0))],
-        vec![Constraint::new(1, vec![Block::new(0, 32, 64)], PhiSource::Int64(xof.uniform_polys(64)), None)],
+        vec![Constraint::new(
+            1,
+            vec![Block::new(0, 32, 64)],
+            PhiSource::Int64(xof.uniform_polys(64)),
+            None,
+        )],
     );
     assert!(labrador::prove(&stmt, &wit).unwrap_err().contains("spans"));
 
     // A degree-8 constraint reads extlen(len, 8) coefficients, so the block must leave room.
     let stmt = Statement::new(
         vec![VectorSpec::norm_bounded(64, wit.normsq(0))],
-        vec![Constraint::new(8, vec![Block::new(0, 60, 3)], PhiSource::Int64(xof.uniform_polys(8)), None)],
+        vec![Constraint::new(
+            8,
+            vec![Block::new(0, 60, 3)],
+            PhiSource::Int64(xof.uniform_polys(8)),
+            None,
+        )],
     );
     assert!(labrador::prove(&stmt, &wit).unwrap_err().contains("spans"));
 }
@@ -505,7 +583,9 @@ fn mixed_setup(tamper: bool) -> (Statement, Witness) {
             Some(BSource::Polx(Arc::new(key.commit_sx(&sx, c % 2, 0)))),
         ));
     }
-    let vectors = (0..2).map(|i| VectorSpec::norm_bounded(MIXED_N, wit.normsq(i))).collect();
+    let vectors = (0..2)
+        .map(|i| VectorSpec::norm_bounded(MIXED_N, wit.normsq(i)))
+        .collect();
     (Statement::new(vectors, constraints), wit)
 }
 
@@ -514,7 +594,10 @@ fn mixed_degrees() {
     let (stmt, wit) = mixed_setup(false);
     let proof = labrador::prove(&stmt, &wit).expect("prove");
     labrador::verify(&stmt, &proof).expect("verify");
-    println!("--- (e) degrees 0/1/{MIXED_KAPPA} interleaved: {:.2} KB", proof.size_kb());
+    println!(
+        "--- (e) degrees 0/1/{MIXED_KAPPA} interleaved: {:.2} KB",
+        proof.size_kb()
+    );
 
     let (bad, wit) = mixed_setup(true);
     let err = labrador::prove_verified(&bad, &wit).expect_err("a coefficient outside the support");

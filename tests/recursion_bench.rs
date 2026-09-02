@@ -42,13 +42,25 @@ fn the_encoding_at_the_basic_parameters() {
     let challenges = verifier.derive_folding_challenges(&mut transcript, &left);
     let folded = prover.fold(opening, &challenges);
 
-    println!("\n2^{}, {} columns, limbs {:?}", params.witness_log_len, params.columns(), commitment.moduli());
+    println!(
+        "\n2^{}, {} columns, limbs {:?}",
+        params.witness_log_len,
+        params.columns(),
+        commitment.moduli()
+    );
     row("public parameters", setup_ms);
     println!("  key-time buffers {} MB", setup.footprint() / (1 << 20));
 
     let t = Instant::now();
-    let instance =
-        Instance::new(&setup, &residues, &folded, &evaluation, &challenges, &point, &claim);
+    let instance = Instance::new(
+        &setup,
+        &residues,
+        &folded,
+        &evaluation,
+        &challenges,
+        &point,
+        &claim,
+    );
     row("whole instance", ms(t));
 
     let t = Instant::now();
@@ -82,10 +94,18 @@ fn the_encoding_at_the_basic_parameters() {
     for c in &instance.chains {
         let e = c.carry_values(&instance.vectors);
         let max = e.iter().flatten().map(|x| x.abs()).max().unwrap();
-        println!("  {:<28}max |e| 2^{:.1}  reach 2^{:.1}", c.name, (max as f64).log2(), (c.carries.gadget.reach() as f64).log2());
+        println!(
+            "  {:<28}max |e| 2^{:.1}  reach 2^{:.1}",
+            c.name,
+            (max as f64).log2(),
+            (c.carries.gadget.reach() as f64).log2()
+        );
     }
 
-    println!("\n  no-wrap bound, Q/2 = 2^{:.2}", ((Q as f64) / 2.0).log2());
+    println!(
+        "\n  no-wrap bound, Q/2 = 2^{:.2}",
+        ((Q as f64) / 2.0).log2()
+    );
     for b in &bound {
         println!(
             "  {:<28}2^{:>6.2}  margin {:>7.0}x  worst {} ({:.0}%)",
@@ -98,9 +118,21 @@ fn the_encoding_at_the_basic_parameters() {
         assert!(b.value < (Q as f64) / 2.0);
     }
 
-    let polys: usize = instance.chains.iter().map(|c| c.products.len() + c.scaled.len() + c.carries.at.len() * BLOCKS).sum::<usize>() * BLOCKS;
-    let mut tight =
-        Instance::new(&setup, &residues, &folded, &evaluation, &challenges, &point, &claim);
+    let polys: usize = instance
+        .chains
+        .iter()
+        .map(|c| c.products.len() + c.scaled.len() + c.carries.at.len() * BLOCKS)
+        .sum::<usize>()
+        * BLOCKS;
+    let mut tight = Instance::new(
+        &setup,
+        &residues,
+        &folded,
+        &evaluation,
+        &challenges,
+        &point,
+        &claim,
+    );
     for v in tight.vectors.iter_mut() {
         if let Cap::PerCoefficient(_) = v.cap {
             if v.name.starts_with('e') || v.name.starts_with('k') || v.name.starts_with('w') {
@@ -110,7 +142,13 @@ fn the_encoding_at_the_basic_parameters() {
     }
     println!("\n  the same with every digit level capped at twice its honest betasq");
     for b in tight.bound() {
-        println!("  {:<28}2^{:>6.2}  margin {:>7.0}x  worst {}", b.name, b.value.log2(), b.margin(), b.worst);
+        println!(
+            "  {:<28}2^{:>6.2}  margin {:>7.0}x  worst {}",
+            b.name,
+            b.value.log2(),
+            b.margin(),
+            b.worst
+        );
     }
 
     println!(

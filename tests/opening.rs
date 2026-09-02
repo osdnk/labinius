@@ -117,12 +117,20 @@ impl Round {
 
 #[test]
 fn an_honest_recursive_round_is_accepted() {
-    for extra in [vec![Modulus::Q9721_FS_S], vec![Modulus::Q4861_Q_S], vec![Modulus::Q19441_FS_L]] {
+    for extra in [
+        vec![Modulus::Q9721_FS_S],
+        vec![Modulus::Q4861_Q_S],
+        vec![Modulus::Q19441_FS_L],
+    ] {
         let mut round = Round::new(&small(extra.clone()), b"bin-ntt/test/opening");
         let proof = round.prove().expect("the honest fold is within its cap");
         assert!(round.verify(&proof), "{extra:?}");
         assert_eq!(proof.norms().len(), round.setup.caps.len());
-        assert!(proof.norms().iter().zip(&round.setup.caps).all(|(n, c)| n <= c));
+        assert!(proof
+            .norms()
+            .iter()
+            .zip(&round.setup.caps)
+            .all(|(n, c)| n <= c));
     }
 }
 
@@ -139,8 +147,14 @@ fn the_stage_timings_account_for_the_run() {
     let t = proof.timings();
     let stages =
         t.fold + t.encoding + t.witness + t.t_r + t.masks + t.phi + t.statement + t.labrador;
-    assert!(stages <= prove, "the stages outlast the proving they were measured inside");
-    assert!(stages.as_secs_f64() > 0.5 * prove.as_secs_f64(), "the stages are most of proving");
+    assert!(
+        stages <= prove,
+        "the stages outlast the proving they were measured inside"
+    );
+    assert!(
+        stages.as_secs_f64() > 0.5 * prove.as_secs_f64(),
+        "the stages are most of proving"
+    );
 
     let mut transcript = round.transcript.clone();
     let whole = Instant::now();
@@ -176,14 +190,24 @@ fn a_recursive_round_takes_any_base() {
         assert_eq!(params.primes()[0], base.prime());
         let mut accepted = false;
         for attempt in 0..8u8 {
-            let mut round = Round::new(&params, &[b"bin-ntt/test/opening/base/"[..].to_vec(), vec![attempt]].concat());
+            let mut round = Round::new(
+                &params,
+                &[b"bin-ntt/test/opening/base/"[..].to_vec(), vec![attempt]].concat(),
+            );
             let Ok(proof) = round.prove() else { continue };
             assert!(round.verify(&proof), "base {base:?}");
-            assert!(proof.norms().iter().zip(&round.setup.caps).all(|(n, c)| n <= c));
+            assert!(proof
+                .norms()
+                .iter()
+                .zip(&round.setup.caps)
+                .all(|(n, c)| n <= c));
             accepted = true;
             break;
         }
-        assert!(accepted, "no attempt cleared the fold cap for base {base:?}");
+        assert!(
+            accepted,
+            "no attempt cleared the fold cap for base {base:?}"
+        );
     }
 }
 
@@ -204,7 +228,9 @@ fn an_honest_plain_round_is_accepted() {
     let folded = prover.fold(opening, &challenges);
     let folded_commitment = verifier.fold_commitment(&commitment, &challenges);
     let folded_row = verifier.fold_row_evaluation(&row, &challenges);
-    verifier.verify_evaluation(&point, &claim, &row).expect("the claim");
+    verifier
+        .verify_evaluation(&point, &claim, &row)
+        .expect("the claim");
     verifier
         .verify_folded_opening(&folded_commitment, &folded, &point, &folded_row)
         .expect("the opening");
@@ -216,7 +242,10 @@ fn an_honest_plain_round_is_accepted() {
 
 #[test]
 fn the_prover_and_the_verifier_encode_the_same_relation() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/same");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/same",
+    );
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let proof = round.prove().expect("honest opening");
     let folded = {
@@ -232,15 +261,17 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
         &round.point,
         &round.claim,
     );
-    let layout =
-        Instance::layout(&round.setup, &round.challenges, &round.point, &round.claim);
+    let layout = Instance::layout(&round.setup, &round.challenges, &round.point, &round.claim);
 
     let (a, b) = (full.statement(), layout.statement());
     assert_eq!(a.constraints, b.constraints);
     assert_eq!(a.residues, b.residues);
     assert_eq!(a.rest, b.rest);
     for (x, y) in a.vectors.iter().zip(&b.vectors) {
-        assert_eq!((&x.name, x.n, x.cap_betasq, x.binary), (&y.name, y.n, y.cap_betasq, y.binary));
+        assert_eq!(
+            (&x.name, x.n, x.cap_betasq, x.binary),
+            (&y.name, y.n, y.cap_betasq, y.binary)
+        );
     }
 
     let masks = || Masks::squeeze(&round.setup, &mut round.transcript.clone());
@@ -250,11 +281,27 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
         t_r: proof.t_r(),
         norms: proof.norms(),
     };
-    let one = build(&round.setup, &full, &ProofPhi::new(&round.setup, &full), opening(), masks(), [7u8; 32]);
-    let two =
-        build(&round.setup, &layout, &ProofPhi::new(&round.setup, &layout), opening(), masks(), [7u8; 32]);
+    let one = build(
+        &round.setup,
+        &full,
+        &ProofPhi::new(&round.setup, &full),
+        opening(),
+        masks(),
+        [7u8; 32],
+    );
+    let two = build(
+        &round.setup,
+        &layout,
+        &ProofPhi::new(&round.setup, &layout),
+        opening(),
+        masks(),
+        [7u8; 32],
+    );
     assert_eq!(one.content_digest(), two.content_digest());
-    assert!(labrador::verify(&two, proof.handle()).is_err(), "the digest is not the round's");
+    assert!(
+        labrador::verify(&two, proof.handle()).is_err(),
+        "the digest is not the round's"
+    );
 }
 
 // =============================================================================================
@@ -263,7 +310,10 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
 
 #[test]
 fn a_wrong_norm_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/norm");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/norm",
+    );
     let proof = round.prove().expect("honest opening");
     assert!(round.verify(&proof));
 
@@ -278,7 +328,10 @@ fn a_wrong_norm_is_rejected() {
 
 #[test]
 fn a_modified_left_expansion_commitment_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/left");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/left",
+    );
     let proof = round.prove().expect("honest opening");
     let other = {
         let mut row = round.row.clone();
@@ -293,7 +346,10 @@ fn a_modified_left_expansion_commitment_is_rejected() {
 /// does not verify against the commitment to another.
 #[test]
 fn a_commitment_to_other_residues_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/residue");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/residue",
+    );
     let proof = round.prove().expect("honest opening");
     let mut other = round.witness.elements().to_vec();
     other[0] += F162::ONE;
@@ -302,7 +358,10 @@ fn a_commitment_to_other_residues_is_rejected() {
     assert_ne!(commitment.t_y(), round.commitment.t_y());
     assert_ne!(
         opening.residues().unwrap().vectors[0][0],
-        round.opening.as_ref().map_or([0i16; 64], |o| o.residues().unwrap().vectors[0][0])
+        round
+            .opening
+            .as_ref()
+            .map_or([0i16; 64], |o| o.residues().unwrap().vectors[0][0])
     );
     assert!(!round.verify_with(&commitment, &round.left, &round.challenges, &proof));
 }
@@ -311,7 +370,10 @@ fn a_commitment_to_other_residues_is_rejected() {
 /// constraints, so it is the one thing that tests them.
 #[test]
 fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/zero");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/zero",
+    );
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let opening = round.opening.take().unwrap();
     let folded = round.prover.fold(opening, &round.challenges);
@@ -338,13 +400,22 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
         .iter()
         .map(|v| v.iter().map(|&x| (x as i64 * x as i64) as u64).sum())
         .collect();
-    let rest: Vec<&[i16]> = setup.rest.iter().map(|&i| witness.vectors[i].as_slice()).collect();
+    let rest: Vec<&[i16]> = setup
+        .rest
+        .iter()
+        .map(|&i| witness.vectors[i].as_slice())
+        .collect();
     let t_r = Arc::new(setup.key_r.commit_blocks(&rest));
     let statement = build(
         setup,
         &instance,
         &phi,
-        Opening { t_y: round.commitment.t_y(), t_u: round.left.t_u(), t_r: &t_r, norms: &norms },
+        Opening {
+            t_y: round.commitment.t_y(),
+            t_u: round.left.t_u(),
+            t_r: &t_r,
+            norms: &norms,
+        },
         masks(),
         [3u8; 32],
     );
@@ -355,10 +426,15 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
 
 #[test]
 fn a_wrong_challenge_set_is_rejected() {
-    let mut round = Round::new(&small(vec![Modulus::Q9721_FS_S]), b"bin-ntt/test/opening/challenges");
+    let mut round = Round::new(
+        &small(vec![Modulus::Q9721_FS_S]),
+        b"bin-ntt/test/opening/challenges",
+    );
     let proof = round.prove().expect("honest opening");
     let mut other = Transcript::new(b"bin-ntt/test/opening/challenges/other");
-    let challenges = round.verifier.derive_folding_challenges(&mut other, &round.left);
+    let challenges = round
+        .verifier
+        .derive_folding_challenges(&mut other, &round.left);
     assert!(!round.verify_with(&round.commitment, &round.left, &challenges, &proof));
 }
 

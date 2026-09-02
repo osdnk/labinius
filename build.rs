@@ -8,8 +8,8 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    let labrador_dir = env::var("BIN_NTT_LABRADOR_DIR")
-        .unwrap_or_else(|_| format!("{manifest_dir}/labrador"));
+    let labrador_dir =
+        env::var("BIN_NTT_LABRADOR_DIR").unwrap_or_else(|_| format!("{manifest_dir}/labrador"));
     println!("cargo:rerun-if-env-changed=BIN_NTT_LABRADOR_DIR");
 
     if !PathBuf::from(format!("{labrador_dir}/Makefile")).exists() {
@@ -20,17 +20,30 @@ fn main() {
     // prefix), so a LOGQ change has to invalidate every object file, not just relink.
     let libobj_dir = format!("{labrador_dir}/libobj");
     let stamp_path = format!("{libobj_dir}/.bin_ntt_logq_stamp");
-    let stamp_matches = std::fs::read_to_string(&stamp_path).map(|s| s.trim() == LOGQ).unwrap_or(false);
+    let stamp_matches = std::fs::read_to_string(&stamp_path)
+        .map(|s| s.trim() == LOGQ)
+        .unwrap_or(false);
     if !stamp_matches {
-        let _ = Command::new("make").args(["-C", &labrador_dir, "clean"]).status();
+        let _ = Command::new("make")
+            .args(["-C", &labrador_dir, "clean"])
+            .status();
     }
 
     let status = Command::new("make")
-        .args(["-C", &labrador_dir, &format!("LOGQ={LOGQ}"), "liblabrador.a"])
+        .args([
+            "-C",
+            &labrador_dir,
+            &format!("LOGQ={LOGQ}"),
+            "liblabrador.a",
+        ])
         .status()
         .expect("failed to invoke make for liblabrador.a");
-    assert!(status.success(), "make -C {labrador_dir} LOGQ={LOGQ} liblabrador.a failed");
-    std::fs::create_dir_all(&libobj_dir).expect("failed to create labrador libobj dir for the LOGQ stamp");
+    assert!(
+        status.success(),
+        "make -C {labrador_dir} LOGQ={LOGQ} liblabrador.a failed"
+    );
+    std::fs::create_dir_all(&libobj_dir)
+        .expect("failed to create labrador libobj dir for the LOGQ stamp");
     std::fs::write(&stamp_path, LOGQ).expect("failed to write the LOGQ stamp");
     println!("cargo:rerun-if-changed={labrador_dir}");
 

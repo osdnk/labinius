@@ -14,15 +14,21 @@ use super::chain::{At, Carries, Chain, Product};
 use super::{Build, Gadget, SElem, CHUNKS, U};
 use crate::api::N162;
 use crate::eval::eq_table;
-use crate::scheme::EvaluationPoint;
 use crate::fields::scalar::F162;
+use crate::scheme::EvaluationPoint;
 
 /// The carries and quotients of the two binary chains. The carry reaches `base^2 / 2 = 2^21`:
 /// the binary fold sums `sum_j c_j lift(u_j)` in the `Z` basis, where a binary challenge brings no
 /// sign cancellation at all, and its honest carry measures `2^19.0` at the basic shape — 3.5x the
 /// ternary challenge's, and just past what a base of 1024 reaches.
-pub const CARRY_GADGET: Gadget = Gadget { base: 2048, levels: 2 };
-pub const QUOTIENT_GADGET: Gadget = Gadget { base: 1024, levels: 2 };
+pub const CARRY_GADGET: Gadget = Gadget {
+    base: 2048,
+    levels: 2,
+};
+pub const QUOTIENT_GADGET: Gadget = Gadget {
+    base: 1024,
+    levels: 2,
+};
 
 /// An `F162` element as the `S`-element with its bits as coefficients.
 pub fn lift(x: &F162) -> SElem {
@@ -46,10 +52,19 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
 
     let base_eq0 = build.public.len();
     for l in 0..4 {
-        build.group_lifts(&(0..n).map(|i| lift(&eq0[4 * i + l])).collect::<Vec<SElem>>());
+        build.group_lifts(
+            &(0..n)
+                .map(|i| lift(&eq0[4 * i + l]))
+                .collect::<Vec<SElem>>(),
+        );
     }
     let base_eq1 = build.public.len();
-    build.group_lifts(&eq_table(point.p1()).iter().map(lift).collect::<Vec<SElem>>());
+    build.group_lifts(
+        &eq_table(point.p1())
+            .iter()
+            .map(lift)
+            .collect::<Vec<SElem>>(),
+    );
 
     let mut products = Vec::with_capacity(4 * CHUNKS * n + CHUNKS * r);
     for l in 0..4 {
@@ -68,7 +83,10 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
             products.push(Product {
                 blocks: build.challenges + j,
                 chunk: b,
-                at: At { vector: U, off: b * r + j },
+                at: At {
+                    vector: U,
+                    off: b * r + j,
+                },
             });
         }
     }
@@ -79,11 +97,20 @@ pub fn encode(build: &mut Build, point: &EvaluationPoint, claim: &F162) {
             (0..r).map(move |j| Product {
                 blocks: base_eq1 + j,
                 chunk: b,
-                at: At { vector: U, off: b * r + j },
+                at: At {
+                    vector: U,
+                    off: b * r + j,
+                },
             })
         })
         .collect();
-    chain(build, "binary evaluation".into(), products, lift(claim), "w'");
+    chain(
+        build,
+        "binary evaluation".into(),
+        products,
+        lift(claim),
+        "w'",
+    );
 }
 
 /// One lifted identity: quotient by 2, digits, carries.
@@ -96,7 +123,10 @@ fn chain(build: &mut Build, name: String, products: Vec<Product>, output: SElem,
             products,
             scaled: Vec::new(),
             output,
-            carries: Carries { gadget: CARRY_GADGET, at: Vec::new() },
+            carries: Carries {
+                gadget: CARRY_GADGET,
+                at: Vec::new(),
+            },
         },
         2,
         (QUOTIENT_GADGET, &quotient),

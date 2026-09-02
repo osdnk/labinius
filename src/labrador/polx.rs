@@ -118,9 +118,16 @@ impl PolxBuf {
     /// `out[i] = sum_k sign[k] table[idx[i * terms + k]]`: the sparse assembly that replaces a
     /// transform when a coefficient polynomial is a signed sum of tabulated ones.
     pub fn table_sum(len: usize, table: &PolxBuf, terms: usize, idx: &[u16], sign: &[i8]) -> Self {
-        assert_eq!(idx.len(), len * terms, "one table index per term and element");
+        assert_eq!(
+            idx.len(),
+            len * terms,
+            "one table index per term and element"
+        );
         assert_eq!(sign.len(), terms, "one sign per term");
-        assert!(idx.iter().all(|&i| (i as usize) < table.len), "table index out of range");
+        assert!(
+            idx.iter().all(|&i| (i as usize) < table.len),
+            "table index out of range"
+        );
         let buf = Self::alloc(len);
         unsafe {
             ffi::bn_polx_table_sum(buf.ptr, len, table.ptr, terms, idx.as_ptr(), sign.as_ptr())
@@ -148,8 +155,17 @@ impl PolxBuf {
 
     /// Pointer to element `off`. Panics unless `off <= len`.
     pub fn ptr_at(&self, off: usize) -> *const c_void {
-        assert!(off <= self.len, "polx offset {off} out of range (len {})", self.len);
-        unsafe { self.ptr.cast::<u8>().add(off * sizeof_polx()).cast::<c_void>() }
+        assert!(
+            off <= self.len,
+            "polx offset {off} out of range (len {})",
+            self.len
+        );
+        unsafe {
+            self.ptr
+                .cast::<u8>()
+                .add(off * sizeof_polx())
+                .cast::<c_void>()
+        }
     }
 
     /// The raw bytes of the buffer, for hashing it into a statement digest.
@@ -210,18 +226,28 @@ impl Sx {
     pub fn new(vectors: &[Vec<i16>]) -> Self {
         let n: Vec<usize> = vectors.iter().map(|v| v.len() / N).collect();
         for (i, v) in vectors.iter().enumerate() {
-            assert_eq!(v.len(), n[i] * N, "witness vector {i} is not a whole number of polynomials");
+            assert_eq!(
+                v.len(),
+                n[i] * N,
+                "witness vector {i} is not a whole number of polynomials"
+            );
         }
         let ptrs: Vec<*const i16> = vectors.iter().map(|v| v.as_ptr()).collect();
         let ptr = unsafe { ffi::bn_sx_new(n.len(), n.as_ptr(), ptrs.as_ptr()) };
-        assert!(!ptr.is_null() || n.is_empty(), "out of memory allocating sx");
+        assert!(
+            !ptr.is_null() || n.is_empty(),
+            "out of memory allocating sx"
+        );
         Self { ptr, n }
     }
 
     /// Pointer to polynomial `off` of vector `i`.
     pub fn ptr(&self, i: usize, off: usize) -> *const c_void {
         assert!(i < self.n.len(), "sx vector {i} out of range");
-        assert!(off <= self.n[i], "sx offset {off} out of range for vector {i}");
+        assert!(
+            off <= self.n[i],
+            "sx offset {off} out of range for vector {i}"
+        );
         unsafe { ffi::bn_sx_ptr(self.ptr, i, off) }
     }
 
@@ -255,7 +281,11 @@ impl CommitmentKey {
     /// Expand a key for rank `kappa` and length `n` from a 16-byte seed and a nonce.
     pub fn expand(n: usize, kappa: usize, seed: &[u8; 16], nonce: u64) -> Self {
         assert!(kappa >= 1, "commitment rank must be at least 1");
-        Self { buf: std::sync::Arc::new(PolxBuf::expand(extlen(n, kappa), seed, nonce)), n, kappa }
+        Self {
+            buf: std::sync::Arc::new(PolxBuf::expand(extlen(n, kappa), seed, nonce)),
+            n,
+            kappa,
+        }
     }
 
     pub fn rank(&self) -> usize {
@@ -298,7 +328,14 @@ impl CommitmentKey {
         let ptrs: Vec<*const i16> = parts.iter().map(|p| p.as_ptr()).collect();
         let out = PolxBuf::alloc(self.kappa);
         unsafe {
-            ffi::bn_commit_blocks(out.ptr, self.buf.ptr, self.kappa, len.len(), len.as_ptr(), ptrs.as_ptr())
+            ffi::bn_commit_blocks(
+                out.ptr,
+                self.buf.ptr,
+                self.kappa,
+                len.len(),
+                len.as_ptr(),
+                ptrs.as_ptr(),
+            )
         };
         out
     }

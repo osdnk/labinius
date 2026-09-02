@@ -1,8 +1,8 @@
 //! The surface: parameter validation, witness construction, the commitment's accessors,
 //! determinism, and the workspace a prover reuses between two rounds.
 use bin_ntt::{
-    F162, Modulus, ParamError, Params, Prover, PublicParameters, Transcript, Verifier, Witness,
-    WitnessError,
+    Modulus, ParamError, Params, Prover, PublicParameters, Transcript, Verifier, Witness,
+    WitnessError, F162,
 };
 
 use Modulus::*;
@@ -69,14 +69,21 @@ fn params_rejects_duplicate_moduli() {
 #[test]
 fn params_default_to_the_base_modulus_3889() {
     assert_eq!(Params::basic().primes(), vec![3889, 9721]);
-    assert_eq!(Params::new(12, 2, vec![Q2917_Q_S], false).unwrap().base, Q3889_FS_S);
+    assert_eq!(
+        Params::new(12, 2, vec![Q2917_Q_S], false).unwrap().base,
+        Q3889_FS_S
+    );
 }
 
 /// Any modulus can be the base, and `primes()` still lists it first.
 #[test]
 fn params_take_any_base() {
     for base in Modulus::ALL {
-        let extra = if base == Q9721_FS_S { Q3889_FS_S } else { Q9721_FS_S };
+        let extra = if base == Q9721_FS_S {
+            Q3889_FS_S
+        } else {
+            Q9721_FS_S
+        };
         let params = Params::with_base(12, 2, base, vec![extra], false).unwrap();
         assert_eq!(params.base, base);
         assert_eq!(params.primes(), vec![base.prime(), extra.prime()]);
@@ -98,8 +105,14 @@ fn params_reject_the_base_among_the_extra_moduli() {
 
 #[test]
 fn params_rejects_a_column_below_one_batch() {
-    assert_eq!(Params::new(9, 3, vec![], false), Err(ParamError::ColumnTooShort));
-    assert_eq!(Params::new(9, 0, vec![], false), Err(ParamError::TooFewColumns));
+    assert_eq!(
+        Params::new(9, 3, vec![], false),
+        Err(ParamError::ColumnTooShort)
+    );
+    assert_eq!(
+        Params::new(9, 0, vec![], false),
+        Err(ParamError::TooFewColumns)
+    );
     assert!(Params::new(9, 2, vec![], false).is_ok());
 }
 

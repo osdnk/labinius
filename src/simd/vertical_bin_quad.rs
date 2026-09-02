@@ -82,8 +82,8 @@
 //! computed from ([`crate::simd::commit`]), so it moves with the schedule: folding level 3 costs
 //! 2917 its Karatsuba (4.87 q -> 6.96 q) and buys 4861 one (5.13 q -> 3.17 q).
 use crate::params::*;
-use crate::simd::vertical_bin_asm::barrett_lut_corr;
 pub use crate::simd::transpose_f162::BinaryIndex32;
+use crate::simd::vertical_bin_asm::barrett_lut_corr;
 use crate::types::*;
 use core::arch::x86_64::*;
 
@@ -311,7 +311,12 @@ pub const fn bin_model_f3(q: u16, bar: [bool; 3]) -> ([i32; 4], i32) {
 /// the flags are tried in increasing cost, and `false` means the tree cannot be run that way
 /// (q = 12637, whose `t1 - t2` at level 3 already leaves i16 whatever levels 4 and 5 reduce).
 const fn f3_sched(q: u16) -> ([bool; 3], bool) {
-    let opts = [[false, false, false], [false, true, false], [false, false, true], [false, true, true]];
+    let opts = [
+        [false, false, false],
+        [false, true, false],
+        [false, false, true],
+        [false, true, true],
+    ];
     let mut i = 0;
     while i < 4 {
         if bin_model_f3(q, opts[i]).1 <= 32767 {
@@ -356,7 +361,11 @@ const fn bin_sched(q: u16) -> ([bool; 3], i32) {
         let bar = f3_sched(q).0;
         return (bar, bin_model_f3(q, bar).0[3]);
     }
-    let bar = if needs_barrett(q) { [true; 3] } else { [false; 3] };
+    let bar = if needs_barrett(q) {
+        [true; 3]
+    } else {
+        [false; 3]
+    };
     (bar, bin_model_split(q, bar).0[3])
 }
 
@@ -552,7 +561,16 @@ const fn build_tables<const Q: u16>() -> Tables {
         cv[3][i] = 0x2000;
         i += 1;
     }
-    Tables { lut, lut3, cv, tw3, tw4, tw5, om: [oa, ob], qd: dup(Q as i16) }
+    Tables {
+        lut,
+        lut3,
+        cv,
+        tw3,
+        tw4,
+        tw5,
+        om: [oa, ob],
+        qd: dup(Q as i16),
+    }
 }
 
 /// Byte `u` of the 64-byte `vpermb` correction table of the lookup Barrett: the low halves of
@@ -776,10 +794,7 @@ impl BlockSink for OutSink {
 // ---------------------------------------------------------------------------------------------
 
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn ntt_core<const Q: u16, S: BlockSink>(
-    input: &BinaryIndex32,
-    sink: &mut S,
-) {
+unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut S) {
     let t = tables::<Q>();
     let cvp = t.cv.as_ptr() as *const __m512i;
     let c = C {

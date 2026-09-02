@@ -50,9 +50,16 @@ fn forward<const Q: u16>() {
             let want = scalar::ntt::<Q>(&coeffs[p]);
             for j in 0..N {
                 let got = b.v[j][p] as i32;
-                assert_eq!(got.rem_euclid(Q as i32) as u32, want[j], "q={Q} slot {j} lane {p}");
+                assert_eq!(
+                    got.rem_euclid(Q as i32) as u32,
+                    want[j],
+                    "q={Q} slot {j} lane {p}"
+                );
                 worst = worst.max(got.abs());
-                assert!(got.abs() <= bound, "q={Q} |{got}| over the declared bound {bound}");
+                assert!(
+                    got.abs() <= bound,
+                    "q={Q} |{got}| over the declared bound {bound}"
+                );
             }
         }
     }
@@ -77,14 +84,19 @@ fn inverse<const Q: u16>() {
     let mut rng = Rng::new(0x1177 ^ Q as u64);
     let half = ((Q - 1) / 2) as i32;
     for _ in 0..6 {
-        let coeffs: Vec<[u32; N]> =
-            (0..32).map(|_| core::array::from_fn(|_| rng.below(Q as u32))).collect();
+        let coeffs: Vec<[u32; N]> = (0..32)
+            .map(|_| core::array::from_fn(|_| rng.below(Q as u32)))
+            .collect();
         let mut b = Batch32::zero(Representation::Ntt);
         for p in 0..32 {
             let s = scalar::ntt::<Q>(&coeffs[p]);
             for j in 0..N {
                 let x = s[j] as i32;
-                b.v[j][p] = if x > half { (x - Q as i32) as i16 } else { x as i16 };
+                b.v[j][p] = if x > half {
+                    (x - Q as i32) as i16
+                } else {
+                    x as i16
+                };
             }
         }
         unsafe { vgl::intt_gen_batch32::<Q>(&mut b) };
@@ -92,7 +104,10 @@ fn inverse<const Q: u16>() {
         for p in 0..32 {
             for j in 0..N {
                 let got = b.v[j][p] as i32;
-                assert!(got.abs() <= half, "q={Q} slot {j} lane {p}: |{got}| not centered");
+                assert!(
+                    got.abs() <= half,
+                    "q={Q} slot {j} lane {p}: |{got}| not centered"
+                );
                 assert_eq!(
                     got.rem_euclid(Q as i32) as u32,
                     coeffs[p][j],

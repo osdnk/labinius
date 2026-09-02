@@ -112,9 +112,9 @@
 //! the same tree, block for block and sink for sink, which is also what
 //! [`crate::simd::vertical_bin_quad`] does at 247 to 291 cycles per ring element.
 use crate::params::*;
+pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::vertical_bin_asm::barrett_lut_corr;
 pub use crate::simd::vertical_bin_asm::BlockSink;
-pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::types::*;
 use core::arch::x86_64::*;
 
@@ -125,8 +125,14 @@ use core::arch::x86_64::*;
 /// `|barrett_lut_i16(a, q)|` and `|barrett_i16(a, q)|` for the worst i16 `a`, per prime —
 /// exhaustive sweeps, evaluated once (`q/2 + 2^10` is the lookup one's theoretical bound; the
 /// sweep is a little tighter).
-const BLM: [i32; 2] = [barrett_lut_sweep(QS_LARGE[0]), barrett_lut_sweep(QS_LARGE[1])];
-const BMM: [i32; 2] = [barrett_mul_sweep(QS_LARGE[0]), barrett_mul_sweep(QS_LARGE[1])];
+const BLM: [i32; 2] = [
+    barrett_lut_sweep(QS_LARGE[0]),
+    barrett_lut_sweep(QS_LARGE[1]),
+];
+const BMM: [i32; 2] = [
+    barrett_mul_sweep(QS_LARGE[0]),
+    barrett_mul_sweep(QS_LARGE[1]),
+];
 
 const fn qi(q: u16) -> usize {
     if q == QS_LARGE[0] {
@@ -235,7 +241,11 @@ const fn capped(b: i32, k: u8, q: u16) -> i32 {
 /// tables, so there `t1` and `t2` are table sums rather than Montgomery products.
 const fn bin_level(q: u16, code: u32, l: usize, v: i32, peak: i32) -> (i32, i32) {
     let mut peak = peak;
-    let t = capped(if l == 0 { v } else { mont_bound(v, q) }, bar_kind(code, l, 1), q);
+    let t = capped(
+        if l == 0 { v } else { mont_bound(v, q) },
+        bar_kind(code, l, 1),
+        q,
+    );
     if 2 * t > peak {
         peak = 2 * t;
     }
@@ -565,7 +575,16 @@ const fn build_tables<const Q: u16>() -> Tables {
         cv[3][i] = 0x2000;
         i += 1;
     }
-    Tables { lut, cv, tw4, tw5, tw6, om: [oa, ob], qd: dup(Q as i16), bvd: dup(barrett_v(Q)) }
+    Tables {
+        lut,
+        cv,
+        tw4,
+        tw5,
+        tw6,
+        om: [oa, ob],
+        qd: dup(Q as i16),
+        bvd: dup(barrett_v(Q)),
+    }
 }
 
 static T17497: Tables = build_tables::<17497>();
@@ -836,8 +855,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
             let t4 = t.tw4[kk].as_ptr();
             for i in 0..9 {
                 let (b0, b1, b2) = (base + i, base + i + 9, base + i + 18);
-                let (o0, o1, o2) =
-                    r3(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t4, bar[1]);
+                let (o0, o1, o2) = r3(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t4, bar[1]);
                 st(bp, b0, o0);
                 st(bp, b1, o1);
                 st(bp, b2, o2);
@@ -860,8 +878,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
             let lv6 = |g: usize, v: &[__m512i; 9]| {
                 for i in 0..3 {
                     let t6 = t.tw6[9 * kk + 3 * g + i].as_ptr();
-                    let (o0, o1, o2) =
-                        r3(&c, v[3 * i], v[3 * i + 1], v[3 * i + 2], t6, bar[3]);
+                    let (o0, o1, o2) = r3(&c, v[3 * i], v[3 * i + 1], v[3 * i + 2], t6, bar[3]);
                     let o = 9 * g + 3 * i;
                     st(op, o, o0);
                     st(op, o + 1, o1);

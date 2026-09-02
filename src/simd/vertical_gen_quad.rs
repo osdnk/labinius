@@ -404,7 +404,11 @@ unsafe fn r3<const BAR: bool>(
     let t2 = mont(a2, bc(tw.add(2)), bc(tw.add(3)), c.q);
     let u = mont(sub(t1, t2), c.omp, c.om, c.q);
     let a0 = if BAR { barrett_lut(a0, c) } else { a0 };
-    (add(a0, add(t1, t2)), add(sub(a0, t2), u), sub(sub(a0, t1), u))
+    (
+        add(a0, add(t1, t2)),
+        add(sub(a0, t2), u),
+        sub(sub(a0, t1), u),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -870,8 +874,7 @@ impl<const Q: u16> TwQI<Q> {
     pub const IL5: [u32; 432] = Self::r3i::<432>(5, 108);
 
     /// `d = (2 zeta6 - 1)^-1`, the determinant of the Phi_6 split.
-    const DET: u16 =
-        Self::inv(((2 * ParamsQ::<Q>::ZETA6 as u32 + Q as u32 - 1) % Q as u32) as u16);
+    const DET: u16 = Self::inv(((2 * ParamsQ::<Q>::ZETA6 as u32 + Q as u32 - 1) % Q as u32) as u16);
     /// The whole normalisation, folded into the three level-0 constants. Levels 5..1 run
     /// un-normalised, so every value reaching level 0 carries the factor `2 * 3^4 = 162`; with
     /// `Y = 162 y`, `a1 = d (y0 - y1)` and `a0 = (y0+y1)/2 - a1/2` (using

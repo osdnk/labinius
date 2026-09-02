@@ -2,7 +2,7 @@
 //! the way `binius_examples::circuits::keccak::KeccakExample` builds it: the message as `inout`
 //! words, the digest as four more, and one `assert_eq` per digest word against
 //! [`keccak256`](binius_circuits::keccak::fixed_length::keccak256)'s output.
-use binius_circuits::keccak::{RATE_BYTES, fixed_length::keccak256, ref_keccak_f1600};
+use binius_circuits::keccak::{fixed_length::keccak256, ref_keccak_f1600, RATE_BYTES};
 use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
 use binius_frontend::{Circuit as FrontendCircuit, CircuitBuilder, Wire};
@@ -19,7 +19,9 @@ impl Circuit {
     /// The fixed-length Keccak-256 circuit over a `len_bytes`-byte message.
     pub fn new(len_bytes: usize) -> Circuit {
         let builder = CircuitBuilder::new();
-        let message: Vec<Wire> = (0..len_bytes.div_ceil(8)).map(|_| builder.add_inout()).collect();
+        let message: Vec<Wire> = (0..len_bytes.div_ceil(8))
+            .map(|_| builder.add_inout())
+            .collect();
         let computed = keccak256(&builder, &message, len_bytes);
         let digest: [Wire; 4] = core::array::from_fn(|_| builder.add_inout());
         for i in 0..4 {
@@ -39,7 +41,11 @@ impl Circuit {
 
     /// The satisfying witness for `message`, whose length must be the circuit's.
     pub fn witness(&self, message: &[u8]) -> ValueVec {
-        assert_eq!(message.len(), self.len_bytes, "the message length is fixed by the circuit");
+        assert_eq!(
+            message.len(),
+            self.len_bytes,
+            "the message length is fixed by the circuit"
+        );
         let mut filler = self.circuit.new_witness_filler();
         for (i, wire) in self.message.iter().enumerate() {
             let mut word = [0u8; 8];
@@ -49,8 +55,9 @@ impl Circuit {
         }
         let digest = digest(message);
         for i in 0..4 {
-            filler[self.digest[i]] =
-                Word(u64::from_le_bytes(digest[8 * i..8 * i + 8].try_into().unwrap()));
+            filler[self.digest[i]] = Word(u64::from_le_bytes(
+                digest[8 * i..8 * i + 8].try_into().unwrap(),
+            ));
         }
         self.circuit
             .populate_wire_witness(&mut filler)

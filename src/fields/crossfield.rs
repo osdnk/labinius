@@ -121,7 +121,6 @@ pub fn psi(tab: &[Vec<F162>], x: B128) -> F162 {
     acc
 }
 
-
 fn partial_evals(pi0: &[B128], eq_hi: &[B128]) -> Vec<B128> {
     let mut acc = vec![[0u128; 16]; 32];
     for (&p, &e) in pi0.iter().zip(eq_hi) {
@@ -157,12 +156,7 @@ pub struct Transcript {
     pub r_pp: Vec<F162>,
 }
 
-pub fn prove(
-    pi0: &[B128],
-    r_lo: &[B128],
-    r_hi: &[B128],
-    challenges: &Transcript,
-) -> SwitchProof {
+pub fn prove(pi0: &[B128], r_lo: &[B128], r_hi: &[B128], challenges: &Transcript) -> SwitchProof {
     assert_eq!(r_lo.len(), LOG_PACK);
     let l = r_hi.len();
     assert_eq!(pi0.len(), 1 << l);
@@ -287,7 +281,12 @@ pub struct SwitchVerifier {
 }
 
 impl SwitchVerifier {
-    pub fn start(v: &[B128], claim: B128, r_lo: &[B128], batch: &[F162]) -> Result<Self, &'static str> {
+    pub fn start(
+        v: &[B128],
+        claim: B128,
+        r_lo: &[B128],
+        batch: &[F162],
+    ) -> Result<Self, &'static str> {
         let eq_lo = eq_expand_b128(r_lo);
         let recomputed = v
             .iter()

@@ -308,7 +308,11 @@ unsafe fn r3(
     let t2 = red(mont(a2, bc(tw.add(2)), bc(tw.add(3)), c.q), c);
     let u = red(mont(sub(t1, t2), c.omp, c.om, c.q), c);
     let a0 = red(a0, c);
-    (add(a0, add(t1, t2)), add(sub(a0, t2), u), sub(sub(a0, t1), u))
+    (
+        add(a0, add(t1, t2)),
+        add(sub(a0, t2), u),
+        sub(sub(a0, t1), u),
+    )
 }
 
 /// Inverse radix-3 (Gentleman-Sande), the transpose of [`r3`], with the three inputs and `u`

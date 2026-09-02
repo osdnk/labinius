@@ -58,14 +58,14 @@
 //! component read as a polynomial in `Z = -Y` evaluated at `Z = -theta^{v_s}`, which is a
 //! primitive 243-rd root of unity. Outputs are centered into `[-(q-1)/2, (q-1)/2]`; note the `4^-1`
 //! factor above, which is already applied.
+use crate::fields::scalar::F162;
 use crate::params::{
-    inv_mod, pow_mod, quadratic_slots, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS,
-    QS_LARGE, QS_QUAD, QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
+    inv_mod, pow_mod, quadratic_slots, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS, QS_LARGE,
+    QS_QUAD, QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
 };
 use crate::rng::Rng;
 use crate::simd::commit as cm;
 use crate::types::{Batch32, Representation};
-use crate::fields::scalar::F162;
 use core::arch::x86_64::*;
 
 /// The primes of the default limb list: the default base and [`Modulus::Q9721_FS_S`]. Both are

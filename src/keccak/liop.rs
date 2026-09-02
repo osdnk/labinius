@@ -10,21 +10,21 @@ use binius_compute::Allocator;
 use binius_core::constraint_system::{ConstraintSystem, InoutSegment, Operand, ValueVec};
 use binius_core::word::Word;
 use binius_field::{AESTowerField8b as B8, PackedField};
+use binius_iop::channel::IOPVerifierChannel;
 use binius_ip::channel::WordIPVerifierChannel;
 use binius_ip::sumcheck::SumcheckOutput;
 use binius_ip_prover::channel::{IPProverChannel, WordIPProverChannel};
-use binius_iop::channel::IOPVerifierChannel;
 use binius_math::BinarySubspace;
 use binius_prover::protocols::shift::{
-    KeyCollection, OperatorClaims, OperatorData, ShiftOutput, build_key_collection,
-    prove as prove_shift,
+    build_key_collection, prove as prove_shift, KeyCollection, OperatorClaims, OperatorData,
+    ShiftOutput,
 };
 use binius_prover::{and_reduction, protocols::binmul, ring_switch};
 use binius_verifier::config::B128;
 use binius_verifier::protocols::binmul::BinMulOutput;
 use binius_verifier::protocols::bitand::AndCheckOutput;
 use binius_verifier::protocols::zero;
-use binius_verifier::reduction::{Instances, reduce_constraints};
+use binius_verifier::reduction::{reduce_constraints, Instances};
 use binius_verifier::{Error, IOPVerifier};
 
 /// Milliseconds per reduction, at the granularity binius64's own phase spans use.
@@ -53,7 +53,9 @@ pub struct Liop {
 
 impl Liop {
     pub fn new(constraint_system: ConstraintSystem) -> Liop {
-        constraint_system.validate().expect("the circuit compiles to a valid system");
+        constraint_system
+            .validate()
+            .expect("the circuit compiles to a valid system");
         assert_eq!(
             constraint_system.n_imul_constraints(),
             0,
@@ -166,10 +168,11 @@ impl Liop {
 
         let start = std::time::Instant::now();
         let ShiftOutput {
-            sumcheck: SumcheckOutput {
-                challenges: eval_point,
-                eval: _,
-            },
+            sumcheck:
+                SumcheckOutput {
+                    challenges: eval_point,
+                    eval: _,
+                },
             wiring_eval,
         } = prove_shift::<_, P, _, _>(
             &self.keys,
@@ -213,9 +216,19 @@ impl Liop {
             });
         }
         let start = std::time::Instant::now();
-        let public: Vec<Word> = cs.constants.iter().copied().chain(inout.iter().copied()).collect();
-        let reduction =
-            reduce_constraints(cs, Instances::Single, InoutSegment::Public, &public, channel)?;
+        let public: Vec<Word> = cs
+            .constants
+            .iter()
+            .copied()
+            .chain(inout.iter().copied())
+            .collect();
+        let reduction = reduce_constraints(
+            cs,
+            Instances::Single,
+            InoutSegment::Public,
+            &public,
+            channel,
+        )?;
         let eval_point = reduction.trace_point();
         let claim = *reduction.shift.witness_eval();
         let reduce = milliseconds(start);
@@ -246,6 +259,9 @@ where
         if constraints.is_empty() {
             return vec![Word::ZERO];
         }
-        constraints.iter().map(|c| witness.eval_operand(&c.as_ref()[operand])).collect()
+        constraints
+            .iter()
+            .map(|c| witness.eval_operand(&c.as_ref()[operand]))
+            .collect()
     })
 }

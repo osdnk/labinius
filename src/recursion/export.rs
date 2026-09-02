@@ -82,7 +82,11 @@ impl Instance {
                 .iter()
                 .map(|v| {
                     let w: Vec<i16> = v.polys.iter().flatten().copied().collect();
-                    assert!(w.iter().all(|&x| x.abs() <= INT16_LIMIT), "{} overflows int16", v.name);
+                    assert!(
+                        w.iter().all(|&x| x.abs() <= INT16_LIMIT),
+                        "{} overflows int16",
+                        v.name
+                    );
                     w
                 })
                 .collect(),
@@ -158,7 +162,9 @@ impl Instance {
             });
             for i in 0..r.len {
                 let mut e = [0i64; DEG];
-                for (u, x) in self.public[group.first + r.offset + i][r.chunk][a].iter().enumerate()
+                for (u, x) in self.public[group.first + r.offset + i][r.chunk][a]
+                    .iter()
+                    .enumerate()
                 {
                     e[u] = *x as i64;
                 }
@@ -170,12 +176,22 @@ impl Instance {
             if a == SPAN * s.chunk {
                 e[0] = s.factor;
             }
-            blocks.push(Block { idx: s.at.vector, off: s.at.off, len: 1, key_time: false });
+            blocks.push(Block {
+                idx: s.at.vector,
+                off: s.at.off,
+                len: 1,
+                key_time: false,
+            });
             phi.push(e);
         }
         for (d, at) in c.carries.at.iter().enumerate() {
             let w = c.carries.gadget.base.pow(d as u32);
-            blocks.push(Block { idx: at.vector, off: at.off, len: BLOCKS, key_time: false });
+            blocks.push(Block {
+                idx: at.vector,
+                off: at.off,
+                len: BLOCKS,
+                key_time: false,
+            });
             for x in 0..BLOCKS {
                 let mut e = [0i64; DEG];
                 if a > 0 && x == a - 1 {

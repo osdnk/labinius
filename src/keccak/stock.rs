@@ -8,7 +8,7 @@ use binius_hash::StdHashSuite;
 use binius_ip::channel::WordIPVerifierChannel;
 use binius_prover::{OptimalPackedB128, Prover};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
-use binius_verifier::config::{B128, StdChallenger};
+use binius_verifier::config::{StdChallenger, B128};
 use binius_verifier::{Error, Verifier};
 use std::time::Instant;
 
@@ -32,7 +32,11 @@ impl Stock {
     pub fn prove(&self, witness: &ValueVec) -> (Vec<u8>, Phases) {
         let phases = Phases::default();
         let mut transcript = ProverTranscript::<StdChallenger>::default();
-        phases.record(|| self.prover.prove(witness, &mut transcript).expect("the witness is valid"));
+        phases.record(|| {
+            self.prover
+                .prove(witness, &mut transcript)
+                .expect("the witness is valid")
+        });
         (transcript.finalize(), phases)
     }
 

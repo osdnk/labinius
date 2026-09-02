@@ -3,8 +3,8 @@
 //! recursion off and on.
 //!
 //! `cargo run --release --offline --bin keccak`, pinned with `taskset -c 3`.
-use bin_ntt::keccak::stock::{LOG_INV_RATE, Stock};
-use bin_ntt::keccak::{Circuit, MESSAGE_LEN, Session, Sizes};
+use bin_ntt::keccak::stock::{Stock, LOG_INV_RATE};
+use bin_ntt::keccak::{Circuit, Session, Sizes, MESSAGE_LEN};
 use std::time::Instant;
 
 /// The seed the public matrix `A` is expanded from.
@@ -54,8 +54,9 @@ fn peak_rss() -> f64 {
 
 fn main() {
     pin(CPU);
-    let message: Vec<u8> =
-        (0..MESSAGE_LEN).map(|i| (i as u32).wrapping_mul(2654435761) as u8).collect();
+    let message: Vec<u8> = (0..MESSAGE_LEN)
+        .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
+        .collect();
     let (circuit_ms, circuit) = once(|| Circuit::new(MESSAGE_LEN));
     let (witness_ms, witness) = once(|| circuit.witness(&message));
     let constraint_system = circuit.constraint_system();
@@ -81,8 +82,12 @@ fn main() {
     let (on_setup, mut on) = once(|| Session::new(constraint_system.clone(), true, MATRIX_SEED));
     let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&witness, None));
     let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&witness, None));
-    let off_verifier = off.verify(witness.inout(), &off_proof).expect("the honest proof verifies");
-    let on_verifier = on.verify(witness.inout(), &on_proof).expect("the honest proof verifies");
+    let off_verifier = off
+        .verify(witness.inout(), &off_proof)
+        .expect("the honest proof verifies");
+    let on_verifier = on
+        .verify(witness.inout(), &on_proof)
+        .expect("the honest proof verifies");
 
     println!("bin-ntt over binius64 keccak, core {CPU}, one thread");
     println!(
@@ -95,7 +100,10 @@ fn main() {
         "stock binius64 at the example's defaults: --log-inv-rate {LOG_INV_RATE}, \
          --hash-suite sha256, rayon off; the other two commit 2^18 F162 in 256 columns"
     );
-    println!("\n  {:<32}{:>13}{:>13}{:>13}", "", "stock", "recursion", "recursion");
+    println!(
+        "\n  {:<32}{:>13}{:>13}{:>13}",
+        "", "stock", "recursion", "recursion"
+    );
     println!("  {:<32}{:>13}{:>13}{:>13}", "", "binius64", "off", "on");
 
     println!("\nSETUP (once, not per proof)");
@@ -108,28 +116,52 @@ fn main() {
 
     println!("\nPROVER");
     row("witness", [Some(witness_ms); 3], "ms");
-    row("packing", [None, Some(off_prover.pack), Some(on_prover.pack)], "ms");
+    row(
+        "packing",
+        [None, Some(off_prover.pack), Some(on_prover.pack)],
+        "ms",
+    );
     row(
         "commit",
-        [Some(stock_commit), Some(off_prover.commit), Some(on_prover.commit)],
+        [
+            Some(stock_commit),
+            Some(off_prover.commit),
+            Some(on_prover.commit),
+        ],
         "ms",
     );
     row(
         "BitAnd check",
-        [Some(stock_bitand), Some(off_prover.bitand), Some(on_prover.bitand)],
+        [
+            Some(stock_bitand),
+            Some(off_prover.bitand),
+            Some(on_prover.bitand),
+        ],
         "ms",
     );
     row(
         "shift reduction",
-        [Some(stock_shift), Some(off_prover.shift), Some(on_prover.shift)],
+        [
+            Some(stock_shift),
+            Some(off_prover.shift),
+            Some(on_prover.shift),
+        ],
         "ms",
     );
     row(
         "ring-switch / cross-field switch",
-        [Some(stock_pcs), Some(off_prover.switch), Some(on_prover.switch)],
+        [
+            Some(stock_pcs),
+            Some(off_prover.switch),
+            Some(on_prover.switch),
+        ],
         "ms",
     );
-    row("opening", [None, Some(off_prover.opening), Some(on_prover.opening)], "ms");
+    row(
+        "opening",
+        [None, Some(off_prover.opening), Some(on_prover.opening)],
+        "ms",
+    );
     let listed = |t: &bin_ntt::keccak::ProverTiming| {
         t.pack + t.commit + t.bitand + t.shift + t.switch + t.opening
     };
@@ -144,24 +176,40 @@ fn main() {
     );
     row(
         "total",
-        [Some(stock_prove), Some(off_prover.total), Some(on_prover.total)],
+        [
+            Some(stock_prove),
+            Some(off_prover.total),
+            Some(on_prover.total),
+        ],
         "ms",
     );
 
     println!("\nVERIFIER");
     row(
         "read the commitment",
-        [None, Some(off_verifier.commitment), Some(on_verifier.commitment)],
+        [
+            None,
+            Some(off_verifier.commitment),
+            Some(on_verifier.commitment),
+        ],
         "ms",
     );
     row(
         "reductions",
-        [Some(stock_verify_reduce), Some(off_verifier.reduce), Some(on_verifier.reduce)],
+        [
+            Some(stock_verify_reduce),
+            Some(off_verifier.reduce),
+            Some(on_verifier.reduce),
+        ],
         "ms",
     );
     row(
         "ring-switch / cross-field switch",
-        [Some(stock_verify_pcs), Some(off_verifier.switch), Some(on_verifier.switch)],
+        [
+            Some(stock_verify_pcs),
+            Some(off_verifier.switch),
+            Some(on_verifier.switch),
+        ],
         "ms",
     );
     row(
@@ -171,30 +219,58 @@ fn main() {
     );
     row(
         "BaseFold / our opening",
-        [Some(stock_basefold), Some(off_verifier.opening), Some(on_verifier.opening)],
+        [
+            Some(stock_basefold),
+            Some(off_verifier.opening),
+            Some(on_verifier.opening),
+        ],
         "ms",
     );
     row(
         "wiring check (native)",
-        [Some(stock_native), Some(off_verifier.wiring), Some(on_verifier.wiring)],
+        [
+            Some(stock_native),
+            Some(off_verifier.wiring),
+            Some(on_verifier.wiring),
+        ],
         "ms",
     );
     row(
         "total",
-        [Some(stock_verify), Some(off_verifier.total), Some(on_verifier.total)],
+        [
+            Some(stock_verify),
+            Some(off_verifier.total),
+            Some(on_verifier.total),
+        ],
         "ms",
     );
 
     println!("\nSIZES");
     let kb = |b: usize| Some(b as f64 / 1024.0);
-    row("binius64 LIOP", [None, kb(off_sizes.liop), kb(on_sizes.liop)], "KB");
-    row("cross-field switch", [None, kb(off_sizes.switch), kb(on_sizes.switch)], "KB");
     row(
-        "commitment (wire form)",
-        [None, kb(off_sizes.commitment_wire), kb(on_sizes.commitment_wire)],
+        "binius64 LIOP",
+        [None, kb(off_sizes.liop), kb(on_sizes.liop)],
         "KB",
     );
-    row("opening", [None, kb(off_sizes.opening), kb(on_sizes.opening)], "KB");
+    row(
+        "cross-field switch",
+        [None, kb(off_sizes.switch), kb(on_sizes.switch)],
+        "KB",
+    );
+    row(
+        "commitment (wire form)",
+        [
+            None,
+            kb(off_sizes.commitment_wire),
+            kb(on_sizes.commitment_wire),
+        ],
+        "KB",
+    );
+    row(
+        "opening",
+        [None, kb(off_sizes.opening), kb(on_sizes.opening)],
+        "KB",
+    );
     let total = |s: &Sizes| kb(s.liop + s.switch + s.commitment_wire + s.opening);
     row(
         "total",

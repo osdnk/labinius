@@ -92,13 +92,13 @@
 //! 7.2 (12637), 9.4 (17497) and 10.4 (19441) per further limb. Per ring element and limb:
 //! 247-533 cycles of transform, 58 (splitting) or 74 (quadratic) of base multiplication, 7, 9 or
 //! 16 of [`finish`], and the front end's 32 once for all of them.
+use crate::fields::scalar::F162;
 use crate::params::*;
-use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::transpose_f162::slice_f162_into;
+use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::vertical_bin_asm::{self as vb, BlockSink};
 use crate::simd::vertical_bin_large as vl;
 use crate::types::*;
-use crate::fields::scalar::F162;
 use core::arch::x86_64::*;
 
 // =============================================================================================
@@ -255,7 +255,12 @@ unsafe fn fold_pair(w0: *const i16, w1: *const i16, a0: *const i16, a1: *const i
 pub unsafe fn mac27<const PF: bool>(w: *const i16, a: *const i16, apf: *const i8, acc: *mut i32) {
     for p in 0..13 {
         let s = _mm512_load_si512(acc.add(16 * p) as *const __m512i);
-        let d = fold_pair(w.add(64 * p), w.add(64 * p + 32), a.add(64 * p), a.add(64 * p + 32));
+        let d = fold_pair(
+            w.add(64 * p),
+            w.add(64 * p + 32),
+            a.add(64 * p),
+            a.add(64 * p + 32),
+        );
         _mm512_store_si512(acc.add(16 * p) as *mut __m512i, _mm512_add_epi32(s, d));
         if PF {
             _mm_prefetch(apf.add(128 * p), _MM_HINT_T1);
@@ -263,7 +268,12 @@ pub unsafe fn mac27<const PF: bool>(w: *const i16, a: *const i16, apf: *const i8
         }
     }
     let s = _mm512_load_si512(acc.add(16 * 13) as *const __m512i);
-    let d = fold_pair(w.add(32 * 26), w.add(32 * 26), a.add(32 * 26), a.add(32 * 26));
+    let d = fold_pair(
+        w.add(32 * 26),
+        w.add(32 * 26),
+        a.add(32 * 26),
+        a.add(32 * 26),
+    );
     _mm512_store_si512(acc.add(16 * 13) as *mut __m512i, _mm512_add_epi32(s, d));
     if PF {
         _mm_prefetch(apf.add(64 * 26), _MM_HINT_T1);
@@ -402,7 +412,12 @@ unsafe fn mod_q_pd<const Q: u16>(v: __m512d) -> __m256i {
     let q = _mm512_set1_pd(Q as f64);
     let t = _mm512_roundscale_pd::<0x09>(_mm512_mul_pd(v, _mm512_set1_pd(1.0 / Q as f64)));
     let r = _mm512_fnmadd_pd(t, q, v);
-    let r = _mm512_mask_add_pd(r, _mm512_cmp_pd_mask::<_CMP_LT_OQ>(r, _mm512_setzero_pd()), r, q);
+    let r = _mm512_mask_add_pd(
+        r,
+        _mm512_cmp_pd_mask::<_CMP_LT_OQ>(r, _mm512_setzero_pd()),
+        r,
+        q,
+    );
     let r = _mm512_mask_sub_pd(r, _mm512_cmp_pd_mask::<_CMP_NLT_UQ>(r, q), r, q);
     _mm512_cvttpd_epi32(r)
 }
@@ -528,7 +543,11 @@ unsafe fn chunk128(elems: &[F162], b: usize) -> &[F162; 128] {
 
 fn check(elems: &[F162], a: &[Batch32]) {
     assert_eq!(core::mem::size_of::<F162>(), 24, "F162 is not 24 bytes");
-    assert_eq!(elems.len(), 128 * a.len(), "128 F162 (= 32 ring elements) per A batch");
+    assert_eq!(
+        elems.len(),
+        128 * a.len(),
+        "128 F162 (= 32 ring elements) per A batch"
+    );
 }
 
 /// Distance, in batches, of the A prefetch.
@@ -626,8 +645,7 @@ pub const fn red_period_quad2(q: u16) -> usize {
 }
 
 const fn fits_quad(q: u16) -> bool {
-    acc_after_reduce(q) + (red_period_quad01(q) as i64) * acc_per_batch_quad01(q)
-        <= i32::MAX as i64
+    acc_after_reduce(q) + (red_period_quad01(q) as i64) * acc_per_batch_quad01(q) <= i32::MAX as i64
         && acc_after_reduce(q) + (red_period_quad2(q) as i64) * acc_per_batch_quad2(q)
             <= i32::MAX as i64
 }
@@ -656,7 +674,11 @@ impl QuadAcc {
     pub fn zero() -> Box<QuadAcc> {
         unsafe {
             let mut b = Box::<QuadAcc>::new_uninit();
-            core::ptr::write_bytes(b.as_mut_ptr() as *mut u8, 0, core::mem::size_of::<QuadAcc>());
+            core::ptr::write_bytes(
+                b.as_mut_ptr() as *mut u8,
+                0,
+                core::mem::size_of::<QuadAcc>(),
+            );
             b.assume_init()
         }
     }
@@ -912,12 +934,25 @@ unsafe fn quad_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     if KEEP {
         vq::ntt_quad_bin_batch32_sink::<Q, _>(
             idx,
-            &mut MacKeepQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2, out },
+            &mut MacKeepQ::<Q, PF> {
+                buf,
+                a,
+                apf,
+                acc01: p01,
+                acc2: p2,
+                out,
+            },
         );
     } else {
         vq::ntt_quad_bin_batch32_sink::<Q, _>(
             idx,
-            &mut MacQ::<Q, PF> { buf, a, apf, acc01: p01, acc2: p2 },
+            &mut MacQ::<Q, PF> {
+                buf,
+                a,
+                apf,
+                acc01: p01,
+                acc2: p2,
+            },
         );
     }
     if done % red_period_quad01(Q) == 0 {
@@ -1009,13 +1044,29 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     done: usize,
 ) {
     match (KEEP, Kernel::<Q>::LARGE) {
-        (true, false) => {
-            vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut MacKeep::<PF> { buf, a, apf, acc, out })
+        (true, false) => vb::ntt_bin_batch32_sink::<Q, _>(
+            idx,
+            &mut MacKeep::<PF> {
+                buf,
+                a,
+                apf,
+                acc,
+                out,
+            },
+        ),
+        (false, false) => {
+            vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc })
         }
-        (false, false) => vb::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc }),
-        (true, true) => {
-            vl::ntt_bin_batch32_sink::<Q, _>(idx, &mut MacKeep::<PF> { buf, a, apf, acc, out })
-        }
+        (true, true) => vl::ntt_bin_batch32_sink::<Q, _>(
+            idx,
+            &mut MacKeep::<PF> {
+                buf,
+                a,
+                apf,
+                acc,
+                out,
+            },
+        ),
         (false, true) => vl::ntt_bin_batch32_sink::<Q, _>(idx, &mut Mac::<PF> { buf, a, apf, acc }),
     }
     if done % red_period(Q) == 0 {
@@ -1042,7 +1093,11 @@ pub fn commit_limbs_into(
     let nb = limbs[0].a.len();
     check(elems, limbs[0].a);
     for l in limbs {
-        assert_eq!(l.a.len(), nb, "every limb's A has one batch per 32 ring elements");
+        assert_eq!(
+            l.a.len(),
+            nb,
+            "every limb's A has one batch per 32 ring elements"
+        );
     }
     assert!(
         st.accs.len() == limbs.len() && out.len() == limbs.len(),
@@ -1207,14 +1262,30 @@ unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
                 }
             } else {
                 match (r.q, o.is_null()) {
-                    (3889, true) => split_batch::<3889, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (3889, false) => split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (9721, true) => split_batch::<9721, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (9721, false) => split_batch::<9721, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (17497, true) => split_batch::<17497, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (17497, false) => split_batch::<17497, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (19441, true) => split_batch::<19441, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
-                    (19441, false) => split_batch::<19441, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1),
+                    (3889, true) => {
+                        split_batch::<3889, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (3889, false) => {
+                        split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (9721, true) => {
+                        split_batch::<9721, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (9721, false) => {
+                        split_batch::<9721, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (17497, true) => {
+                        split_batch::<17497, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (17497, false) => {
+                        split_batch::<17497, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (19441, true) => {
+                        split_batch::<19441, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
+                    (19441, false) => {
+                        split_batch::<19441, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    }
                     _ => unreachable!("no splitting kernel for q = {}", r.q),
                 }
             }
@@ -1224,11 +1295,7 @@ unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
 
 /// [`commit_limbs_into`] allocating its own scratch and output — one chunk, for tests and callers
 /// that commit once.
-pub fn commit_limbs(
-    elems: &[F162],
-    limbs: &[Limb],
-    w: Option<&mut [Batch32]>,
-) -> Vec<[u32; N]> {
+pub fn commit_limbs(elems: &[F162], limbs: &[Limb], w: Option<&mut [Batch32]>) -> Vec<[u32; N]> {
     let mut st = Scratch::new(limbs);
     let mut out = vec![[0u32; N]; limbs.len()];
     commit_limbs_into(elems, limbs, w, &mut st, &mut out);

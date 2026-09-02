@@ -21,6 +21,7 @@ pub mod stock;
 pub mod switch;
 
 use crate::api::Modulus;
+use crate::fields::scalar::{B128 as SB, F162};
 use crate::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
@@ -28,15 +29,14 @@ use crate::scheme::{
 };
 use crate::wire;
 use crate::Transcript;
-use crate::fields::scalar::{B128 as SB, F162};
 use binius_compute::GlobalAllocator;
 use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
 use binius_ip::channel::{IPVerifierChannel, WordIPVerifierChannel};
 use binius_ip_prover::channel::{IPProverChannel, WordIPProverChannel};
-use binius_prover::{OptimalPackedB128, pack_witness};
+use binius_prover::{pack_witness, OptimalPackedB128};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
-use binius_verifier::config::{B128, StdChallenger};
+use binius_verifier::config::{StdChallenger, B128};
 use channel::OracleFreeChannel;
 use liop::Liop;
 use std::time::Instant;
@@ -116,10 +116,7 @@ impl Sizes {
 pub enum Opening {
     /// The two messages as [`crate::wire`] codes them: 162 bits an `F162` of row evaluation, and
     /// the folded witness against its own histogram.
-    Clear {
-        row: Vec<u8>,
-        folded: Vec<u8>,
-    },
+    Clear { row: Vec<u8>, folded: Vec<u8> },
     Recursive {
         left: LeftExpansionCommitment,
         proof: OpeningProof,
@@ -143,10 +140,19 @@ pub struct Session {
 
 impl Session {
     /// `constraint_system` must pack to exactly [`Params::witness_len`] field elements.
-    pub fn new(constraint_system: ConstraintSystem, recursion: bool, matrix_seed: [u8; 32]) -> Session {
+    pub fn new(
+        constraint_system: ConstraintSystem,
+        recursion: bool,
+        matrix_seed: [u8; 32],
+    ) -> Session {
         let liop = Liop::new(constraint_system);
-        let params = Params::new(18, if recursion { 8 } else { 7 }, vec![Modulus::Q9721_FS_S], recursion)
-            .expect("the basic shape is valid");
+        let params = Params::new(
+            18,
+            if recursion { 8 } else { 7 },
+            vec![Modulus::Q9721_FS_S],
+            recursion,
+        )
+        .expect("the basic shape is valid");
         assert_eq!(
             liop.log_witness_elems(),
             params.witness_log_len as usize,
@@ -205,7 +211,9 @@ impl Session {
 
         WordIPProverChannel::<B128>::observe_words(&mut transcript, witness.inout());
         let commitment_bytes = commitment.to_bytes();
-        transcript.message().write_bytes(&(commitment_bytes.len() as u32).to_le_bytes());
+        transcript
+            .message()
+            .write_bytes(&(commitment_bytes.len() as u32).to_le_bytes());
         transcript.message().write_bytes(&commitment_bytes);
         sizes.commitment = tape_len(&transcript);
         sizes.commitment_wire = commitment.wire_bytes();
@@ -235,8 +243,9 @@ impl Session {
         let row = lifted.row_evaluate(&point);
         let opened = if self.params.recursion {
             let left = self.prover.commit_left_expansion(&row);
-            let challenges =
-                self.verifier.derive_folding_challenges(&mut opening_transcript, &left);
+            let challenges = self
+                .verifier
+                .derive_folding_challenges(&mut opening_transcript, &left);
             let proof = self
                 .prover
                 .prove_opening(
@@ -253,8 +262,9 @@ impl Session {
             sizes.opening = wire::f162_bytes(1) + left.wire_bytes() + proof.wire_bytes();
             Opening::Recursive { left, proof }
         } else {
-            let challenges =
-                self.verifier.derive_folding_challenges(&mut opening_transcript, &row);
+            let challenges = self
+                .verifier
+                .derive_folding_challenges(&mut opening_transcript, &row);
             let folded = self.prover.fold(opening, &challenges);
             let row = wire::pack_row_evaluation(&row);
             let folded = wire::encode(&folded, self.params.base.prime());
@@ -275,15 +285,10 @@ impl Session {
         )
     }
 
-    pub fn verify(
-        &self,
-        inout: &[Word],
-        proof: &Proof,
-    ) -> Result<VerifierTiming, Error> {
+    pub fn verify(&self, inout: &[Word], proof: &Proof) -> Result<VerifierTiming, Error> {
         let mut timing = VerifierTiming::default();
         let whole = Instant::now();
-        let mut transcript =
-            VerifierTranscript::new(StdChallenger::default(), proof.tape.clone());
+        let mut transcript = VerifierTranscript::new(StdChallenger::default(), proof.tape.clone());
         let mut channel = OracleFreeChannel {
             transcript: &mut transcript,
         };
@@ -305,8 +310,10 @@ impl Session {
         let commitment = Commitment::from_bytes(&self.params, &bytes).map_err(Error::Opening)?;
         timing.commitment = milliseconds(start);
 
-        let (eval_point, claim, reductions) =
-            self.liop.verify(&inout, &mut channel).map_err(Error::Reduction)?;
+        let (eval_point, claim, reductions) = self
+            .liop
+            .verify(&inout, &mut channel)
+            .map_err(Error::Reduction)?;
         timing.reduce = reductions.reduce;
         timing.wiring = reductions.wiring;
 
@@ -326,21 +333,27 @@ impl Session {
         match &proof.opening {
             Opening::Clear { row, folded } => {
                 let reject = |_| Error::Opening(VerificationError::Rejected);
-                let row = wire::unpack_row_evaluation(row, self.params.columns()).map_err(reject)?;
+                let row =
+                    wire::unpack_row_evaluation(row, self.params.columns()).map_err(reject)?;
                 let folded = wire::decode(folded).map_err(reject)?;
                 timing.decode = milliseconds(start);
                 start = Instant::now();
-                let challenges =
-                    self.verifier.derive_folding_challenges(&mut opening_transcript, &row);
+                let challenges = self
+                    .verifier
+                    .derive_folding_challenges(&mut opening_transcript, &row);
                 self.verifier
                     .verify_evaluation(&point, &proof.claimed_value, &row)
                     .map_err(Error::Opening)?;
                 self.check_fold(&commitment, &challenges, &row, &folded, &point)
                     .map_err(Error::Opening)?;
             }
-            Opening::Recursive { left, proof: opening } => {
-                let challenges =
-                    self.verifier.derive_folding_challenges(&mut opening_transcript, left);
+            Opening::Recursive {
+                left,
+                proof: opening,
+            } => {
+                let challenges = self
+                    .verifier
+                    .derive_folding_challenges(&mut opening_transcript, left);
                 self.verifier
                     .verify_opening(
                         &mut opening_transcript,
@@ -360,8 +373,11 @@ impl Session {
     }
 
     fn lift(&self, trace: &[SB]) -> Witness {
-        Witness::from_elements(&self.params, trace.iter().map(|&x| F162::from_b128(x)).collect())
-            .expect("the trace is the witness length")
+        Witness::from_elements(
+            &self.params,
+            trace.iter().map(|&x| F162::from_b128(x)).collect(),
+        )
+        .expect("the trace is the witness length")
     }
 
     fn check_fold(

@@ -54,7 +54,10 @@ pub fn blocks(g: &SElem) -> Blocks {
         core::array::from_fn(|a| {
             core::array::from_fn(|u| {
                 let x = h[SUB * a + u];
-                assert!(x.abs() <= BLOCK_LIMIT, "public sub-chunk coefficient {x} is too large");
+                assert!(
+                    x.abs() <= BLOCK_LIMIT,
+                    "public sub-chunk coefficient {x} is too large"
+                );
                 x as i16
             })
         })
@@ -68,7 +71,8 @@ pub fn chunks(x: &SElem) -> [Poly; CHUNKS] {
         let mut p = [0i16; DEG];
         for j in 0..CHUNK {
             let c = x[CHUNK * b + j];
-            p[j] = i16::try_from(c).unwrap_or_else(|_| panic!("witness coefficient {c} is too large"));
+            p[j] =
+                i16::try_from(c).unwrap_or_else(|_| panic!("witness coefficient {c} is too large"));
         }
         p
     })
@@ -111,7 +115,10 @@ pub fn taps() -> &'static [[Vec<(u16, i8)>; BLOCKS]; CHUNKS] {
                     for (a, taps) in row.iter_mut().enumerate() {
                         let sign = block[b][a][u];
                         assert!(
-                            block[b][a].iter().enumerate().all(|(x, &c)| x == u || c == 0),
+                            block[b][a]
+                                .iter()
+                                .enumerate()
+                                .all(|(x, &c)| x == u || c == 0),
                             "block {b} diagonal {a} mixes window positions"
                         );
                         match taps.iter().find(|e| e.0 as usize == w) {

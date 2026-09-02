@@ -9,7 +9,6 @@
 //! butterfly, so the two outputs are **bit-identical**. For q = 9721 they reduce at different
 //! levels and with a different Barrett (reference: `params::barrett_i16` at levels 4, 5 and 6;
 //! asm: the lookup Barrett at level 4 and `barrett_i16` at level 6), so they agree only modulo q.
-use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
@@ -18,6 +17,7 @@ use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin as vb;
 use bin_ntt::simd::vertical_bin_asm as vba;
 use bin_ntt::types::*;
+use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs
 
@@ -84,7 +84,9 @@ fn adversarial() -> Vec<Bin> {
         }
         v.push(p);
     }
-    for d in [0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647] {
+    for d in [
+        0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647,
+    ] {
         v.push(monomial(d));
     }
     v
@@ -175,7 +177,10 @@ fn check_against_scalar<const Q: u16>() {
                 assert_eq!(got[j], want[j], "q={Q} poly={p} slot={j}");
                 let a = (e.v[j] as i32).abs();
                 worst = worst.max(a);
-                assert!(a <= bound, "q={Q} output {a} exceeds declared bound {bound}");
+                assert!(
+                    a <= bound,
+                    "q={Q} output {a} exceeds declared bound {bound}"
+                );
             }
         }
     }

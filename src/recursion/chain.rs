@@ -12,9 +12,7 @@
 //! the two wrap terms being `-e_{BLOCKS-1}` and `-Z^81 e_{BLOCKS-1}`, i.e. `Z^162 e_{BLOCKS-1}`
 //! moved back by `Z^162 = -Z^81 - 1`. Summed against `Z^{SUB a}` the carries telescope to
 //! `-Z^162 e_{BLOCKS-1}` and the identity is `sum_a Z^{SUB a} D_a = z + Phi_243 e_{BLOCKS-1}`.
-use super::{
-    Blocks, Gadget, SElem, Vector, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, SPAN, SUB, WIDEN,
-};
+use super::{Blocks, Gadget, SElem, Vector, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, SPAN, SUB, WIDEN};
 use crate::api::N162;
 use core::arch::x86_64::*;
 
@@ -193,7 +191,13 @@ impl Chain {
         let mut e = [[0i64; DEG]; BLOCKS];
         for (a, out) in e.iter_mut().enumerate() {
             for (d, at) in self.carries.at.iter().enumerate() {
-                let q = poly(w, At { vector: at.vector, off: at.off + a });
+                let q = poly(
+                    w,
+                    At {
+                        vector: at.vector,
+                        off: at.off + a,
+                    },
+                );
                 let s = self.carries.gadget.base.pow(d as u32);
                 for j in 0..DEG {
                     out[j] += s * q[j] as i64;
@@ -220,7 +224,11 @@ impl Chain {
                 }
             }
             for j in 0..DEG {
-                let (t, sign) = if j + SUB < DEG { (j + SUB, 1) } else { (j + SUB - DEG, -1) };
+                let (t, sign) = if j + SUB < DEG {
+                    (j + SUB, 1)
+                } else {
+                    (j + SUB - DEG, -1)
+                };
                 r[t] -= sign * e[a][j] as i128;
             }
             if a == 0 || a == BLOCKS / 2 {

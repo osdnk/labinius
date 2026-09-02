@@ -405,7 +405,11 @@ pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Bat
             let base = 27 * j;
             let tw = t.tw4[6 * k + j].as_ptr();
             for i in 0..9 {
-                let (a0, a1, a2) = (ld(bp, base + i), ld(bp, base + 9 + i), ld(bp, base + 18 + i));
+                let (a0, a1, a2) = (
+                    ld(bp, base + i),
+                    ld(bp, base + 9 + i),
+                    ld(bp, base + 18 + i),
+                );
                 let (o0, o1, o2) = if bar {
                     r3::<true>(&c, a0, a1, a2, tw)
                 } else {

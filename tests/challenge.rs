@@ -94,7 +94,10 @@ fn shape() {
             }
             let d = c.coeffs();
             assert_eq!(d.iter().filter(|&&x| x != 0).count(), weight);
-            assert!(d.iter().all(|&x| x == 0 || x == 1), "a challenge is not binary");
+            assert!(
+                d.iter().all(|&x| x == 0 || x == 1),
+                "a challenge is not binary"
+            );
             assert_eq!(ShortChallenge::from_coeffs(&d), c);
         }
     }
@@ -168,7 +171,10 @@ fn the_default_challenge_is_binary_and_short() {
     for _ in 0..500 {
         let (c, _) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
         let d = c.coeffs();
-        assert!(d.iter().all(|&x| x == 0 || x == 1), "a challenge coefficient is not 0 or 1");
+        assert!(
+            d.iter().all(|&x| x == 0 || x == 1),
+            "a challenge coefficient is not 0 or 1"
+        );
         assert_eq!(d.iter().filter(|&&x| x == 1).count(), DEFAULT_WEIGHT);
         let norm = canonical_inf_norm_sq(&c);
         assert!(norm <= DEFAULT_BOUND * DEFAULT_BOUND + 1e-12);

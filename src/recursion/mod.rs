@@ -34,10 +34,10 @@
 //! - [`setup`]  : everything that depends on the commitment key alone, built once.
 //! - [`statement`]: the LaBRADOR statement, built the same way by prover and verifier.
 use crate::api::N162;
+use crate::fields::scalar::F162;
 use crate::params::{QS, QS_LARGE, QS_QUAD};
 use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};
 use chain::{At, Carries, Chain, Product, Scaled};
-use crate::fields::scalar::F162;
 use setup::Setup;
 
 pub mod binary;
@@ -152,7 +152,11 @@ impl Gadget {
             *t = centre(r, self.base);
             r = (r - *t) / self.base;
         }
-        assert_eq!(r, 0, "{x} does not fit {} base-{} digits", self.levels, self.base);
+        assert_eq!(
+            r, 0,
+            "{x} does not fit {} base-{} digits",
+            self.levels, self.base
+        );
     }
     /// The largest magnitude the gadget represents.
     pub fn reach(&self) -> i64 {
@@ -183,7 +187,14 @@ pub struct Vector {
 
 impl Vector {
     fn new(name: String, cap: Cap, support: usize, binary: bool) -> Vector {
-        Vector { name, polys: Vec::new(), used: 0, cap, support, binary }
+        Vector {
+            name,
+            polys: Vec::new(),
+            used: 0,
+            cap,
+            support,
+            binary,
+        }
     }
 
     /// The `l2` cap the verifier enforces on `‖s‖`.
@@ -223,7 +234,11 @@ impl Vector {
     }
     /// The exact `‖s‖^2` the prover announces.
     pub fn betasq(&self) -> u64 {
-        self.polys.iter().flatten().map(|&x| (x as i64 * x as i64) as u64).sum()
+        self.polys
+            .iter()
+            .flatten()
+            .map(|&x| (x as i64 * x as i64) as u64)
+            .sum()
     }
 }
 
@@ -288,7 +303,13 @@ impl Instance {
         point: &EvaluationPoint,
         claim: &F162,
     ) -> Instance {
-        Instance::build(setup, Some((residues, folded, row)), challenges, point, claim)
+        Instance::build(
+            setup,
+            Some((residues, folded, row)),
+            challenges,
+            point,
+            claim,
+        )
     }
 
     /// The same relation with every witness vector left zero: what the verifier can rebuild from
@@ -320,7 +341,10 @@ impl Instance {
     /// The exact left-hand side of every block equation, over `Z`, reduced negacyclically in
     /// `X^DEG + 1` exactly as LaBRADOR would: the reference checker.
     pub fn residuals(&self) -> Vec<[[i128; DEG]; BLOCKS]> {
-        assert!(!self.prepared.is_empty(), "a layout-only instance has no witness to check");
+        assert!(
+            !self.prepared.is_empty(),
+            "a layout-only instance has no witness to check"
+        );
         (0..self.chains.len())
             .map(|c| self.chains[c].residuals(&self.prepared[c], &self.vectors))
             .collect()
@@ -334,9 +358,18 @@ impl Instance {
     /// One identity `sum_nu g_nu x_nu = z` on its own, `z` computed honestly: the smallest thing
     /// the chain encoding says anything about.
     pub fn of_identity(g: &[SElem], x: &[SElem], carry: Gadget) -> Instance {
-        assert_eq!(g.len(), x.len(), "one public multiplier per witness element");
+        assert_eq!(
+            g.len(),
+            x.len(),
+            "one public multiplier per witness element"
+        );
         let mut build = Build::bare();
-        let xs = build.vector("x".into(), Cap::PerCoefficient(COEFF_LIMIT as f64), CHUNK, false);
+        let xs = build.vector(
+            "x".into(),
+            Cap::PerCoefficient(COEFF_LIMIT as f64),
+            CHUNK,
+            false,
+        );
         for e in x {
             build.vectors[xs].push_s(e);
         }
@@ -353,13 +386,25 @@ impl Instance {
                 (0..CHUNKS).map(move |b| Product {
                     blocks: p,
                     chunk: b,
-                    at: At { vector: xs, off: t * CHUNKS + b },
+                    at: At {
+                        vector: xs,
+                        off: t * CHUNKS + b,
+                    },
                 })
             })
             .collect();
         let carries = build.carry_vectors("x", carry);
         build.seal(
-            Chain { name: "identity".into(), products, scaled: Vec::new(), output, carries: Carries { gadget: carry, at: Vec::new() } },
+            Chain {
+                name: "identity".into(),
+                products,
+                scaled: Vec::new(),
+                output,
+                carries: Carries {
+                    gadget: carry,
+                    at: Vec::new(),
+                },
+            },
             1,
             (Gadget { base: 1, levels: 0 }, &[]),
             &carries,
@@ -440,7 +485,11 @@ impl Build {
         let mut vv = Vector::new("v".into(), Cap::Betasq(setup.fold_cap), CHUNK, false);
         match witness {
             Some((folded, _)) => {
-                assert_eq!(folded.elements().len(), n, "the fold does not match the key");
+                assert_eq!(
+                    folded.elements().len(),
+                    n,
+                    "the fold does not match the key"
+                );
                 let v: Vec<[SElem; 4]> = folded.elements().iter().map(limbs::components).collect();
                 for l in 0..4 {
                     for b in 0..CHUNKS {
@@ -461,8 +510,11 @@ impl Build {
         let mut uu = Vector::new("u".into(), Cap::PerCoefficient(1.0), CHUNK, true);
         match witness {
             Some((_, row)) => {
-                let lifts: Vec<[Poly; CHUNKS]> =
-                    row.values().iter().map(|x| chunk::chunks(&binary::lift(x))).collect();
+                let lifts: Vec<[Poly; CHUNKS]> = row
+                    .values()
+                    .iter()
+                    .map(|x| chunk::chunks(&binary::lift(x)))
+                    .collect();
                 for b in 0..CHUNKS {
                     for l in lifts.iter() {
                         uu.push(l[b]);
@@ -495,7 +547,10 @@ impl Build {
 
     /// The poly of `v` holding chunk `b` of component `l` of ring element `i`.
     pub fn v_at(&self, l: usize, b: usize, i: usize) -> chain::At {
-        chain::At { vector: V, off: (l * CHUNKS + b) * self.n + i }
+        chain::At {
+            vector: V,
+            off: (l * CHUNKS + b) * self.n + i,
+        }
     }
 
     pub fn vector(&mut self, name: String, cap: Cap, support: usize, binary: bool) -> usize {
@@ -511,9 +566,14 @@ impl Build {
     /// The same over blocks that are already computed — the key rows of [`setup`].
     pub fn group_blocks(&mut self, kind: Kind, items: &[Blocks]) -> usize {
         let first = self.public.len();
-        self.groups.push(Group { kind, first, len: items.len() });
+        self.groups.push(Group {
+            kind,
+            first,
+            len: items.len(),
+        });
         self.windows.push(Vec::new());
-        self.group_of.resize(first + items.len(), self.groups.len() - 1);
+        self.group_of
+            .resize(first + items.len(), self.groups.len() - 1);
         self.public.extend_from_slice(items);
         first
     }
@@ -582,12 +642,18 @@ impl Build {
                     chain.scaled.push(Scaled {
                         factor: -divisor * gadget.base.pow(d as u32),
                         chunk: b,
-                        at: At { vector, off: off + b },
+                        at: At {
+                            vector,
+                            off: off + b,
+                        },
                     });
                 }
             }
             for &vector in carry {
-                chain.carries.at.push(At { vector, off: self.vectors[vector].zeros(BLOCKS) });
+                chain.carries.at.push(At {
+                    vector,
+                    off: self.vectors[vector].zeros(BLOCKS),
+                });
             }
             self.chains.push(chain);
             return;
@@ -597,7 +663,12 @@ impl Build {
         let value = Chain::value(&sums);
         let k: SElem = core::array::from_fn(|t| {
             let x = value[t] - chain.output[t];
-            assert_eq!(x % divisor, 0, "{}: the left side is not a multiple of {divisor}", chain.name);
+            assert_eq!(
+                x % divisor,
+                0,
+                "{}: the left side is not a multiple of {divisor}",
+                chain.name
+            );
             x / divisor
         });
         if levels.is_empty() {
@@ -617,7 +688,10 @@ impl Build {
                 chain.scaled.push(Scaled {
                     factor: -divisor * gadget.base.pow(d as u32),
                     chunk: b,
-                    at: At { vector, off: off + b },
+                    at: At {
+                        vector,
+                        off: off + b,
+                    },
                 });
             }
         }
@@ -635,7 +709,10 @@ impl Build {
             }
         }
         for (d, &vector) in carry.iter().enumerate() {
-            chain.carries.at.push(At { vector, off: self.vectors[vector].polys.len() });
+            chain.carries.at.push(At {
+                vector,
+                off: self.vectors[vector].polys.len(),
+            });
             for p in polys[d] {
                 self.vectors[vector].push(p);
             }

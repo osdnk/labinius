@@ -20,7 +20,10 @@ pub struct RingElement {
 
 impl RingElement {
     pub fn zero(representation: Representation) -> Self {
-        RingElement { v: [0i16; N], representation }
+        RingElement {
+            v: [0i16; N],
+            representation,
+        }
     }
     /// Fully reduced non-negative coefficients in [0, q).
     pub fn normalized(&self, q: u16) -> [u32; N] {
@@ -43,7 +46,10 @@ pub struct Batch32 {
 
 impl Batch32 {
     pub fn zero(representation: Representation) -> Self {
-        Batch32 { v: [[0i16; 32]; N], representation }
+        Batch32 {
+            v: [[0i16; 32]; N],
+            representation,
+        }
     }
     pub fn get(&self, p: usize) -> RingElement {
         let mut e = RingElement::zero(self.representation);

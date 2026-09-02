@@ -96,17 +96,22 @@ fn every_moduli_list_rejects_a_corrupted_opening() {
     for list in LISTS {
         let (_, evaluation, opening) = round(list, Some(1));
         assert_eq!(evaluation, Ok(()), "moduli {list:?}");
-        assert_eq!(
-            opening,
-            Err(VerificationError::Rejected),
-            "moduli {list:?}"
-        );
+        assert_eq!(opening, Err(VerificationError::Rejected), "moduli {list:?}");
     }
 }
 
 #[test]
 fn the_modulus_order_is_the_one_the_list_gives() {
-    assert_eq!(round(&[Q12637_Q_S, Q2917_Q_S], None).0, vec![3889, 12637, 2917]);
-    assert_eq!(round(&[Q2917_Q_S, Q12637_Q_S], None).0, vec![3889, 2917, 12637]);
-    assert_eq!(round(&[Q19441_FS_L, Q17497_FS_L], None).0, vec![3889, 19441, 17497]);
+    assert_eq!(
+        round(&[Q12637_Q_S, Q2917_Q_S], None).0,
+        vec![3889, 12637, 2917]
+    );
+    assert_eq!(
+        round(&[Q2917_Q_S, Q12637_Q_S], None).0,
+        vec![3889, 2917, 12637]
+    );
+    assert_eq!(
+        round(&[Q19441_FS_L, Q17497_FS_L], None).0,
+        vec![3889, 19441, 17497]
+    );
 }

@@ -2,7 +2,6 @@
 //! reference against the definition, all three SIMD kernels — binary, generic and the generic
 //! inverse — against the scalar reference slot for slot, the declared bounds, an i32 shadow model
 //! of the binary kernel's schedule, and the `R_162` decomposition of a transform.
-use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::recursion::limbs;
@@ -12,6 +11,7 @@ use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_quad as vq;
 use bin_ntt::simd::vertical_gen_quad as vgq;
 use bin_ntt::types::*;
+use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs
 
@@ -74,7 +74,9 @@ fn adversarial() -> Vec<Bin> {
         }
         v.push(p);
     }
-    for d in [0usize, 1, 53, 54, 107, 108, 161, 162, 323, 324, 485, 486, 646, 647] {
+    for d in [
+        0usize, 1, 53, 54, 107, 108, 161, 162, 323, 324, 485, 486, 646, 647,
+    ] {
         v.push(monomial(d));
     }
     v
@@ -115,7 +117,10 @@ fn tree_shape() {
     let mut seen = [false; 972];
     for j in 0..QUAD_SLOTS {
         let u = QUAD_SLOT_EXP[j] as usize;
-        assert!(u % 2 == 1 && u % 3 != 0, "leaf {j} exponent {u} is not a unit");
+        assert!(
+            u % 2 == 1 && u % 3 != 0,
+            "leaf {j} exponent {u} is not a unit"
+        );
         assert!(!seen[u]);
         seen[u] = true;
     }
@@ -123,7 +128,11 @@ fn tree_shape() {
     for level in 1..=6 {
         for k in 0..SUBRINGS_Q[level] {
             let e = subring_exp_quad(level, k);
-            assert_eq!(e as usize % (DEGREE_Q[level] / 2), 0, "level {level} sub-ring {k}");
+            assert_eq!(
+                e as usize % (DEGREE_Q[level] / 2),
+                0,
+                "level {level} sub-ring {k}"
+            );
             if level < 6 {
                 assert_eq!(e % RADIX_Q[level] as u32, 0);
             }
@@ -133,7 +142,10 @@ fn tree_shape() {
     for s in 0..162 {
         let v = QUAD_POW3_CLASS[s] as usize;
         assert_eq!(v, bin_ntt::api::POW3_SLOT_EXP[s] as usize);
-        let (jp, jm) = (QUAD_CLASS_SLOT[0][s] as usize, QUAD_CLASS_SLOT[1][s] as usize);
+        let (jp, jm) = (
+            QUAD_CLASS_SLOT[0][s] as usize,
+            QUAD_CLASS_SLOT[1][s] as usize,
+        );
         assert_eq!(QUAD_SLOT_EXP[jp] as usize, v);
         assert_eq!(QUAD_SLOT_EXP[jm] as usize, v + 486);
     }
@@ -197,7 +209,8 @@ fn scalar_product<const Q: u16>() {
         let a = random_coeffs(&mut rng, Q);
         let b = random_coeffs(&mut rng, Q);
         let want = scalar::ntt_quad::<Q>(&scalar::mul_mod_phi(&a, &b, Q));
-        let got = scalar::mul_quad_slots::<Q>(&scalar::ntt_quad::<Q>(&a), &scalar::ntt_quad::<Q>(&b));
+        let got =
+            scalar::mul_quad_slots::<Q>(&scalar::ntt_quad::<Q>(&a), &scalar::ntt_quad::<Q>(&b));
         assert_eq!(want, got);
     }
 }
@@ -258,7 +271,10 @@ struct Shadow<const Q: u16> {
 
 impl<const Q: u16> Shadow<Q> {
     fn new() -> Self {
-        Shadow { max: [0; 4], max_any: 0 }
+        Shadow {
+            max: [0; 4],
+            max_any: 0,
+        }
     }
     fn see(&mut self, x: i32) -> i16 {
         let a = x.abs();
@@ -389,8 +405,13 @@ impl<const Q: u16> Shadow<Q> {
             for base in (0..N).step_by(*blk) {
                 let zeta = ParamsQ::<Q>::zeta(*level, base / blk);
                 for i in 0..m {
-                    let (o0, o1, o2) =
-                        self.r3(v[base + i], v[base + i + m], v[base + i + 2 * m], zeta, bar[l]);
+                    let (o0, o1, o2) = self.r3(
+                        v[base + i],
+                        v[base + i + m],
+                        v[base + i + 2 * m],
+                        zeta,
+                        bar[l],
+                    );
                     v[base + i] = o0;
                     v[base + i + m] = o1;
                     v[base + i + 2 * m] = o2;
@@ -439,9 +460,19 @@ fn bin_kernel<const Q: u16>() {
     }
     let model = vq::bin_model(Q, vq::bar_levels(Q));
     assert!(sh.max_any < 32768);
-    assert!(sh.max_any <= model.1, "shadow peak {} > model {}", sh.max_any, model.1);
+    assert!(
+        sh.max_any <= model.1,
+        "shadow peak {} > model {}",
+        sh.max_any,
+        model.1
+    );
     for l in 0..4 {
-        assert!(sh.max[l] <= model.0[l], "level {l}: {} > {}", sh.max[l], model.0[l]);
+        assert!(
+            sh.max[l] <= model.0[l],
+            "level {l}: {} > {}",
+            sh.max[l],
+            model.0[l]
+        );
     }
     println!(
         "q={Q} binary: observed per level {:?} (model {:?}), output {:.3} q of the declared {:.3} q",
@@ -493,13 +524,20 @@ fn bin_sink<const Q: u16>() {
             self.seen.push(blk);
         }
     }
-    let mut c = Collect { buf: (0..36).map(|_| Blk18([0i16; 18 * 32])).collect(), seen: Vec::new() };
+    let mut c = Collect {
+        buf: (0..36).map(|_| Blk18([0i16; 18 * 32])).collect(),
+        seen: Vec::new(),
+    };
     unsafe { vq::ntt_quad_bin_batch32_sink::<Q, _>(&idx, &mut c) };
     assert_eq!(c.seen, (0..36).collect::<Vec<_>>());
     for blk in 0..36 {
         for r in 0..18 {
             for p in 0..32 {
-                assert_eq!(c.buf[blk].0[32 * r + p], out.v[18 * blk + r][p], "block {blk} row {r}");
+                assert_eq!(
+                    c.buf[blk].0[32 * r + p],
+                    out.v[18 * blk + r][p],
+                    "block {blk} row {r}"
+                );
             }
         }
     }
@@ -529,7 +567,13 @@ fn gen_inputs<const Q: u16>(count: usize, seed: u64) -> Vec<Batch32> {
     let mut b = Batch32::zero(Representation::Coefficients);
     for j in 0..N {
         for p in 0..32 {
-            b.v[j][p] = if p % 3 == 0 { q } else if p % 3 == 1 { -q } else { 0 };
+            b.v[j][p] = if p % 3 == 0 {
+                q
+            } else if p % 3 == 1 {
+                -q
+            } else {
+                0
+            };
         }
     }
     out.push(b);
@@ -561,8 +605,7 @@ fn gen_kernel<const Q: u16>() {
         let mut got = b.clone();
         unsafe { vgq::ntt_quad_gen_batch32::<Q>(&mut got) };
         for p in 0..32 {
-            let a: Coeffs =
-                std::array::from_fn(|j| (b.v[j][p] as i32).rem_euclid(Q as i32) as u32);
+            let a: Coeffs = std::array::from_fn(|j| (b.v[j][p] as i32).rem_euclid(Q as i32) as u32);
             let want = scalar::ntt_quad::<Q>(&a);
             for j in 0..N {
                 let g = got.v[j][p];
@@ -617,12 +660,14 @@ fn simd_product<const Q: u16>() {
     for p in [0usize, 1, 17, 31] {
         let a: Coeffs = polys[p];
         let b: Coeffs = std::array::from_fn(|j| coeffs_b.v[j][p] as u32);
-        let na: Coeffs =
-            std::array::from_fn(|j| (ta.v[j][p] as i32).rem_euclid(Q as i32) as u32);
-        let nb: Coeffs =
-            std::array::from_fn(|j| (tb.v[j][p] as i32).rem_euclid(Q as i32) as u32);
+        let na: Coeffs = std::array::from_fn(|j| (ta.v[j][p] as i32).rem_euclid(Q as i32) as u32);
+        let nb: Coeffs = std::array::from_fn(|j| (tb.v[j][p] as i32).rem_euclid(Q as i32) as u32);
         let want = scalar::ntt_quad::<Q>(&scalar::mul_mod_phi(&a, &b, Q));
-        assert_eq!(want, scalar::mul_quad_slots::<Q>(&na, &nb), "product q={Q} lane {p}");
+        assert_eq!(
+            want,
+            scalar::mul_quad_slots::<Q>(&na, &nb),
+            "product q={Q} lane {p}"
+        );
     }
 }
 
@@ -642,7 +687,11 @@ fn centered_slots<const Q: u16>(slots: &[Coeffs]) -> Batch32 {
     for (p, s) in slots.iter().enumerate() {
         for j in 0..N {
             let x = s[j] as i32;
-            b.v[j][p] = if x > half { (x - Q as i32) as i16 } else { x as i16 };
+            b.v[j][p] = if x > half {
+                (x - Q as i32) as i16
+            } else {
+                x as i16
+            };
         }
     }
     b
@@ -661,10 +710,16 @@ fn inverse_kernel<const Q: u16>() {
         assert_eq!(b.representation, Representation::Coefficients);
         for p in 0..32 {
             let want = limbs::intt_quad::<Q>(&slots[p]);
-            assert_eq!(want, coeffs[p], "q={Q} the scalar inverse is not the inverse");
+            assert_eq!(
+                want, coeffs[p],
+                "q={Q} the scalar inverse is not the inverse"
+            );
             for j in 0..N {
                 let got = b.v[j][p] as i32;
-                assert!(got.abs() <= half, "q={Q} coefficient {j} lane {p}: |{got}| not centered");
+                assert!(
+                    got.abs() <= half,
+                    "q={Q} coefficient {j} lane {p}: |{got}| not centered"
+                );
                 assert_eq!(
                     got.rem_euclid(Q as i32) as u32,
                     want[j],
@@ -699,14 +754,20 @@ fn inverse_at_the_declared_bound<const Q: u16>() {
         for j in 0..N {
             for p in 0..32 {
                 let x = b.v[j][p] as i32;
-                assert!(x.abs() <= bound, "q={Q} row {j} lane {p}: |{x}| over the input bound");
+                assert!(
+                    x.abs() <= bound,
+                    "q={Q} row {j} lane {p}: |{x}| over the input bound"
+                );
             }
         }
         unsafe { vgq::intt_quad_gen_batch32::<Q>(&mut b) };
         for j in 0..N {
             for p in 0..32 {
                 let got = b.v[j][p] as i32;
-                assert!(got.abs() <= half, "q={Q} coefficient {j} lane {p} not centered");
+                assert!(
+                    got.abs() <= half,
+                    "q={Q} coefficient {j} lane {p} not centered"
+                );
                 assert_eq!(got, polys[p][j] as i32, "q={Q} coefficient {j} lane {p}");
             }
         }

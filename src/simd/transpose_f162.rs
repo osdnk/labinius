@@ -46,7 +46,9 @@ pub struct BinaryIndex32 {
 
 impl BinaryIndex32 {
     pub fn zero() -> Self {
-        BinaryIndex32 { rows: [[0u8; 64]; 162] }
+        BinaryIndex32 {
+            rows: [[0u8; 64]; 162],
+        }
     }
 }
 
@@ -325,16 +327,28 @@ unsafe fn slice_raw(base: *const u8, out: &mut BinaryIndex32) {
         let n = _mm512_gf2p8affine_epi64_epi8::<0>(ident, _mm512_permutexvar_epi8(am, src));
         let a = _mm512_permutexvar_epi8(da, n);
         let b = _mm512_permutexvar_epi8(db, n);
-        _mm512_store_si512(op.add(4 * t), _mm512_ternarylogic_epi32::<0xEA>(a, lo4, p16));
-        _mm512_store_si512(op.add(4 * t + 1), _mm512_ternarylogic_epi32::<0xEA>(b, lo4, p16));
+        _mm512_store_si512(
+            op.add(4 * t),
+            _mm512_ternarylogic_epi32::<0xEA>(a, lo4, p16),
+        );
+        _mm512_store_si512(
+            op.add(4 * t + 1),
+            _mm512_ternarylogic_epi32::<0xEA>(b, lo4, p16),
+        );
     }
     for t in 0..40 {
         let src = _mm512_loadu_si512(bg.add(4 * t) as *const __m512i);
         let n = _mm512_gf2p8affine_epi64_epi8::<0>(ident, _mm512_permutexvar_epi8(am, src));
         let a = _mm512_permutexvar_epi8(da, n);
         let b = _mm512_permutexvar_epi8(db, n);
-        _mm512_store_si512(op.add(4 * t + 2), _mm512_ternarylogic_epi32::<0xEA>(a, lo4, p16));
-        _mm512_store_si512(op.add(4 * t + 3), _mm512_ternarylogic_epi32::<0xEA>(b, lo4, p16));
+        _mm512_store_si512(
+            op.add(4 * t + 2),
+            _mm512_ternarylogic_epi32::<0xEA>(a, lo4, p16),
+        );
+        _mm512_store_si512(
+            op.add(4 * t + 3),
+            _mm512_ternarylogic_epi32::<0xEA>(b, lo4, p16),
+        );
     }
 }
 

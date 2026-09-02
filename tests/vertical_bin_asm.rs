@@ -3,7 +3,6 @@
 //! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
 //! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
 //! what a commitment feeds it.
-use bin_ntt::F162;
 use bin_ntt::f162;
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
@@ -12,6 +11,7 @@ use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
 use bin_ntt::simd::vertical_bin_asm as vb;
 use bin_ntt::simd::vertical_bin_large as vl;
 use bin_ntt::types::*;
+use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs
 
@@ -78,7 +78,9 @@ fn adversarial() -> Vec<Bin> {
         }
         v.push(p);
     }
-    for d in [0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647] {
+    for d in [
+        0usize, 1, 80, 81, 161, 162, 163, 323, 324, 325, 485, 486, 646, 647,
+    ] {
         v.push(monomial(d));
     }
     v
@@ -143,7 +145,10 @@ struct Shadow<const Q: u16> {
 
 impl<const Q: u16> Shadow<Q> {
     fn new() -> Self {
-        Shadow { max: [0; 5], max_any: 0 }
+        Shadow {
+            max: [0; 5],
+            max_any: 0,
+        }
     }
     fn see(&mut self, x: i32) -> i16 {
         let a = x.abs();
@@ -169,8 +174,12 @@ impl<const Q: u16> Shadow<Q> {
         let z3 = Params::<Q>::ZETA_L3[2 * k + s2] as u64;
         let f = pow_mod(z3, r as u64, q);
         let extra = if ab == 0 { 1 } else { zp };
-        let (n0, n1, n2, n3) =
-            ((n & 1) as u64, ((n >> 1) & 1) as u64, ((n >> 2) & 1) as u64, ((n >> 3) & 1) as u64);
+        let (n0, n1, n2, n3) = (
+            (n & 1) as u64,
+            ((n >> 1) & 1) as u64,
+            ((n >> 2) & 1) as u64,
+            ((n >> 3) & 1) as u64,
+        );
         let inner = z1 * ((n1 + ka * n3) % q) % q;
         let t = if s1 == 0 { inner } else { (q - inner) % q };
         let base = ((n0 + ka * n2) % q + t) % q;
@@ -249,8 +258,7 @@ impl<const Q: u16> Shadow<Q> {
                 let b = k * n;
                 let z = Params::<Q>::zeta(level, k);
                 for i in 0..m {
-                    let (o0, o1, o2) =
-                        self.r3_tw(v[b + i], v[b + m + i], v[b + 2 * m + i], z, red);
+                    let (o0, o1, o2) = self.r3_tw(v[b + i], v[b + m + i], v[b + 2 * m + i], z, red);
                     v[b + i] = o0;
                     v[b + m + i] = o1;
                     v[b + 2 * m + i] = o2;
@@ -290,7 +298,10 @@ fn check_kernel<const Q: u16>() {
             for j in 0..N {
                 let a = (e.v[j] as i32).abs();
                 worst_out = worst_out.max(a);
-                assert!(a <= bound, "q={Q} output {a} exceeds declared bound {bound}");
+                assert!(
+                    a <= bound,
+                    "q={Q} output {a} exceeds declared bound {bound}"
+                );
             }
         }
     }
@@ -379,7 +390,7 @@ fn proved_bounds_9721() {
     };
     let lut = 5625; // barrett_lut_exhaustive
     let mul = 7864; // params::barrett_i16, exhaustive (see the same test)
-    // levels 0-2: two centred table entries, |T| <= (q-1)/2
+                    // levels 0-2: two centred table entries, |T| <= (q-1)/2
     let l2 = Q - 1;
     // level 3: the twiddles are folded, so y0 = a0 + t1 + t2 with all three <= l2
     let l3 = 3 * l2;
@@ -410,9 +421,15 @@ fn proved_bounds_9721() {
     for m in [mi4, mi5a, mi5b, mi6] {
         assert!(m < 32768, "i16 overflow in the proved bound: {m}");
     }
-    assert!(out <= declared, "output {out} exceeds the declared bound {declared}");
+    assert!(
+        out <= declared,
+        "output {out} exceeds the declared bound {declared}"
+    );
     // and the reason level 5 can be skipped at all: with the two-multiply Barrett at level 4 it
     // could not.
     let (w0, _, _) = bf(mul, l3);
-    assert!(bf(w0, w0).2 >= 32768, "the level-5 reduction would not have been needed");
+    assert!(
+        bf(w0, w0).2 >= 32768,
+        "the level-5 reduction would not have been needed"
+    );
 }

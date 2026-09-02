@@ -3,9 +3,7 @@
 //! and wall clock the README quotes (`--nocapture`, under `taskset -c 3`).
 use bin_ntt::types::{Representation, RingElement};
 use bin_ntt::wire::{self, WireError};
-use bin_ntt::{
-    Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness,
-};
+use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
 use Modulus::*;
@@ -31,7 +29,12 @@ fn round(params: Params) -> Round {
     let row_evaluation = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
     let folded_witness = prover.fold(opening, &challenges);
-    Round { params, commitment, row_evaluation, folded_witness }
+    Round {
+        params,
+        commitment,
+        row_evaluation,
+        folded_witness,
+    }
 }
 
 /// A modulus that is not `base`, to be the second limb.
@@ -71,7 +74,10 @@ fn the_row_evaluation_packs_at_162_bits() {
     }
     let bytes = wire::pack_f162(&bin_ntt::f162::random_elems(256, 7));
     assert_eq!(bytes.len(), 5184);
-    assert_eq!(wire::unpack_f162(&bytes[..5183], 256), Err(WireError::Malformed));
+    assert_eq!(
+        wire::unpack_f162(&bytes[..5183], 256),
+        Err(WireError::Malformed)
+    );
 }
 
 /// An honest commitment at `ceil(log2 q)` bits per slot per limb, and back to the same matrix.
@@ -82,7 +88,10 @@ fn the_commitment_packs_at_the_residue_width() {
         let r = round(params.clone());
         let bytes = wire::pack_commitment(&r.commitment);
         let width: u32 = params.primes().iter().map(|&q| wire::residue_bits(q)).sum();
-        assert_eq!(bytes.len(), (4 * params.columns() * 162 * width as usize).div_ceil(8));
+        assert_eq!(
+            bytes.len(),
+            (4 * params.columns() * 162 * width as usize).div_ceil(8)
+        );
         assert_eq!(bytes.len(), r.commitment.wire_bytes());
         let back = wire::unpack_commitment(&params, &bytes).unwrap();
         assert_eq!(back, r.commitment, "base {base:?}");
@@ -117,7 +126,10 @@ fn the_commitment_packer_takes_the_extremes() {
             )),
         );
         let bytes = wire::pack_commitment(&commitment);
-        assert_eq!(wire::unpack_commitment(&params, &bytes).unwrap(), commitment);
+        assert_eq!(
+            wire::unpack_commitment(&params, &bytes).unwrap(),
+            commitment
+        );
     }
 }
 
@@ -130,13 +142,22 @@ fn the_commitment_packer_takes_the_extremes() {
 fn an_honest_fold_round_trips() {
     for base in Modulus::ALL {
         for (witness_log_len, column_log_len) in [(11u32, 3u32), (12, 2), (14, 6)] {
-            let params =
-                Params::with_base(witness_log_len, column_log_len, base, vec![second(base)], false)
-                    .unwrap();
+            let params = Params::with_base(
+                witness_log_len,
+                column_log_len,
+                base,
+                vec![second(base)],
+                false,
+            )
+            .unwrap();
             let r = round(params.clone());
             let bytes = wire::encode(&r.folded_witness, base.prime());
             let back = wire::decode(&bytes).unwrap();
-            assert_eq!(back.elements(), r.folded_witness.elements(), "base {base:?}");
+            assert_eq!(
+                back.elements(),
+                r.folded_witness.elements(),
+                "base {base:?}"
+            );
             assert!(
                 bytes.len() < r.folded_witness.len() * 648 * 2,
                 "base {base:?}: the coder did not beat two bytes a coefficient"
@@ -163,9 +184,13 @@ fn an_adversarial_fold_round_trips() {
             vec![vec![0i16; 648]],
             vec![vec![half; 648]],
             vec![vec![-half; 648]],
-            vec![(0..648).map(|i| if i % 2 == 0 { half } else { -half }).collect()],
+            vec![(0..648)
+                .map(|i| if i % 2 == 0 { half } else { -half })
+                .collect()],
             vec![
-                (0..648).map(|i| (i as i16 % (2 * half + 1)) - half).collect(),
+                (0..648)
+                    .map(|i| (i as i16 % (2 * half + 1)) - half)
+                    .collect(),
                 vec![half; 648],
                 vec![-half; 648],
             ],
@@ -190,7 +215,11 @@ fn an_adversarial_fold_round_trips() {
             let folded = fold_of(values);
             let bytes = wire::encode(&folded, q);
             let back = wire::decode(&bytes).unwrap();
-            assert_eq!(back.elements(), folded.elements(), "base {base:?}, case {case}");
+            assert_eq!(
+                back.elements(),
+                folded.elements(),
+                "base {base:?}, case {case}"
+            );
         }
     }
 }
@@ -226,7 +255,10 @@ fn a_broken_stream_is_refused() {
     let r = round(Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], false).unwrap());
     let bytes = wire::encode(&r.folded_witness, 3889);
     for cut in [0usize, 1, 15, 16, 20, bytes.len() / 2, bytes.len() - 1] {
-        assert!(wire::decode(&bytes[..cut]).is_err(), "a prefix of {cut} bytes decoded");
+        assert!(
+            wire::decode(&bytes[..cut]).is_err(),
+            "a prefix of {cut} bytes decoded"
+        );
     }
     let mut long = bytes.clone();
     long.extend_from_slice(&[0, 0]);
@@ -346,7 +378,10 @@ fn report(name: &str, params: Params) {
         entropy / 1024.0,
         100.0 * (fold_wire.len() as f64 - entropy) / entropy
     );
-    println!("  fold sigma {:.1}, peak {peak}", (square / coefficients as f64).sqrt());
+    println!(
+        "  fold sigma {:.1}, peak {peak}",
+        (square / coefficients as f64).sqrt()
+    );
     println!(
         "  {:.3} bits per coefficient against {:.3} of entropy; encode {:.2} ms, decode {:.2} ms",
         8.0 * fold_wire.len() as f64 / coefficients as f64,

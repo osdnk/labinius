@@ -57,8 +57,20 @@ extern "C" {
     pub fn bn_sx_free(sx: *mut c_void);
     pub fn bn_sx_ptr(sx: *const c_void, i: usize, off: usize) -> *const c_void;
 
-    pub fn bn_commit_polx(out: *mut c_void, key: *const c_void, s: *const c_void, len: usize, deg: usize);
-    pub fn bn_commit_i16(out: *mut c_void, key: *const c_void, s: *const i16, len: usize, deg: usize);
+    pub fn bn_commit_polx(
+        out: *mut c_void,
+        key: *const c_void,
+        s: *const c_void,
+        len: usize,
+        deg: usize,
+    );
+    pub fn bn_commit_i16(
+        out: *mut c_void,
+        key: *const c_void,
+        s: *const i16,
+        len: usize,
+        deg: usize,
+    );
     pub fn bn_commit_blocks(
         out: *mut c_void,
         key: *const c_void,

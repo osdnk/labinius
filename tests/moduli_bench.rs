@@ -78,7 +78,10 @@ fn commit_ms(extra: &[Modulus]) -> f64 {
 
 /// Every modulus that is not the default base, i.e. every one it can be given as an extra limb.
 fn extras() -> Vec<Modulus> {
-    Modulus::ALL.into_iter().filter(|l| *l != Modulus::BASE).collect()
+    Modulus::ALL
+        .into_iter()
+        .filter(|l| *l != Modulus::BASE)
+        .collect()
 }
 
 #[test]
@@ -88,7 +91,10 @@ fn the_moduli_quantified() {
     for l in extras() {
         println!("  + {:>5}: {:+.2} ms", l.prime(), commit_ms(&[l]) - base);
     }
-    println!("  all six extra moduli together: {:.1} ms", commit_ms(&extras()) - base);
+    println!(
+        "  all six extra moduli together: {:.1} ms",
+        commit_ms(&extras()) - base
+    );
 }
 
 fn transform(reps: usize, q: u16, quad: bool) {
@@ -108,7 +114,10 @@ fn basemul(reps: usize, q: u16, quad: bool) {
     let apf = a.v.as_ptr() as *const i8;
     if quad {
         let mut acc = cm::QuadAcc::zero();
-        let (p01, p2) = (acc.p01.as_mut_ptr() as *mut i32, acc.p2.as_mut_ptr() as *mut i32);
+        let (p01, p2) = (
+            acc.p01.as_mut_ptr() as *mut i32,
+            acc.p2.as_mut_ptr() as *mut i32,
+        );
         for _ in 0..reps {
             unsafe {
                 match q {
@@ -177,8 +186,10 @@ fn cycles_probe() {
 fn kernel_fingerprints() {
     let idx = index();
     let mut out = Batch32::zero(Representation::Ntt);
-    let mut primes: Vec<(u16, bool)> =
-        Modulus::ALL.iter().map(|l| (l.prime(), l.is_quadratic())).collect();
+    let mut primes: Vec<(u16, bool)> = Modulus::ALL
+        .iter()
+        .map(|l| (l.prime(), l.is_quadratic()))
+        .collect();
     primes.sort();
     for (q, quad) in primes {
         transform_once(&idx, &mut out, q, quad);
@@ -225,6 +236,10 @@ fn the_fold_per_base() {
         fold_ms(Modulus::Q3889_FS_S, vec![Modulus::Q9721_FS_S], 5)
     );
     for base in Modulus::ALL {
-        println!("  base {:>5} alone: {:.2} ms", base.prime(), fold_ms(base, vec![], 5));
+        println!(
+            "  base {:>5} alone: {:.2} ms",
+            base.prime(),
+            fold_ms(base, vec![], 5)
+        );
     }
 }

@@ -11,10 +11,10 @@
 //! i.e. coefficient `c` of ring element r is bit `c / 4` of the F162 element `4r + (c mod 4)`.
 //! All coefficients are 0/1, so the binary kernel applies verbatim; the only new work is the
 //! bit-slicing front end ([`crate::simd::transpose_f162`]).
+use crate::fields::scalar::F162;
 use crate::params::N;
 use crate::rng::Rng;
 use crate::simd::transpose_f162::BinaryIndex32;
-use crate::fields::scalar::F162;
 
 /// Number of significant bits of an `F162` (limbs 0 and 1 full, limb 2 holds bits 128..161).
 pub const BITS: usize = 162;
@@ -65,7 +65,11 @@ pub trait RandomF162: Sized {
 
 impl RandomF162 for F162 {
     fn random(rng: &mut Rng) -> Self {
-        F162([rng.next_u64(), rng.next_u64(), rng.next_u64() & ((1u64 << (BITS - 128)) - 1)])
+        F162([
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64() & ((1u64 << (BITS - 128)) - 1),
+        ])
     }
 }
 

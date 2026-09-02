@@ -22,18 +22,18 @@ use binius_iop_prover::basefold::compiler::BaseFoldProverCompiler;
 use binius_iop_prover::channel::IOPProverChannel;
 use binius_ip::channel::IPVerifierChannel;
 use binius_ip_prover::channel::IPProverChannel;
-use binius_math::FieldVec;
 use binius_math::multilinear::eq::eq_ind_partial_eval;
 use binius_math::multilinear::evaluate::evaluate_inplace;
-use binius_math::ntt::NeighborsLastMultiThread;
 use binius_math::ntt::domain_context::GaoMateerPreExpanded;
-use binius_prover::ring_switch::{LOG_SPLIT_BLOCK, RingSwitchOutput, fold_1b_rows_for_b128_split};
-use binius_prover::{OptimalPackedB128, pack_witness};
+use binius_math::ntt::NeighborsLastMultiThread;
+use binius_math::FieldVec;
+use binius_prover::ring_switch::{fold_1b_rows_for_b128_split, RingSwitchOutput, LOG_SPLIT_BLOCK};
+use binius_prover::{pack_witness, OptimalPackedB128};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
-use binius_verifier::config::{B1, B128, StdChallenger};
-use binius_verifier::fri::{ConstantArityStrategy, calculate_n_test_queries};
+use binius_verifier::config::{StdChallenger, B1, B128};
+use binius_verifier::fri::{calculate_n_test_queries, ConstantArityStrategy};
 use binius_verifier::merkle_tree::BinaryMerkleTreeScheme;
-use binius_verifier::{SECURITY_BITS, ring_switch};
+use binius_verifier::{ring_switch, SECURITY_BITS};
 use std::time::Instant;
 
 /// The committed vector is 2^LOG_LEN `B128`, the size of the keccak example's packed trace.
@@ -278,8 +278,14 @@ fn main() {
         LOG_LEN + LOG_PACKING,
         calculate_n_test_queries(SECURITY_BITS, LOG_INV_RATE)
     );
-    println!("\n  {:>10}{:>10}{:>10}{:>10}{:>10}", "Comm.", "Prover", "Verifier", "C", "|pi|");
-    println!("  {:>10}{:>10}{:>10}{:>10}{:>10}", "ms", "ms", "ms", "KB", "KB");
+    println!(
+        "\n  {:>10}{:>10}{:>10}{:>10}{:>10}",
+        "Comm.", "Prover", "Verifier", "C", "|pi|"
+    );
+    println!(
+        "  {:>10}{:>10}{:>10}{:>10}{:>10}",
+        "ms", "ms", "ms", "KB", "KB"
+    );
     println!(
         "  {:>10.2}{:>10.2}{:>10.2}{:>10.2}{:>10.2}",
         commit_ms,

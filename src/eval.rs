@@ -39,10 +39,10 @@
 //! leaves its own layout, it is transposed 8 elements at a time by three `vpermi2q`/`vpermq`
 //! pairs inside the loop ([`load_soa8`]).
 use crate::challenge::ShortChallenge;
-use crate::types::RingElement;
 use crate::fields::f162 as bf;
 use crate::fields::scalar::F162;
 use crate::fields::sumcheck::Poly;
+use crate::types::RingElement;
 use core::arch::x86_64::*;
 
 /// `eq(ps, b) = prod_k (ps_k if bit k of b is 1 else 1 + ps_k)`, all `2^ps.len()` of them, by
@@ -161,7 +161,6 @@ fn dot_slices(a: &[F162], b: &[F162]) -> F162 {
     unsafe { dot(&Poly::from_scalars(a), b.as_ptr(), b.len()) }
 }
 
-
 // =============================================================================================
 // the four steps
 // =============================================================================================
@@ -183,7 +182,12 @@ pub(crate) fn row_evaluate(witness: &[F162], p0: &[F162]) -> Vec<F162> {
 
 /// `u^T eq(p1)`, the claim a row evaluation `u` implies.
 pub(crate) fn claim(u: &[F162], p1: &[F162]) -> F162 {
-    assert_eq!(u.len(), 1 << p1.len(), "the row evaluation is not 2^{} elements", p1.len());
+    assert_eq!(
+        u.len(),
+        1 << p1.len(),
+        "the row evaluation is not 2^{} elements",
+        p1.len()
+    );
     dot_slices(&eq_table(p1), u)
 }
 
@@ -211,6 +215,5 @@ pub(crate) fn components_mod_2(v: &[RingElement]) -> Vec<F162> {
 
 /// The binary check `B v == u^T c` over `F`: `sum_i eq(p0, i) (v_i mod 2) == u_folded`.
 pub(crate) fn binary_check(p0: &[F162], v: &[RingElement], u_folded: F162) -> bool {
-    4 * v.len() == 1usize << p0.len()
-        && dot_slices(&eq_table(p0), &components_mod_2(v)) == u_folded
+    4 * v.len() == 1usize << p0.len() && dot_slices(&eq_table(p0), &components_mod_2(v)) == u_folded
 }

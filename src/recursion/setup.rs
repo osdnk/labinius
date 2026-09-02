@@ -12,10 +12,10 @@ use std::sync::Arc;
 use super::{chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
 use crate::api::N162;
 use crate::challenge::ShortChallenge;
+use crate::fields::scalar::F162;
 use crate::labrador::{sis_rank, sizeof_polx, CommitmentKey, PolxBuf, ShortPhi};
 use crate::params::N;
 use crate::scheme::{EvaluationPoint, FoldingChallenges, Params, PublicParameters};
-use crate::fields::scalar::F162;
 
 /// LaBRADOR's own slack in front of a commitment's norm when it picks a rank, `6 T SLACK`.
 const SIS_SLACK: f64 = 6.0 * 14.0 * 2.0;
@@ -53,8 +53,11 @@ impl Setup {
     pub fn new(pp: &PublicParameters, params: &Params, seed: [u8; 32]) -> Setup {
         let key = pp.key();
         let (n, r) = (key.len_ring(), params.columns());
-        let limbs: Vec<limbs::Shape> =
-            params.primes().iter().map(|&q| limbs::Shape::of(q)).collect();
+        let limbs: Vec<limbs::Shape> = params
+            .primes()
+            .iter()
+            .map(|&q| limbs::Shape::of(q))
+            .collect();
         let mut blocks = Vec::with_capacity(limbs.len() * 8 * n);
         for limb in 0..limbs.len() {
             let rows = limbs::key_rows(pp, limb);
@@ -101,7 +104,11 @@ impl Setup {
         );
         let layout = Instance::layout(&setup, &quiet, &origin, &F162::ZERO);
         setup.ranks = layout.vectors.iter().map(|v| v.polys.len()).collect();
-        setup.caps = layout.vectors.iter().map(|v| (v.cap() * v.cap()).ceil() as u64).collect();
+        setup.caps = layout
+            .vectors
+            .iter()
+            .map(|v| (v.cap() * v.cap()).ceil() as u64)
+            .collect();
         setup.binary = layout.vectors.iter().map(|v| v.binary).collect();
         setup.supports = layout.vectors.iter().map(|v| v.support).collect();
         setup.used = layout.vectors.iter().map(|v| v.used).collect();
@@ -110,7 +117,11 @@ impl Setup {
         setup.rest = layout.hooks.rest.clone();
 
         let key_of = |group: &[usize], label: &[u8]| {
-            let norm: f64 = group.iter().map(|&i| setup.caps[i] as f64).sum::<f64>().sqrt();
+            let norm: f64 = group
+                .iter()
+                .map(|&i| setup.caps[i] as f64)
+                .sum::<f64>()
+                .sqrt();
             let length: usize = group.iter().map(|&i| setup.ranks[i]).sum();
             let mut h = blake3::Hasher::new();
             h.update(b"bin-ntt/recursion/key");
@@ -170,7 +181,9 @@ impl Setup {
     }
 
     pub fn scalar_phi(&self, x: i64) -> &Arc<PolxBuf> {
-        self.scalars.get(&x).expect("this constant was not prepared at key time")
+        self.scalars
+            .get(&x)
+            .expect("this constant was not prepared at key time")
     }
 
     /// `+base^d` at the previous diagonal, `-base^d X^SUB` at this one, and the `Phi_243` wrap of
@@ -204,7 +217,10 @@ impl Setup {
     }
 
     pub fn carry_phi(&self, base: i64, d: usize, a: usize) -> &Arc<PolxBuf> {
-        &self.carry_phi.get(&(base, d)).expect("this carry level was not prepared at key time")[a]
+        &self
+            .carry_phi
+            .get(&(base, d))
+            .expect("this carry level was not prepared at key time")[a]
     }
 
     /// The `phi` of one group of binary lifts at chunk `b` and diagonal `a`. A lift's sub-chunk
@@ -228,7 +244,12 @@ impl Setup {
     pub fn footprint(&self) -> usize {
         let polx = sizeof_polx();
         self.key_phi.iter().map(|p| p.bytes()).sum::<usize>()
-            + self.carry_phi.values().flatten().map(|p| p.len() * polx).sum::<usize>()
+            + self
+                .carry_phi
+                .values()
+                .flatten()
+                .map(|p| p.len() * polx)
+                .sum::<usize>()
             + self.blocks.len() * core::mem::size_of::<Blocks>()
             + (self.key_y.buf().len() + self.key_u.buf().len() + self.key_r.buf().len()) * polx
     }

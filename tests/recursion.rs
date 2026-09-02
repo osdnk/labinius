@@ -27,7 +27,15 @@ fn round(params: &Params) -> Instance {
     let left = prover.commit_left_expansion(&row);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &left);
     let folded = prover.fold(opening, &challenges);
-    Instance::new(&setup, &residues, &folded, &row, &challenges, &point, &claim)
+    Instance::new(
+        &setup,
+        &residues,
+        &folded,
+        &row,
+        &challenges,
+        &point,
+        &claim,
+    )
 }
 
 fn small() -> Params {
@@ -63,7 +71,11 @@ fn the_twist_matches_the_scalar_reference() {
             }
             let want = limbs::split(&core::array::from_fn(|i| c[i] as i64))[m];
             for t in 0..N162 {
-                assert_eq!((acc[t] - want[t]).rem_euclid(q), 0, "component {m} coefficient {t}");
+                assert_eq!(
+                    (acc[t] - want[t]).rem_euclid(q),
+                    0,
+                    "component {m} coefficient {t}"
+                );
             }
         }
     }
@@ -105,7 +117,13 @@ fn blocks_are_the_shifted_reductions() {
 #[test]
 fn inverse_transforms_round_trip() {
     let mut rng = Rng::new(13);
-    for (q, quad) in [(3889u16, false), (9721, false), (2917, true), (4861, true), (12637, true)] {
+    for (q, quad) in [
+        (3889u16, false),
+        (9721, false),
+        (2917, true),
+        (4861, true),
+        (12637, true),
+    ] {
         for _ in 0..3 {
             let a: [u32; N] = core::array::from_fn(|_| rng.below(q as u32));
             let slots = limbs::transform(q, quad, &core::array::from_fn(|i| a[i] as i64));
@@ -122,7 +140,10 @@ fn inverse_transforms_round_trip() {
 /// crate's own forward transform, over both a partial and a full batch of columns.
 #[test]
 fn residues_re_transform_to_the_commitment() {
-    for params in [Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap(), Params::new(15, 6, vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S], false).unwrap()] {
+    for params in [
+        Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap(),
+        Params::new(15, 6, vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S], false).unwrap(),
+    ] {
         let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
         let mut prover = Prover::new(&pp);
         let witness = Witness::random(&params, WITNESS_SEED);
@@ -136,9 +157,8 @@ fn residues_re_transform_to_the_commitment() {
             for j in 0..r {
                 let mut a = [0i64; N];
                 for m in 0..4 {
-                    let c: [bin_ntt::recursion::Poly; CHUNKS] = core::array::from_fn(|b| {
-                        residues.vectors[limb * 4 + m][b * r + j]
-                    });
+                    let c: [bin_ntt::recursion::Poly; CHUNKS] =
+                        core::array::from_fn(|b| residues.vectors[limb * 4 + m][b * r + j]);
                     let e = chunk::decode(&c);
                     for t in 0..N162 {
                         a[4 * t + m] = if t % 2 == 0 { e[t] } else { -e[t] };
@@ -146,7 +166,11 @@ fn residues_re_transform_to_the_commitment() {
                 }
                 let back = bin_ntt::api::components_of(q, quad, &limbs::transform(q, quad, &a));
                 for m in 0..4 {
-                    assert_eq!(back[m], matrix.get(m, j).limbs[limb], "q = {q} column {j} component {m}");
+                    assert_eq!(
+                        back[m],
+                        matrix.get(m, j).limbs[limb],
+                        "q = {q} column {j} component {m}"
+                    );
                 }
             }
         }
@@ -179,7 +203,10 @@ fn key_rows_re_transform_to_the_key() {
 #[test]
 fn the_chain_encodes_a_random_identity() {
     let mut rng = Rng::new(19);
-    let gadget = Gadget { base: 1024, levels: 3 };
+    let gadget = Gadget {
+        base: 1024,
+        levels: 3,
+    };
     for terms in [1usize, 5, 40] {
         let g: Vec<SElem> = (0..terms)
             .map(|_| core::array::from_fn(|_| rng.below(3889) as i64 - 1944))
@@ -191,7 +218,8 @@ fn the_chain_encodes_a_random_identity() {
         assert!(instance.holds(), "{terms} terms: {:?}", instance.failure());
         let mut z = [0i64; N162];
         for (t, e) in x.iter().enumerate() {
-            let c: [_; CHUNKS] = core::array::from_fn(|b| instance.vectors[0].polys[t * CHUNKS + b]);
+            let c: [_; CHUNKS] =
+                core::array::from_fn(|b| instance.vectors[0].polys[t * CHUNKS + b]);
             assert_eq!(chunk::decode(&c), *e);
             for (i, y) in chunk::mul(&g[t], &chunk::decode(&c)).iter().enumerate() {
                 z[i] += y;
@@ -200,7 +228,10 @@ fn the_chain_encodes_a_random_identity() {
         assert_eq!(z, instance.chains[0].output);
         let mut broken = Instance::of_identity(&g, &x, gadget);
         broken.vectors[0].polys[0][CHUNK] = 3;
-        assert!(!broken.holds(), "{terms} terms: an unsupported chunk went unnoticed");
+        assert!(
+            !broken.holds(),
+            "{terms} terms: an unsupported chunk went unnoticed"
+        );
     }
 }
 
@@ -240,7 +271,12 @@ fn the_instance_holds_on_every_limb() {
 fn the_instance_clears_the_no_wrap_bound() {
     let i = round(&small());
     for b in i.bound() {
-        assert!(b.value < (Q as f64) / 2.0, "{}: 2^{:.2}", b.name, b.value.log2());
+        assert!(
+            b.value < (Q as f64) / 2.0,
+            "{}: 2^{:.2}",
+            b.name,
+            b.value.log2()
+        );
     }
     assert!(i.clears());
 }
@@ -255,7 +291,11 @@ fn one_tampered_coefficient_breaks_an_equation() {
         for (p, c) in [(0, 0), (polys / 2, support / 2), (polys - 1, support - 1)] {
             let mut i = round(&small());
             i.vectors[v].polys[p][c] += 1;
-            assert!(!i.holds(), "{} poly {p} coefficient {c}", base.vectors[v].name);
+            assert!(
+                !i.holds(),
+                "{} poly {p} coefficient {c}",
+                base.vectors[v].name
+            );
         }
         let mut i = round(&small());
         i.vectors[v].polys[0][support] = 1;
@@ -274,7 +314,11 @@ fn the_export_matches_the_instance() {
     for (v, (x, spec)) in i.vectors.iter().zip(w.vectors.iter().zip(&s.vectors)) {
         assert_eq!(x.len(), v.polys.len() * DEG);
         assert_eq!(spec.n, v.polys.len());
-        assert!(spec.betasq <= spec.cap_betasq, "{} exceeds its cap", spec.name);
+        assert!(
+            spec.betasq <= spec.cap_betasq,
+            "{} exceeds its cap",
+            spec.name
+        );
     }
     assert_eq!(s.constraints.len(), i.chains.len() * BLOCKS);
     for c in &s.constraints {
@@ -284,7 +328,10 @@ fn the_export_matches_the_instance() {
             assert!(b.off + b.len <= s.vectors[b.idx].n);
         }
     }
-    assert!(s.constraints.iter().any(|c| c.blocks.iter().any(|b| b.key_time)));
+    assert!(s
+        .constraints
+        .iter()
+        .any(|c| c.blocks.iter().any(|b| b.key_time)));
     assert_eq!(s.residues.len(), 8);
     assert!(!s.rest.is_empty());
 }
@@ -304,7 +351,11 @@ fn the_exported_constraints_are_satisfied() {
                 let s = &w.vectors[b.idx][(b.off + p) * DEG..(b.off + p + 1) * DEG];
                 for x in 0..DEG {
                     for y in 0..DEG {
-                        let (z, sign) = if x + y < DEG { (x + y, 1i128) } else { (x + y - DEG, -1) };
+                        let (z, sign) = if x + y < DEG {
+                            (x + y, 1i128)
+                        } else {
+                            (x + y - DEG, -1)
+                        };
                         acc[z] += sign * phi[x] as i128 * s[y] as i128;
                     }
                 }
@@ -324,7 +375,11 @@ fn lifts_reduce_to_f162() {
     use bin_ntt::F162;
     let mut rng = Rng::new(23);
     for _ in 0..16 {
-        let x = F162([rng.next_u64(), rng.next_u64(), rng.next_u64() & ((1 << 34) - 1)]);
+        let x = F162([
+            rng.next_u64(),
+            rng.next_u64(),
+            rng.next_u64() & ((1 << 34) - 1),
+        ]);
         assert_eq!(binary::reduce_mod_2(&binary::lift(&x)), x);
     }
 }
@@ -352,7 +407,10 @@ fn public_blocks_stay_inside_their_limit() {
                 }
             }
             assert!(worst <= BLOCK_LIMIT, "q = {q}: block coefficient {worst}");
-            assert!(worst <= q - 1, "q = {q}: block coefficient {worst} above 2 |g|");
+            assert!(
+                worst <= q - 1,
+                "q = {q}: block coefficient {worst} above 2 |g|"
+            );
         }
     }
 }

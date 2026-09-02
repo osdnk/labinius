@@ -16,8 +16,8 @@ use crate::api::{
     POW3_SLOT_EXP, SLOT_648,
 };
 use crate::params::{
-    inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, DEGREE_Q, N, QUAD_CLASS_SLOT,
-    QUAD_POW3_CLASS, RADIX_Q, SUBRINGS_Q,
+    inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, DEGREE_Q, N, QUAD_CLASS_SLOT, QUAD_POW3_CLASS,
+    RADIX_Q, SUBRINGS_Q,
 };
 use crate::scalar;
 use crate::scheme::PublicParameters;
@@ -50,7 +50,10 @@ impl Shape {
             q,
             quad: !matches!(q, 3889 | 9721 | 17497 | 19441),
             carry: Gadget { base, levels },
-            quotient: Gadget { base: 512, levels: 2 },
+            quotient: Gadget {
+                base: 512,
+                levels: 2,
+            },
         }
     }
 }
@@ -151,7 +154,13 @@ pub fn transform(q: u16, quad: bool, coefficients: &[i64; N]) -> [u32; N] {
 /// The four `S`-components of an `R_648` element in the `Z`-basis: `a_l = sum_m (-1)^m a_{4m+l}`.
 pub fn split(a: &[i64; N]) -> [SElem; 4] {
     core::array::from_fn(|l| {
-        core::array::from_fn(|m| if m % 2 == 0 { a[4 * m + l] } else { -a[4 * m + l] })
+        core::array::from_fn(|m| {
+            if m % 2 == 0 {
+                a[4 * m + l]
+            } else {
+                -a[4 * m + l]
+            }
+        })
     })
 }
 
@@ -176,7 +185,11 @@ impl KeyRows {
         let mut a = [0i64; N];
         for l in 0..4 {
             for m in 0..N162 {
-                a[4 * m + l] = if m % 2 == 0 { self.rows[i][l][m] } else { -self.rows[i][l][m] };
+                a[4 * m + l] = if m % 2 == 0 {
+                    self.rows[i][l][m]
+                } else {
+                    -self.rows[i][l][m]
+                };
             }
         }
         a
@@ -273,9 +286,15 @@ fn columns_split<const Q: u16>(
                 let y: [i32; 4] = core::array::from_fn(|k| c[k].v[s] as i32);
                 for t in 0..4 {
                     let g = &e[(s * 4 + t) * 4..(s * 4 + t) * 4 + 4];
-                    let acc = (0..4).map(|k| g[k] as i32 * y[k]).sum::<i32>().rem_euclid(q);
-                    batch.v[SLOT_648[t][s] as usize][p] =
-                        if acc > half { (acc - q) as i16 } else { acc as i16 };
+                    let acc = (0..4)
+                        .map(|k| g[k] as i32 * y[k])
+                        .sum::<i32>()
+                        .rem_euclid(q);
+                    batch.v[SLOT_648[t][s] as usize][p] = if acc > half {
+                        (acc - q) as i16
+                    } else {
+                        acc as i16
+                    };
                 }
             }
         }
@@ -329,17 +348,26 @@ fn columns_quad<const Q: u16>(
             let c: [&PowerOfThreeRingElement; 4] =
                 core::array::from_fn(|k| &matrix.get(k, first + p).limbs[limb]);
             for s in 0..N162 {
-                let (jp, jm) = (QUAD_CLASS_SLOT[0][s] as usize, QUAD_CLASS_SLOT[1][s] as usize);
+                let (jp, jm) = (
+                    QUAD_CLASS_SLOT[0][s] as usize,
+                    QUAD_CLASS_SLOT[1][s] as usize,
+                );
                 for k in 0..2 {
                     let y0 = (c[k].v[s] as i32).rem_euclid(q);
-                    let y2 = (pv[s] as i64 * (c[k + 2].v[s] as i32).rem_euclid(q) as i64
-                        % q as i64) as i32;
+                    let y2 = (pv[s] as i64 * (c[k + 2].v[s] as i32).rem_euclid(q) as i64 % q as i64)
+                        as i32;
                     let plus = (y0 + y2) % q;
                     let minus = (y0 + q - y2) % q;
-                    batch.v[2 * jp + k][p] =
-                        if plus > half { (plus - q) as i16 } else { plus as i16 };
-                    batch.v[2 * jm + k][p] =
-                        if minus > half { (minus - q) as i16 } else { minus as i16 };
+                    batch.v[2 * jp + k][p] = if plus > half {
+                        (plus - q) as i16
+                    } else {
+                        plus as i16
+                    };
+                    batch.v[2 * jm + k][p] = if minus > half {
+                        (minus - q) as i16
+                    } else {
+                        minus as i16
+                    };
                 }
             }
         }
@@ -357,8 +385,9 @@ pub fn residues(
     let mut vectors = Vec::with_capacity(4 * primes.len());
     for (limb, &prime) in primes.iter().enumerate() {
         let Shape { q, quad, .. } = Shape::of(prime);
-        let mut out: Vec<Vec<Poly>> =
-            (0..4).map(|_| vec![[0i16; DEG]; (CHUNKS * r).next_multiple_of(PAD)]).collect();
+        let mut out: Vec<Vec<Poly>> = (0..4)
+            .map(|_| vec![[0i16; DEG]; (CHUNKS * r).next_multiple_of(PAD)])
+            .collect();
         match (q, quad) {
             (3889, false) => columns_split::<3889>(matrix, limb, r, &mut out),
             (9721, false) => columns_split::<9721>(matrix, limb, r, &mut out),
@@ -435,7 +464,10 @@ pub fn encode(build: &mut Build, setup: &Setup, residues: Option<&Residues>, lim
                 products.push(Product {
                     blocks: build.challenges + j,
                     chunk: b,
-                    at: At { vector: residues_vector[m], off: b * r + j },
+                    at: At {
+                        vector: residues_vector[m],
+                        off: b * r + j,
+                    },
                 });
             }
         }
@@ -445,7 +477,10 @@ pub fn encode(build: &mut Build, setup: &Setup, residues: Option<&Residues>, lim
                 products,
                 scaled: Vec::new(),
                 output: [0i64; N162],
-                carries: Carries { gadget: shape.carry, at: Vec::new() },
+                carries: Carries {
+                    gadget: shape.carry,
+                    at: Vec::new(),
+                },
             },
             q,
             (shape.quotient, &quotient),

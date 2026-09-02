@@ -81,8 +81,34 @@ fn peak_rss() -> f64 {
         / 1024.0
 }
 
+/// Rejections per short challenge at the default weight and bound, over `SAMPLES` transcripts.
+const SAMPLES: usize = 1000;
+
+fn stats() {
+    use bin_ntt::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
+    let mut attempts = Vec::with_capacity(SAMPLES);
+    for i in 0..SAMPLES as u64 {
+        let mut t = Transcript::new(b"bin-ntt/stats");
+        t.absorb_u64(i);
+        attempts.push(sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).1);
+    }
+    attempts.sort_unstable();
+    let total: u64 = attempts.iter().sum();
+    let acceptance = SAMPLES as f64 / total as f64;
+    println!(
+        "=== short challenge: weight {DEFAULT_WEIGHT}, canonical bound {DEFAULT_BOUND}, {SAMPLES} samples ==="
+    );
+    println!(
+        "  acceptance rate: {:.4} (1 in {:.2})",
+        acceptance,
+        1.0 / acceptance
+    );
+    println!();
+}
+
 fn main() {
     pin(CPU);
+    stats();
     plain();
     recursive();
     println!("\npeak resident set: {:.0} MB", peak_rss());
@@ -91,11 +117,15 @@ fn main() {
 fn shape(recursion: bool) -> Params {
     Params::new(
         WITNESS_LOG_LEN,
-        if recursion { COLUMN_LOG_LEN_RECURSIVE } else { COLUMN_LOG_LEN_CLEAR },
+        if recursion {
+            COLUMN_LOG_LEN_RECURSIVE
+        } else {
+            COLUMN_LOG_LEN_CLEAR
+        },
         EXTRA_MODULI.to_vec(),
         recursion,
     )
-        .expect("valid parameters")
+    .expect("valid parameters")
 }
 
 fn plain() {
@@ -115,7 +145,8 @@ fn plain() {
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
     let (mle_ms, claimed_value) = median_of(3, || witness.mle_evaluate(&evaluation_point));
-    let (row_evaluate_ms, row_evaluation) = median_of(3, || witness.row_evaluate(&evaluation_point));
+    let (row_evaluate_ms, row_evaluation) =
+        median_of(3, || witness.row_evaluate(&evaluation_point));
     let after_point = transcript.clone();
     let (challenges_ms, folding_challenges) = median_of(3, || {
         transcript = after_point.clone();
@@ -138,8 +169,9 @@ fn plain() {
         )
     });
 
-    let (fold_commitment_ms, folded_commitment) =
-        median_of(3, || verifier.fold_commitment(&commitment, &folding_challenges));
+    let (fold_commitment_ms, folded_commitment) = median_of(3, || {
+        verifier.fold_commitment(&commitment, &folding_challenges)
+    });
     let (fold_row_ms, folded_row_value) = median_of(3, || {
         verifier.fold_row_evaluation(&row_evaluation, &folding_challenges)
     });
@@ -156,7 +188,10 @@ fn plain() {
     });
 
     let moduli: Vec<String> = commitment.moduli().iter().map(|q| q.to_string()).collect();
-    println!("bin-ntt, core {CPU}, one thread, moduli {}", moduli.join(", "));
+    println!(
+        "bin-ntt, core {CPU}, one thread, moduli {}",
+        moduli.join(", ")
+    );
     println!("\n=== recursion off ===");
     println!(
         "witness: 2^{} F162 = {} ring elements of R_648, {} columns of {} F162",
@@ -218,7 +253,10 @@ fn recursive() {
     let params = shape(true);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
-    let setup = public_parameters.recursion().expect("recursion is on").clone();
+    let setup = public_parameters
+        .recursion()
+        .expect("recursion is on")
+        .clone();
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
@@ -232,7 +270,8 @@ fn recursive() {
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
     let (mle_ms, claimed_value) = median_of(3, || witness.mle_evaluate(&evaluation_point));
-    let (row_evaluate_ms, row_evaluation) = median_of(3, || witness.row_evaluate(&evaluation_point));
+    let (row_evaluate_ms, row_evaluation) =
+        median_of(3, || witness.row_evaluate(&evaluation_point));
     let (left_ms, left) = median_of(3, || prover.commit_left_expansion(&row_evaluation));
     let after_point = transcript.clone();
     let (challenges_ms, folding_challenges) = median_of(3, || {

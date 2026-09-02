@@ -49,11 +49,8 @@ fn round(params: Params) -> Round {
 
 impl Round {
     fn verify(&self) -> Result<(), VerificationError> {
-        self.verifier.verify_evaluation(
-            &self.point,
-            &self.claimed_value,
-            &self.row_evaluation,
-        )?;
+        self.verifier
+            .verify_evaluation(&self.point, &self.claimed_value, &self.row_evaluation)?;
         self.verifier.verify_folded_opening(
             &self.folded_commitment,
             &self.folded_witness,
@@ -184,8 +181,14 @@ fn any_modulus_can_be_the_base() {
             .map(|x| x.unsigned_abs())
             .max()
             .unwrap();
-        assert!(max as i16 <= half, "base {base:?}: the fold left the centered range");
-        assert!(max < 400, "base {base:?}: the fold is unexpectedly large: {max}");
+        assert!(
+            max as i16 <= half,
+            "base {base:?}: the fold left the centered range"
+        );
+        assert!(
+            max < 400,
+            "base {base:?}: the fold is unexpectedly large: {max}"
+        );
 
         let alone = Params::with_base(11, 3, base, vec![], false).unwrap();
         assert_eq!(round(alone).verify(), Ok(()), "base {base:?} alone");
@@ -200,7 +203,11 @@ fn the_centred_range_is_the_base_modulus() {
         let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
         let mut r = round(params);
         r.folded_witness.elements_mut()[0].v[0] = half + 1;
-        assert_eq!(r.verify(), Err(VerificationError::Rejected), "base {base:?}");
+        assert_eq!(
+            r.verify(),
+            Err(VerificationError::Rejected),
+            "base {base:?}"
+        );
     }
 }
 
@@ -211,7 +218,11 @@ fn a_corrupted_fold_is_rejected_whatever_the_base() {
         let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
         let mut r = round(params);
         r.folded_witness.elements_mut()[2].v[7] += 1;
-        assert_eq!(r.verify(), Err(VerificationError::Rejected), "base {base:?}");
+        assert_eq!(
+            r.verify(),
+            Err(VerificationError::Rejected),
+            "base {base:?}"
+        );
     }
 }
 

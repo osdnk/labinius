@@ -365,15 +365,16 @@ pub(crate) fn challenge_ntt_quad<const Q: u16>(challenges: &[ShortChallenge]) ->
 /// row-wise multiply a splitting limb's slot product is.
 fn duplicate_leaf_scalars(b: &mut Batch32) {
     for j in 0..QUAD_SLOTS {
-        debug_assert!(b.v[2 * j + 1] == [0i16; 32], "a challenge leaf is not a scalar");
+        debug_assert!(
+            b.v[2 * j + 1] == [0i16; 32],
+            "a challenge leaf is not a scalar"
+        );
         b.v[2 * j + 1] = b.v[2 * j];
     }
 }
 
 /// The challenge transform a quadratic-slot *base* limb folds against.
-pub(crate) fn challenge_ntt_quad_base<const Q: u16>(
-    challenges: &[ShortChallenge],
-) -> ChallengeNtt {
+pub(crate) fn challenge_ntt_quad_base<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
     let mut bs = slots(challenges);
     unsafe {
         for b in bs.iter_mut() {
@@ -405,7 +406,10 @@ pub(crate) fn challenge_ntt_limb(
 
 fn slots(challenges: &[ShortChallenge]) -> Vec<Batch32> {
     let r = challenges.len();
-    assert!(r >= 2 && r % 2 == 0, "the fold pairs the chunks: r must be even");
+    assert!(
+        r >= 2 && r % 2 == 0,
+        "the fold pairs the chunks: r must be even"
+    );
     embed(challenges)
 }
 
@@ -627,7 +631,6 @@ pub const fn av_period_quad(q: u16) -> usize {
 const _: () = assert!(av_period_quad(2917) >= 1 && av_period_quad(4861) >= 1);
 const _: () = assert!(av_period_quad(12637) >= 1);
 
-
 // =============================================================================================
 // the fold
 // =============================================================================================
@@ -694,7 +697,11 @@ pub(crate) fn fold_witness(
     quad: bool,
 ) -> Vec<RingElement> {
     assert_eq!(challenges.len(), aux.chunks(), "one challenge per chunk");
-    assert_eq!(bpc, aux.batches_per_chunk(), "the key and the chunks disagree");
+    assert_eq!(
+        bpc,
+        aux.batches_per_chunk(),
+        "the key and the chunks disagree"
+    );
     let vb = match (q, quad) {
         (3889, false) => fold_split::<3889>(aux, challenges, bpc),
         (9721, false) => fold_split::<9721>(aux, challenges, bpc),
@@ -706,7 +713,11 @@ pub(crate) fn fold_witness(
         _ => unreachable!("no limb with q = {q}"),
     };
     let half = (q as i32 - 1) / 2;
-    let max_abs = vb.iter().map(|b| unsafe { max_abs_batch(b) }).max().unwrap_or(0);
+    let max_abs = vb
+        .iter()
+        .map(|b| unsafe { max_abs_batch(b) })
+        .max()
+        .unwrap_or(0);
     assert!(
         max_abs <= half,
         "the folded witness does not fit the centered range of the base modulus {q}"

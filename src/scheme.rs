@@ -35,12 +35,12 @@ use crate::api::{
 use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
+use crate::fields::scalar::F162;
 use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb};
 use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
 use crate::{eval, RingElement162, RingElement648};
-use crate::fields::scalar::F162;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -159,7 +159,8 @@ impl Params {
     /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
     /// the folded opening in the clear.
     pub fn basic() -> Params {
-        Params::new(18, 7, vec![Modulus::Q9721_FS_S], false).expect("the basic parameters are valid")
+        Params::new(18, 7, vec![Modulus::Q9721_FS_S], false)
+            .expect("the basic parameters are valid")
     }
 
     /// Witness length in `F162` elements.
@@ -355,7 +356,11 @@ pub enum CommitmentValue {
 impl Commitment {
     /// A commitment from its parts, for [`crate::wire`].
     pub fn of(primes: Vec<u16>, columns: usize, value: CommitmentValue) -> Commitment {
-        Commitment { primes, columns, value }
+        Commitment {
+            primes,
+            columns,
+            value,
+        }
     }
 
     pub fn rows(&self) -> usize {
@@ -438,7 +443,9 @@ impl Commitment {
             if count != params.columns() || body.len() != 2 * slots {
                 return Err(VerificationError::Rejected);
             }
-            let mut slot = body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]));
+            let mut slot = body
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]));
             let data = (0..4 * count)
                 .map(|_| PowerOfThreeRingElementWithLimbs {
                     limbs: (0..primes.len())
@@ -849,14 +856,19 @@ impl Prover {
             None => (CommitmentValue::Matrix(matrix), None),
             Some(setup) => {
                 let residues = recursion::limbs::residues(&matrix, &primes);
-                let parts: Vec<&[i16]> =
-                    (0..setup.residues.len()).map(|k| residues.flat(k)).collect();
+                let parts: Vec<&[i16]> = (0..setup.residues.len())
+                    .map(|k| residues.flat(k))
+                    .collect();
                 let t_y = Arc::new(setup.key_y.commit_blocks(&parts));
                 (CommitmentValue::Recursive(t_y), Some(residues))
             }
         };
         (
-            Commitment { primes, columns, value },
+            Commitment {
+                primes,
+                columns,
+                value,
+            },
             CommitmentOpening { aux, residues },
         )
     }
@@ -877,7 +889,9 @@ impl Prover {
                 u[at..at + labrador::N].copy_from_slice(&l[b]);
             }
         }
-        LeftExpansionCommitment { t_u: Arc::new(setup.key_u.commit_blocks(&[&u])) }
+        LeftExpansionCommitment {
+            t_u: Arc::new(setup.key_u.commit_blocks(&[&u])),
+        }
     }
 
     pub fn fold(
@@ -914,24 +928,45 @@ impl Prover {
         let residues = residues.expect("the opening holds no residues");
         let mut timings = OpeningTimings::default();
         let clock = Instant::now();
-        let folded = self.fold(CommitmentOpening { aux, residues: None }, challenges);
+        let folded = self.fold(
+            CommitmentOpening {
+                aux,
+                residues: None,
+            },
+            challenges,
+        );
         timings.fold = clock.elapsed();
-        let normsq: u64 =
-            folded.elements.iter().flat_map(|e| e.v).map(|x| (x as i64 * x as i64) as u64).sum();
+        let normsq: u64 = folded
+            .elements
+            .iter()
+            .flat_map(|e| e.v)
+            .map(|x| (x as i64 * x as i64) as u64)
+            .sum();
         let cap = setup.fold_cap as u64;
         if normsq > cap {
             return Err(OpeningError::FoldTooLong { normsq, cap });
         }
 
         let clock = Instant::now();
-        let instance =
-            recursion::Instance::new(&setup, &residues, &folded, row, challenges, point, claimed_value);
+        let instance = recursion::Instance::new(
+            &setup,
+            &residues,
+            &folded,
+            row,
+            challenges,
+            point,
+            claimed_value,
+        );
         timings.encoding = clock.elapsed();
         let clock = Instant::now();
         let witness = instance.witness();
         timings.witness = clock.elapsed();
         let norms: Vec<u64> = instance.vectors.iter().map(|v| v.betasq()).collect();
-        let rest: Vec<&[i16]> = setup.rest.iter().map(|&i| witness.vectors[i].as_slice()).collect();
+        let rest: Vec<&[i16]> = setup
+            .rest
+            .iter()
+            .map(|&i| witness.vectors[i].as_slice())
+            .collect();
         let clock = Instant::now();
         let t_r = Arc::new(setup.key_r.commit_blocks(&rest));
         timings.t_r = clock.elapsed();
@@ -959,7 +994,13 @@ impl Prover {
         let proof = labrador::prove(&statement, &labrador::Witness::new(witness.vectors))
             .map_err(OpeningError::Labrador)?;
         timings.labrador = clock.elapsed();
-        Ok(OpeningProof { t_r, norms, proof, timings, phi_bytes })
+        Ok(OpeningProof {
+            t_r,
+            norms,
+            proof,
+            timings,
+            phi_bytes,
+        })
     }
 }
 
@@ -1095,7 +1136,11 @@ impl Verifier {
             core::array::from_fn(|_| PowerOfThreeRingElementWithLimbs::zero(limbs));
         for k in 0..limbs {
             let q = self.key.prime(k) as i64;
-            let chi = challenge_slots162(self.key.prime(k), self.key.is_quadratic(k), &challenges.challenges);
+            let chi = challenge_slots162(
+                self.key.prime(k),
+                self.key.is_quadratic(k),
+                &challenges.challenges,
+            );
             for (row, out) in rows.iter_mut().enumerate() {
                 let mut acc = [0i64; N162];
                 for (j, c) in chi.iter().enumerate() {
@@ -1106,7 +1151,11 @@ impl Verifier {
                 }
                 for s in 0..N162 {
                     let x = acc[s].rem_euclid(q);
-                    out.limbs[k].v[s] = if x > (q - 1) / 2 { (x - q) as i16 } else { x as i16 };
+                    out.limbs[k].v[s] = if x > (q - 1) / 2 {
+                        (x - q) as i16
+                    } else {
+                        x as i16
+                    };
                 }
             }
         }

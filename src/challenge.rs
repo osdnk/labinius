@@ -44,7 +44,7 @@ pub const MAX_WEIGHT: usize = 32;
 pub const DEFAULT_WEIGHT: usize = 28;
 
 /// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 11^2 = 121`.
-pub const DEFAULT_BOUND: f64 = 11.0;
+pub const DEFAULT_BOUND: f64 = 12.0;
 
 // =============================================================================================
 // transcript
