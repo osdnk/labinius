@@ -36,3 +36,9 @@ overflow-checks = false
 
 [profile.dev]
 opt-level = 1
+
+[features]
+sizes = []
+sizem = []
+sizel = []
+labrador = []
