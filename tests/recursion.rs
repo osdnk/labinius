@@ -36,6 +36,7 @@ fn round(params: &Params) -> Instance {
         &point,
         &claim,
     )
+    .expect("the honest round is within its gadgets")
 }
 
 fn small() -> Params {
@@ -153,7 +154,7 @@ fn residues_re_transform_to_the_commitment() {
         let residues = limbs::residues(matrix, &primes);
         let r = params.columns();
         for (limb, &q) in primes.iter().enumerate() {
-            let quad = limbs::Shape::of(q).quad;
+            let quad = limbs::quad(q);
             for j in 0..r {
                 let mut a = [0i64; N];
                 for m in 0..4 {

@@ -137,7 +137,26 @@ pub struct Gadget {
     pub levels: usize,
 }
 
+/// A chain's honest quotient or carry outside its gadget's reach: the round is retried with fresh
+/// challenges, like a fold over its cap.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Overflow {
+    pub chain: String,
+    pub magnitude: i64,
+    pub gadget: Gadget,
+}
+
 impl Gadget {
+    /// The gadget of `base` with the fewest levels whose [`reach`](Self::reach) covers
+    /// `magnitude`.
+    pub fn covering(base: i64, magnitude: f64) -> Gadget {
+        let mut levels = 1;
+        while ((base.pow(levels as u32) / 2) as f64) < magnitude {
+            levels += 1;
+        }
+        Gadget { base, levels }
+    }
+
     pub fn split(&self, x: i64) -> Vec<i64> {
         let mut d = vec![0i64; self.levels];
         self.split_into(x, &mut d);
@@ -147,16 +166,22 @@ impl Gadget {
     /// The same into a caller-owned buffer, which the encoding reuses across the whole `S`-element
     /// rather than allocating one per coefficient and level.
     pub fn split_into(&self, x: i64, d: &mut [i64]) {
+        assert!(
+            self.try_split_into(x, d),
+            "{x} does not fit {} base-{} digits",
+            self.levels,
+            self.base
+        );
+    }
+
+    /// [`split_into`](Self::split_into), reporting instead of panicking when `x` is out of reach.
+    pub fn try_split_into(&self, x: i64, d: &mut [i64]) -> bool {
         let mut r = x;
         for t in d.iter_mut().take(self.levels) {
             *t = centre(r, self.base);
             r = (r - *t) / self.base;
         }
-        assert_eq!(
-            r, 0,
-            "{x} does not fit {} base-{} digits",
-            self.levels, self.base
-        );
+        r == 0
     }
     /// The largest magnitude the gadget represents.
     pub fn reach(&self) -> i64 {
@@ -302,7 +327,7 @@ impl Instance {
         challenges: &FoldingChallenges,
         point: &EvaluationPoint,
         claim: &F162,
-    ) -> Instance {
+    ) -> Result<Instance, Overflow> {
         Instance::build(
             setup,
             Some((residues, folded, row)),
@@ -321,6 +346,7 @@ impl Instance {
         claim: &F162,
     ) -> Instance {
         Instance::build(setup, None, challenges, point, claim)
+            .expect("a layout-only build splits nothing")
     }
 
     fn build(
@@ -329,13 +355,13 @@ impl Instance {
         challenges: &FoldingChallenges,
         point: &EvaluationPoint,
         claim: &F162,
-    ) -> Instance {
+    ) -> Result<Instance, Overflow> {
         let mut build = Build::new(setup, challenges, witness.map(|(_, f, r)| (f, r)));
         for limb in 0..setup.limbs.len() {
-            limbs::encode(&mut build, setup, witness.map(|(r, _, _)| r), limb);
+            limbs::encode(&mut build, setup, witness.map(|(r, _, _)| r), limb)?;
         }
-        binary::encode(&mut build, point, claim);
-        build.finish()
+        binary::encode(&mut build, point, claim)?;
+        Ok(build.finish())
     }
 
     /// The exact left-hand side of every block equation, over `Z`, reduced negacyclically in
@@ -394,21 +420,23 @@ impl Instance {
             })
             .collect();
         let carries = build.carry_vectors("x", carry);
-        build.seal(
-            Chain {
-                name: "identity".into(),
-                products,
-                scaled: Vec::new(),
-                output,
-                carries: Carries {
-                    gadget: carry,
-                    at: Vec::new(),
+        build
+            .seal(
+                Chain {
+                    name: "identity".into(),
+                    products,
+                    scaled: Vec::new(),
+                    output,
+                    carries: Carries {
+                        gadget: carry,
+                        at: Vec::new(),
+                    },
                 },
-            },
-            1,
-            (Gadget { base: 1, levels: 0 }, &[]),
-            &carries,
-        );
+                1,
+                (Gadget { base: 1, levels: 0 }, &[]),
+                &carries,
+            )
+            .expect("the identity's carries are within the gadget");
         build.finish()
     }
 
@@ -435,6 +463,7 @@ pub struct Build {
     pub chains: Vec<chain::Chain>,
     pub prepared: Vec<chain::Prepared>,
     pub limbs: Vec<limbs::Shape>,
+    pub binary_chains: binary::Shape,
     /// Ring elements of the folded witness, and columns of the commitment.
     pub n: usize,
     pub r: usize,
@@ -465,6 +494,7 @@ impl Build {
             chains: Vec::new(),
             prepared: Vec::new(),
             limbs: Vec::new(),
+            binary_chains: binary::Shape::of(1, 1),
             n: 0,
             r: 0,
             challenges: 0,
@@ -529,6 +559,7 @@ impl Build {
             vectors: vec![vv, uu],
             n,
             r,
+            binary_chains: setup.binary_chains,
             witness: witness.is_some(),
             rest: vec![V],
             ..Build::bare()
@@ -633,7 +664,7 @@ impl Build {
         divisor: i64,
         quotient: (Gadget, &[usize]),
         carry: &[usize],
-    ) {
+    ) -> Result<(), Overflow> {
         let (gadget, levels) = quotient;
         if !self.witness {
             for (d, &vector) in levels.iter().enumerate() {
@@ -656,7 +687,7 @@ impl Build {
                 });
             }
             self.chains.push(chain);
-            return;
+            return Ok(());
         }
         let prep = chain.prepare(&self.public);
         let mut sums = chain.sums(&prep, &self.vectors);
@@ -674,10 +705,25 @@ impl Build {
         if levels.is_empty() {
             assert_eq!(k, [0i64; N162], "{}: an unquotiented left side", chain.name);
         }
+        if std::env::var_os("GADGET_STATS").is_some() {
+            let max = k.iter().map(|x| x.abs()).max().unwrap();
+            let sd = (k.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / N162 as f64).sqrt();
+            eprintln!(
+                "gadget-stats quotient {:<24} max {max:>10} ({:.2} bits) sd {sd:>10.1} reach {} ({:.2} bits) fill {:.3}",
+                chain.name, (max as f64).log2(), gadget.reach(), (gadget.reach() as f64).log2(),
+                max as f64 / gadget.reach() as f64
+            );
+        }
         let mut split = vec![0i64; gadget.levels.max(1)];
         let mut digits = vec![[0i64; N162]; levels.len()];
         for t in 0..N162 {
-            gadget.split_into(k[t], &mut split);
+            if !gadget.try_split_into(k[t], &mut split) {
+                return Err(Overflow {
+                    chain: chain.name,
+                    magnitude: k[t],
+                    gadget,
+                });
+            }
             for (d, digit) in digits.iter_mut().enumerate() {
                 digit[t] = split[d];
             }
@@ -698,11 +744,28 @@ impl Build {
         chain.scaled_into(&mut sums, &self.vectors);
         let e = Chain::honest_carries(&sums);
         let g = chain.carries.gadget;
+        if std::env::var_os("GADGET_STATS").is_some() {
+            let all: Vec<i64> = e.iter().flat_map(|a| a.iter().copied()).collect();
+            let max = all.iter().map(|x| x.abs()).max().unwrap();
+            let sd =
+                (all.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / all.len() as f64).sqrt();
+            eprintln!(
+                "gadget-stats carry    {:<24} max {max:>10} ({:.2} bits) sd {sd:>10.1} reach {} ({:.2} bits) fill {:.3}",
+                chain.name, (max as f64).log2(), g.reach(), (g.reach() as f64).log2(),
+                max as f64 / g.reach() as f64
+            );
+        }
         let mut polys = vec![[[0i16; DEG]; BLOCKS]; carry.len()];
         split.resize(g.levels.max(1), 0);
         for a in 0..BLOCKS {
             for t in 0..CARRY {
-                g.split_into(e[a][t], &mut split);
+                if !g.try_split_into(e[a][t], &mut split) {
+                    return Err(Overflow {
+                        chain: chain.name,
+                        magnitude: e[a][t],
+                        gadget: g,
+                    });
+                }
                 for (d, level) in polys.iter_mut().enumerate() {
                     level[a][t] = split[d] as i16;
                 }
@@ -719,6 +782,7 @@ impl Build {
         }
         self.prepared.push(prep);
         self.chains.push(chain);
+        Ok(())
     }
 
     fn finish(mut self) -> Instance {

@@ -260,7 +260,8 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
         &round.challenges,
         &round.point,
         &round.claim,
-    );
+    )
+    .expect("the honest round is within its gadgets");
     let layout = Instance::layout(&round.setup, &round.challenges, &round.point, &round.claim);
 
     let (a, b) = (full.statement(), layout.statement());
@@ -385,7 +386,8 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
         &round.challenges,
         &round.point,
         &round.claim,
-    );
+    )
+    .expect("the honest round is within its gadgets");
     let setup = &round.setup;
     let phi = ProofPhi::new(setup, &instance);
     let masks = || Masks::squeeze(setup, &mut round.transcript.clone());

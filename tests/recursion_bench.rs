@@ -60,7 +60,8 @@ fn the_encoding_at_the_basic_parameters() {
         &challenges,
         &point,
         &claim,
-    );
+    )
+    .expect("the honest round is within its gadgets");
     row("whole instance", ms(t));
 
     let t = Instant::now();
@@ -132,7 +133,8 @@ fn the_encoding_at_the_basic_parameters() {
         &challenges,
         &point,
         &claim,
-    );
+    )
+    .expect("the honest round is within its gadgets");
     for v in tight.vectors.iter_mut() {
         if let Cap::PerCoefficient(_) = v.cap {
             if v.name.starts_with('e') || v.name.starts_with('k') || v.name.starts_with('w') {

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
+use super::{binary, chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
 use crate::api::N162;
 use crate::challenge::ShortChallenge;
 use crate::fields::scalar::F162;
@@ -26,6 +26,7 @@ pub struct Setup {
     pub r: usize,
     pub fold_cap: f64,
     pub limbs: Vec<limbs::Shape>,
+    pub binary_chains: binary::Shape,
     /// `blocks[(limb * 8 + part) * n + i]`, `part = component * 2 + twist`.
     blocks: Vec<Blocks>,
     /// `key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]`, a buffer of `n` sub-chunks
@@ -56,7 +57,7 @@ impl Setup {
         let limbs: Vec<limbs::Shape> = params
             .primes()
             .iter()
-            .map(|&q| limbs::Shape::of(q))
+            .map(|&q| limbs::Shape::of(q, n, r))
             .collect();
         let mut blocks = Vec::with_capacity(limbs.len() * 8 * n);
         for limb in 0..limbs.len() {
@@ -80,6 +81,7 @@ impl Setup {
             r,
             fold_cap: FOLD_CAP * (n * N * r) as f64,
             limbs,
+            binary_chains: binary::Shape::of(n, r),
             blocks,
             key_phi: Vec::new(),
             scalars: BTreeMap::new(),
