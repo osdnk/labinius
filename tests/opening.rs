@@ -42,11 +42,14 @@ struct Round {
 
 impl Round {
     fn new(params: &Params, domain: &[u8]) -> Round {
+        Round::with_witness(params, domain, Witness::random(params, WITNESS_SEED))
+    }
+
+    fn with_witness(params: &Params, domain: &[u8], witness: Witness) -> Round {
         let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
         let setup = pp.recursion().expect("recursion is on").clone();
         let mut prover = Prover::new(&pp);
         let verifier = Verifier::new(&pp);
-        let witness = Witness::random(params, WITNESS_SEED);
         let (commitment, opening) = prover.commit(&witness);
         let mut transcript = Transcript::new(domain);
         let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
@@ -444,31 +447,31 @@ fn a_wrong_challenge_set_is_rejected() {
 // the norm cap and its retry
 // =============================================================================================
 
-/// The cap of the plan's D5 is the 95th percentile of the honest fold, so the prover has to be
-/// able to say no and be given fresh challenges. Four challenges put the fold far from
-/// concentrated, so both outcomes are common; the loop is the protocol's own retry.
+/// The cap of the plan's D5 is the 95th percentile of the honest fold at the basic shape, so the
+/// prover has to be able to say no and be given fresh challenges. A random witness sits well
+/// under it. The lift `c(-X^4)` gives a challenge's terms alternating signs, so a witness whose
+/// bits all sit on even positions of their field elements cannot cancel: every challenge adds
+/// its even weight to one half of the coefficients and subtracts its odd weight from the other,
+/// coherently across the columns, so the fold grows with the square of the column count against
+/// a cap linear in it, and at sixteen columns lands at about four times the cap.
 #[test]
-fn a_long_fold_is_refused_and_the_retry_succeeds() {
-    let params = small(vec![Modulus::Q9721_FS_S]);
-    let (mut refused, mut accepted) = (false, false);
-    for tag in 0..32u8 {
-        let mut round = Round::new(&params, &[b"cap/"[..].to_vec(), vec![tag]].concat());
-        match round.prove() {
-            Err(OpeningError::FoldTooLong { normsq, cap }) => {
-                assert!(normsq > cap);
-                refused = true;
-            }
-            Ok(proof) => {
-                assert!(round.verify(&proof));
-                accepted = true;
-            }
-            Err(e) => panic!("unexpected error: {e}"),
-        }
-        if refused && accepted {
-            return;
-        }
+fn a_long_fold_is_refused_and_a_short_one_is_proven() {
+    let even = F162([
+        0x5555_5555_5555_5555,
+        0x5555_5555_5555_5555,
+        0x5555_5555_5555_5555 & ((1u64 << 34) - 1),
+    ]);
+    let wide = Params::new(11, 4, vec![Modulus::Q9721_FS_S], true).unwrap();
+    let aligned = Witness::from_elements(&wide, vec![even; wide.witness_len()]).unwrap();
+    let mut long = Round::with_witness(&wide, b"cap/long", aligned);
+    match long.prove() {
+        Err(OpeningError::FoldTooLong { normsq, cap }) => assert!(normsq > cap),
+        other => panic!("the aligned fold was not refused: {:?}", other.map(|_| ())),
     }
-    panic!("the cap never fired both ways: refused {refused}, accepted {accepted}");
+    let params = small(vec![Modulus::Q9721_FS_S]);
+    let mut short = Round::new(&params, b"cap/short");
+    let proof = short.prove().expect("a random witness folds under the cap");
+    assert!(short.verify(&proof));
 }
 
 impl Round {
