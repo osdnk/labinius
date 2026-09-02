@@ -129,7 +129,7 @@ data; the fold is entropy-coded against its own histogram, which is where the 1.
 The same shape with the recursion on. `PublicParameters::from_seed` additionally inverts the key
 rows, blocks them, converts the 221 184 key-time `phi` and the nine-bit pattern table to `polx`,
 and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 8`) — 35 ms and
-21 MB, paid once per key. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
+25 MB, paid once per key, 4 MB of it the key's term-major block tables the encoding reads. The encoded witness is 18 LaBRADOR vectors, 10 752 polynomials.
 
 | step | ms |
 |------|---:|
@@ -137,9 +137,9 @@ and picks the three commitment ranks (`kappa_Y = 11`, `kappa_u = 3`, `kappa_R = 
 | `commit`, including `T_Y` | 17.04 |
 | `row_evaluate` | 0.30 |
 | `commit_left_expansion` | 0.25 |
-| `prove_opening` | 222.42 |
+| `prove_opening` | 209.73 |
 | — fold | 4.51 |
-| — encoding | 21.25 |
+| — encoding | 7.47 |
 | — `T_R` | 2.49 |
 | — masks | 5.16 |
 | — constraint `phi` | 2.37 |
@@ -168,7 +168,7 @@ at them would say.
 
 The proof is 79.5 KB: `T_Y` 4.1 KB, `T_u` 1.1 KB, `T_R` 3.0 KB, the 18 announced norms 0.1 KB and
 LaBRADOR's own 71.1 KB, against 601.3 KB in the clear. Per proof the constraint `phi` take 1 MB
-on top of the key's 21 MB, plus 33 MB for the three mask rows; the peak resident set of one round
+on top of the key's 25 MB, plus 33 MB for the three mask rows; the peak resident set of one round
 in each mode is 292 MB.
 
 Against the first working version of the recursion, at the same shape and on the same core:
@@ -502,16 +502,16 @@ ones. `cargo run` prints both modes.
   entropy floors, not compression, and nothing can go under them. The folded witness is the one
   message with structure: `v = sum_j c_j W_j` is 256 binary columns against weight-28 binary
   challenges, so its coefficients sit inside `(q-1)/2 = 1944` but are a discrete Gaussian of a few
-  tens, 8.1 bits of entropy against the 16 an `i16` spends. A 32-bit rANS with 16-bit
-  renormalisation codes it against a histogram of the message itself, quantised to a total of
+  tens, 8.1 bits of entropy against the 16 an `i16` spends. Sixty-four interleaved 32-bit rANS
+  states with 16-bit renormalisation, decoded in lockstep in AVX-512, code it against a histogram of the message itself, quantised to a total of
   2^12 by largest remainder with every occupied symbol floored at one slot; the table covers the
   occupied range `[offset, offset + length)` and travels in the header as Elias gamma codes of
   `count + 1`, one bit for each empty symbol in the tails. A symbol the quantisation cannot afford
   — which needs an adversarial fold spread over more than 4095 values of a large limb — is coded
   as an escape followed by its index in raw bits, so any `i16` message encodes and the coder is a
   bijection, not a heuristic. At the basic shape that is 163.5 KB for 165 888 coefficients, 0.7 %
-  above the message's own zeroth-order entropy, in 0.8 ms of encoding and 0.7 ms of decoding; the
-  verifier decodes all three objects in 2.0 ms and checks the ones it decoded. The fold's width
+  above the message's own zeroth-order entropy, in 0.8 ms of encoding and 0.1 ms of decoding; the
+  verifier decodes all three objects in 0.15 ms and checks the ones it decoded. The fold's width
   varies from round to round more than a sum of 5376 signed bits suggests, because the 256
   challenges are shared by all 256 output ring elements: each coefficient position carries a
   common offset, the signed sum of the challenge coefficients that land on it — signed because the

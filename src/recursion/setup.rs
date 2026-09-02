@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{binary, chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
+use super::{binary, chain, chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
 use crate::api::N162;
 use crate::challenge::ShortChallenge;
 use crate::fields::scalar::F162;
@@ -29,6 +29,9 @@ pub struct Setup {
     pub binary_chains: binary::Shape,
     /// `blocks[(limb * 8 + part) * n + i]`, `part = component * 2 + twist`.
     blocks: Vec<Blocks>,
+    /// `tables[(limb * 8 + part) * CHUNKS + b]`, the same run of `n` in the term-major form of
+    /// [`chain::public_table`], the fixed prefix of every limb chain.
+    tables: Vec<chain::Table>,
     /// `key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]`, a buffer of `n` sub-chunks
     /// of [`SUB`] `i16` -- the coefficient form LaBRADOR aggregates directly.
     key_phi: Vec<Arc<ShortPhi>>,
@@ -75,6 +78,10 @@ impl Setup {
                 }
             }
         }
+        let tables = (0..limbs.len() * 8)
+            .flat_map(|part| (0..CHUNKS).map(move |b| (part, b)))
+            .map(|(part, b)| chain::public_table(&blocks, part * n, n, b))
+            .collect();
         let empty = || CommitmentKey::expand(1, 1, &[0u8; 16], 0);
         let mut setup = Setup {
             n,
@@ -83,6 +90,7 @@ impl Setup {
             limbs,
             binary_chains: binary::Shape::of(n, r),
             blocks,
+            tables,
             key_phi: Vec::new(),
             scalars: BTreeMap::new(),
             carry_phi: BTreeMap::new(),
@@ -170,6 +178,10 @@ impl Setup {
         &self.blocks[at..at + self.n]
     }
 
+    pub fn key_table(&self, limb: usize, part: usize, b: usize) -> &chain::Table {
+        &self.tables[(limb * 8 + part) * CHUNKS + b]
+    }
+
     pub fn key_phi(&self, limb: usize, part: usize, b: usize, a: usize) -> &Arc<ShortPhi> {
         &self.key_phi[((limb * 8 + part) * CHUNKS + b) * BLOCKS + a]
     }
@@ -253,6 +265,7 @@ impl Setup {
                 .map(|p| p.len() * polx)
                 .sum::<usize>()
             + self.blocks.len() * core::mem::size_of::<Blocks>()
+            + self.tables.iter().map(|t| 2 * t.data.len()).sum::<usize>()
             + (self.key_y.buf().len() + self.key_u.buf().len() + self.key_r.buf().len()) * polx
     }
 }

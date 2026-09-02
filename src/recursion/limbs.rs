@@ -8,7 +8,7 @@
 //! tree's batched inverse transform.
 //! For output component `m` the multiplier of `v_{i,l}` is `F_{i,(m-l) mod 4}`, twisted by `-Z`
 //! when `l > m`.
-use super::chain::{At, Carries, Chain, Product};
+use super::chain::{padded, witness_table, At, Carries, Chain, Product, Run};
 use super::setup::Setup;
 use super::{centre, Build, Cap, Gadget, Kind, Overflow, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
 use crate::api::{
@@ -464,15 +464,22 @@ pub fn encode(
 
     for m in 0..4 {
         let mut products = Vec::with_capacity(4 * CHUNKS * n + CHUNKS * r);
+        let mut runs = Vec::with_capacity(4 * CHUNKS + CHUNKS);
         for l in 0..4 {
-            let k = (m + 4 - l) % 4;
-            let twist = usize::from(l > m);
+            let part = ((m + 4 - l) % 4) * 2 + usize::from(l > m);
             for b in 0..CHUNKS {
                 for i in 0..n {
                     products.push(Product {
-                        blocks: base_key + (k * 2 + twist) * n + i,
+                        blocks: base_key + part * n + i,
                         chunk: b,
                         at: build.v_at(l, b, i),
+                    });
+                }
+                if build.witness {
+                    runs.push(Run {
+                        g: setup.key_table(limb, part, b).clone(),
+                        x: build.v_tables[l * CHUNKS + b].clone(),
+                        terms: padded(n),
                     });
                 }
             }
@@ -488,6 +495,13 @@ pub fn encode(
                     },
                 });
             }
+            if build.witness {
+                runs.push(Run {
+                    g: build.challenge_tables[b].clone(),
+                    x: witness_table(&build.vectors[residues_vector[m]].polys, b * r, r, 1),
+                    terms: padded(r),
+                });
+            }
         }
         build.seal(
             Chain {
@@ -500,6 +514,7 @@ pub fn encode(
                     at: Vec::new(),
                 },
             },
+            runs,
             q,
             (shape.quotient, &quotient),
             &carry,

@@ -51,18 +51,30 @@ fn the_encoding_at_the_basic_parameters() {
     row("public parameters", setup_ms);
     println!("  key-time buffers {} MB", setup.footprint() / (1 << 20));
 
-    let t = Instant::now();
-    let instance = Instance::new(
-        &setup,
-        &residues,
-        &folded,
-        &evaluation,
-        &challenges,
-        &point,
-        &claim,
-    )
-    .expect("the honest round is within its gadgets");
-    row("whole instance", ms(t));
+    let build = || {
+        Instance::new(
+            &setup,
+            &residues,
+            &folded,
+            &evaluation,
+            &challenges,
+            &point,
+            &claim,
+        )
+        .expect("the honest round is within its gadgets")
+    };
+    let rounds: usize = std::env::var("ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let mut best = f64::INFINITY;
+    for _ in 0..rounds {
+        let t = Instant::now();
+        drop(build());
+        best = best.min(ms(t));
+    }
+    let instance = build();
+    row(&format!("whole instance (best of {rounds})"), best);
 
     let t = Instant::now();
     let residuals = instance.residuals();
