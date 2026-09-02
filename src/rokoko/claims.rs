@@ -9,8 +9,13 @@
 //!
 //! Key row `i` of `T_Y` is one uniform tensor point per residue region, so `T_Y` is one
 //! structured Ajtai commitment over the union of the regions; `T_u` the same over the lift.
+//!
+//! Per round the tables cost one lane-wise multiply-add per entry: [`Fixed`] holds the NTT form
+//! of the key's polynomials, the round transforms only its own, and `rho^a * poly` is shared
+//! by every entry of the round that reads it.
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Once;
+use std::time::Instant;
 
 use rokoko::common::config::MOD_Q;
 use rokoko::common::hash::HashWrapper;
@@ -18,6 +23,7 @@ use rokoko::common::matrix::VerticallyAlignedMatrix;
 use rokoko::common::ring_arithmetic::{Representation, RingElement};
 use rokoko::common::sampling::AesCtrPublicSampler;
 use rokoko::common::structured_row::PreprocessedRow;
+use rokoko::hexl::bindings::eltwise_fma_mod;
 use rokoko::protocol::config::{SizeableProof, SumcheckConfig, SumcheckRoundProof};
 use rokoko::protocol::crs::{VerifierCRS, CRS};
 use rokoko::protocol::parties::{commiter::commit, prover::prover_round, verifier::verifier_round};
@@ -29,6 +35,15 @@ use rokoko::protocol::sumcheck::init_sumcheck;
 use rokoko::protocol::sumchecks::builder_verifier::init_verifier;
 
 use super::{Cap, Element, Layout, Poly, Relation, Witness, DEG, SUPPORT};
+
+fn stamp(label: &str, clock: Instant) {
+    if std::env::var_os("ROKOKO_TIMINGS").is_some() {
+        eprintln!(
+            "rokoko-timings {label} {:.1} ms",
+            clock.elapsed().as_secs_f64() * 1e3
+        );
+    }
+}
 
 pub const SUPPORT_CLAIMS: usize = 3;
 
@@ -173,7 +188,7 @@ pub fn committed(
     })
 }
 
-/// The tensor-structured Ajtai keys of `T_Y` and `T_u`.
+/// The tensor-structured Ajtai keys of `T_Y` and `T_u`, with their rows expanded.
 pub struct Keys {
     /// The residue regions, then the lift region, over the layout's own length.
     pub residues: Vec<Region>,
@@ -182,6 +197,9 @@ pub struct Keys {
     pub rows_y: Vec<Vec<Vec<RingElement>>>,
     /// `rows_u[i]`: the layers of key row `i` over the lift region.
     pub rows_u: Vec<Vec<RingElement>>,
+    /// `PreprocessedRow::from_layers` of every row, `region.len()` elements each.
+    pub expanded_y: Vec<Vec<Vec<RingElement>>>,
+    pub expanded_u: Vec<Vec<RingElement>>,
 }
 
 impl Keys {
@@ -209,21 +227,29 @@ impl Keys {
             .map(|&v| region(layout, v, layout.len))
             .collect();
         let lift = region(layout, lift, layout.len);
-        let rows_y = (0..rank_y)
+        let rows_y: Vec<Vec<Vec<RingElement>>> = (0..rank_y)
             .map(|_| residues.iter().map(|r| layers(r.len())).collect())
             .collect();
-        let rows_u = (0..rank_u).map(|_| layers(lift.len())).collect();
+        let rows_u: Vec<Vec<RingElement>> = (0..rank_u).map(|_| layers(lift.len())).collect();
+        let expand =
+            |layers: &Vec<RingElement>| PreprocessedRow::from_layers(layers).preprocessed_row;
+        let expanded_y = rows_y
+            .iter()
+            .map(|row| row.iter().map(expand).collect())
+            .collect();
+        let expanded_u = rows_u.iter().map(expand).collect();
         Keys {
             residues,
             lift,
             rows_y,
             rows_u,
+            expanded_y,
+            expanded_u,
         }
     }
 }
 
-fn inner(layers: &[RingElement], vector: &[Element]) -> RingElement {
-    let key = PreprocessedRow::from_layers(layers).preprocessed_row;
+fn inner(key: &[RingElement], vector: &[Element]) -> RingElement {
     assert!(
         vector.len() <= key.len(),
         "{} elements under a key of {}",
@@ -247,12 +273,12 @@ pub fn commit_residues(keys: &Keys, vectors: &[Vec<Element>]) -> Vec<RingElement
         keys.residues.len(),
         "one vector per residue region"
     );
-    keys.rows_y
+    keys.expanded_y
         .iter()
         .map(|row| {
             let mut acc = zero();
-            for (layers, vector) in row.iter().zip(vectors) {
-                acc += &inner(layers, vector);
+            for (key, vector) in row.iter().zip(vectors) {
+                acc += &inner(key, vector);
             }
             acc
         })
@@ -260,10 +286,23 @@ pub fn commit_residues(keys: &Keys, vectors: &[Vec<Element>]) -> Vec<RingElement
 }
 
 pub fn commit_lift(keys: &Keys, lift: &[Element]) -> Vec<RingElement> {
-    keys.rows_u
-        .iter()
-        .map(|layers| inner(layers, lift))
-        .collect()
+    keys.expanded_u.iter().map(|key| inner(key, lift)).collect()
+}
+
+/// What the claims need of the key alone: the NTT form of the fixed weight polynomials
+/// (`Relation::polys[..fixed]`) and `conj(sum_{j < SUPPORT} X^j)` of the binariness claim.
+pub struct Fixed {
+    pub ntt: Vec<RingElement>,
+    pub ones_conjugate: RingElement,
+}
+
+impl Fixed {
+    pub fn new(polys: &[Poly]) -> Fixed {
+        Fixed {
+            ntt: polys.iter().map(weight).collect(),
+            ones_conjugate: weight(&vec![1; SUPPORT]).conjugate(),
+        }
+    }
 }
 
 /// Rokoko's reference string for one chain, shared by every proof under it.
@@ -336,8 +375,46 @@ fn sum(terms: impl IntoIterator<Item = ClaimExpr>) -> Option<ClaimExpr> {
     terms.into_iter().reduce(|a, b| a + b)
 }
 
-fn ones_conjugate() -> RingElement {
-    weight(&vec![1; SUPPORT]).conjugate()
+/// `acc += s * x`, lane-wise: a scalar acts on every NTT slot alike.
+fn fma(acc: &mut RingElement, x: &RingElement, s: u64) {
+    unsafe {
+        eltwise_fma_mod(
+            acc.v.as_mut_ptr(),
+            x.v.as_ptr(),
+            s,
+            acc.v.as_ptr(),
+            DEG as u64,
+            MOD_Q,
+        )
+    }
+}
+
+fn residue(s: i64) -> u64 {
+    s.rem_euclid(MOD_Q as i64) as u64
+}
+
+/// `sum w conj(w)` over the elements.
+fn energy(elements: &[RingElement]) -> RingElement {
+    let mut acc = zero();
+    let mut term = zero();
+    let mut conj = zero();
+    for w in elements {
+        w.conjugate_into(&mut conj);
+        term *= (w, &conj);
+        acc += &term;
+    }
+    acc
+}
+
+/// Products `rho^a * poly` kept across the chains of one round, at most this many (a ring
+/// element each).
+const SCALED: usize = 1 << 16;
+
+/// A claim whose value the prover ships.
+pub enum Shipped<'a> {
+    Support(&'a [u64]),
+    Norm(Region),
+    Binary(Region),
 }
 
 fn support_weights(owner: &[Option<usize>], n: usize, transcript: &mut HashWrapper) -> Vec<u64> {
@@ -353,34 +430,90 @@ fn support_weights(owner: &[Option<usize>], n: usize, transcript: &mut HashWrapp
 fn claims(
     relation: &Relation,
     keys: &Keys,
+    fixed: &Fixed,
     t_y: &[RingElement],
     t_u: &[RingElement],
     n: usize,
     transcript: &mut HashWrapper,
-    ship: &mut dyn FnMut(ClaimExpr) -> RingElement,
+    ship: &mut dyn FnMut(Shipped) -> RingElement,
 ) -> Result<Vec<Claim>, String> {
     let layout = &relation.layout;
     let owner = owners(layout);
     let at = |v: usize| region(layout, v, n);
     let mut claims = Vec::new();
 
+    if relation.fixed != fixed.ntt.len() || relation.polys.len() < relation.fixed {
+        return Err(format!(
+            "the relation fixes {} of {} polynomials, the key holds {}",
+            relation.fixed,
+            relation.polys.len(),
+            fixed.ntt.len()
+        ));
+    }
+    let clock = Instant::now();
+    let round: Vec<RingElement> = relation.polys[relation.fixed..]
+        .iter()
+        .map(weight)
+        .collect();
+    stamp(
+        &format!("round polys ({})", relation.polys.len() - relation.fixed),
+        clock,
+    );
+    let clock = Instant::now();
+    let ntt = |p: usize| -> Result<&RingElement, String> {
+        match fixed.ntt.get(p) {
+            Some(e) => Ok(e),
+            None => round
+                .get(p - relation.fixed)
+                .ok_or_else(|| format!("entry weight {p} is not among the polynomials")),
+        }
+    };
+
     let mut rho = zero();
     transcript.sample_ring_element_into(&mut rho);
+    let mut entries = 0;
+    let diagonals = relation.equations.iter().map(|c| c.diagonals.len()).max();
+    let rho = powers(&rho, diagonals.unwrap_or(0));
+    let mut slot = vec![u32::MAX; relation.polys.len()];
+    let mut scaled: Vec<(usize, RingElement)> =
+        Vec::with_capacity(SCALED.min(relation.polys.len()));
     for chain in &relation.equations {
-        let rho = powers(&rho, chain.diagonals.len());
         let mut tables: Vec<Option<Vec<RingElement>>> = vec![None; layout.vectors.len()];
         let mut value = zero();
         let mut term = zero();
         for (a, diagonal) in chain.diagonals.iter().enumerate() {
-            for (i, w) in &diagonal.entries {
+            entries += diagonal.entries.len();
+            for entry in &diagonal.entries {
+                let i = entry.element;
                 let v = owner
-                    .get(*i)
+                    .get(i)
                     .copied()
                     .flatten()
                     .ok_or_else(|| format!("chain {} reads pad element {i}", chain.name))?;
                 let table = tables[v].get_or_insert_with(|| vec![zero(); layout.regions[v].len]);
-                term *= (&rho[a], &weight(w));
-                table[i - layout.regions[v].start] += &term;
+                let cached = match slot[entry.poly] as usize {
+                    k if k < scaled.len() && scaled[k].0 == a => Some(k),
+                    _ if scaled.len() < SCALED => {
+                        let k = scaled.len();
+                        scaled.push((a, zero()));
+                        scaled[k].1 *= (&rho[a], ntt(entry.poly)?);
+                        slot[entry.poly] = k as u32;
+                        Some(k)
+                    }
+                    _ => None,
+                };
+                let weight = match cached {
+                    Some(k) => &scaled[k].1,
+                    None => {
+                        term *= (&rho[a], ntt(entry.poly)?);
+                        &term
+                    }
+                };
+                fma(
+                    &mut table[i - layout.regions[v].start],
+                    weight,
+                    residue(entry.scale),
+                );
             }
             term *= (&rho[a], &weight(&diagonal.output));
             value += &term;
@@ -392,6 +525,14 @@ fn claims(
         let expr = sum(terms).ok_or_else(|| format!("chain {} reads nothing", chain.name))?;
         claims.push(Claim::sums_to(expr, value));
     }
+    stamp(
+        &format!(
+            "tables ({entries} entries, {} polys, {} fixed)",
+            relation.polys.len(),
+            relation.fixed
+        ),
+        clock,
+    );
 
     if t_y.len() != keys.rows_y.len() || t_u.len() != keys.rows_u.len() {
         return Err(format!(
@@ -421,28 +562,28 @@ fn claims(
 
     for _ in 0..SUPPORT_CLAIMS {
         let alpha = support_weights(&owner, n, transcript);
-        let value = ship(table(alpha.clone()) * witness());
+        let value = ship(Shipped::Support(&alpha));
         claims.push(Claim::sums_to(table(alpha) * witness(), value));
     }
 
     for v in 0..layout.vectors.len() {
         let r = at(v);
-        let value = ship(witness_in(r) * witness_in(r).conjugate());
+        let value = ship(Shipped::Norm(r));
         claims.push(Claim::sums_to(
             witness_in(r) * witness_in(r).conjugate(),
             value,
         ));
     }
 
-    let j = ones_conjugate();
+    let j = &fixed.ones_conjugate;
     for v in (0..layout.vectors.len()).filter(|&v| layout.vectors[v].binary) {
         let r = at(v);
-        let bits = || {
+        let value = ship(Shipped::Binary(r));
+        claims.push(Claim::sums_to(
             witness_in(r) * witness_in(r).conjugate()
-                - table(vec![j.clone(); r.len()]).on(r.vars()) * witness_in(r)
-        };
-        let value = ship(bits());
-        claims.push(Claim::sums_to(bits(), value));
+                - table(vec![j.clone(); r.len()]).on(r.vars()) * witness_in(r),
+            value,
+        ));
     }
 
     Ok(claims)
@@ -458,6 +599,7 @@ pub fn prove(
     relation: &Relation,
     witness: &Witness,
     keys: &Keys,
+    fixed: &Fixed,
     t_y: &[RingElement],
     t_u: &[RingElement],
     crs: &Crs,
@@ -471,17 +613,56 @@ pub fn prove(
     let n = committed.data.len();
 
     let crs = &crs.prover;
+    let clock = Instant::now();
     let mut context = init_sumcheck(crs, config);
+    stamp("init_sumcheck", clock);
+    let clock = Instant::now();
     let (commitment, root) = commit(crs, config, &committed);
+    stamp("commit", clock);
 
     let mut transcript = transcript(digest, t_y, t_u, &root);
     let mut shipped = Vec::new();
-    let claims = claims(relation, keys, t_y, t_u, n, &mut transcript, &mut |expr| {
-        let value = expr.sum(&committed);
-        shipped.push(value.clone());
-        value
-    })?;
+    let data = &committed.data;
+    let clock = Instant::now();
+    let claims = claims(
+        relation,
+        keys,
+        fixed,
+        t_y,
+        t_u,
+        n,
+        &mut transcript,
+        &mut |claim| {
+            let value = match claim {
+                Shipped::Support(alpha) => {
+                    let mut acc = zero();
+                    for (w, &a) in data.iter().zip(alpha).filter(|(_, &a)| a != 0) {
+                        fma(&mut acc, w, a);
+                    }
+                    acc
+                }
+                Shipped::Norm(r) => energy(&data[r.range()]),
+                Shipped::Binary(r) => {
+                    let mut total = zero();
+                    for w in &data[r.range()] {
+                        total += w;
+                    }
+                    let mut value = energy(&data[r.range()]);
+                    let mut term = zero();
+                    term *= (&fixed.ones_conjugate, &total);
+                    value -= &term;
+                    value
+                }
+            };
+            shipped.push(value.clone());
+            value
+        },
+    )?;
+    stamp("prover claims", clock);
+    let clock = Instant::now();
     let (claims, inputs) = prove_claims(&committed, &claims, &mut transcript);
+    stamp("prove_claims", clock);
+    let clock = Instant::now();
     let (chain, _) = prover_round(
         crs,
         config,
@@ -494,6 +675,7 @@ pub fn prove(
         Some(transcript),
         None,
     );
+    stamp("prover_round", clock);
 
     let binary = shipped.split_off(SUPPORT_CLAIMS + layout.vectors.len());
     let norms = shipped.split_off(SUPPORT_CLAIMS);
@@ -570,6 +752,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 pub fn verify(
     relation: &Relation,
     keys: &Keys,
+    fixed: &Fixed,
     t_y: &[RingElement],
     t_u: &[RingElement],
     crs: &Crs,
@@ -589,10 +772,21 @@ pub fn verify(
         .iter()
         .chain(&proof.norms)
         .chain(&proof.binary);
-    let claims = claims(relation, keys, t_y, t_u, n, &mut transcript, &mut |_| {
-        shipped.next().cloned().expect("counted by structure")
-    })?;
+    let clock = Instant::now();
+    let claims = claims(
+        relation,
+        keys,
+        fixed,
+        t_y,
+        t_u,
+        n,
+        &mut transcript,
+        &mut |_| shipped.next().cloned().expect("counted by structure"),
+    )?;
+    stamp("claims", clock);
+    let clock = Instant::now();
     let bound = super::relation::no_wrap_bound(relation);
+    stamp("no_wrap_bound", clock);
     if !(bound < (MOD_Q / 2) as f64) {
         return Err(format!(
             "the block equations may wrap: bound {bound} against q/2 = {}",
@@ -600,15 +794,20 @@ pub fn verify(
         ));
     }
 
+    let clock = Instant::now();
     let mut context = init_verifier(&crs.verifier, config);
+    stamp("init_verifier", clock);
 
     catch_unwind(AssertUnwindSafe(|| {
+        let clock = Instant::now();
         let inputs = verify_claims(
             WitnessShape::new(height, width),
             &claims,
             &proof.claims,
             &mut transcript,
         );
+        stamp("verify_claims", clock);
+        let clock = Instant::now();
         verifier_round(
             &crs.verifier,
             config,
@@ -621,6 +820,7 @@ pub fn verify(
             Some(transcript),
             None,
         );
+        stamp("verifier_round", clock);
     }))
     .map_err(panic_message)
 }

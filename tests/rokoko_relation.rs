@@ -3,7 +3,7 @@
 //! tampered coefficient breaks a block equation.
 #![cfg(feature = "rokoko")]
 use bin_ntt::rokoko::relation::{self, Setup};
-use bin_ntt::rokoko::{Layout, Relation, Witness as Committed, BLOCKS, DEG, SUPPORT};
+use bin_ntt::rokoko::{Layout, Relation, Witness as Committed, BLOCKS, CHUNKS, DEG, SUB, SUPPORT};
 use bin_ntt::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, Modulus, Params, Prover,
     PublicParameters, RowEvaluation, Transcript, Verifier, Witness, F162,
@@ -83,6 +83,8 @@ fn same_layout(a: &Layout, b: &Layout) {
 
 fn same(a: &Relation, b: &Relation) {
     same_layout(&a.layout, &b.layout);
+    assert_eq!(a.fixed, b.fixed);
+    assert_eq!(a.polys, b.polys);
     assert_eq!(a.equations.len(), b.equations.len());
     for (x, y) in a.equations.iter().zip(&b.equations) {
         assert_eq!(x.name, y.name);
@@ -120,6 +122,44 @@ fn the_layout_depends_on_the_shape_alone() {
     let b = round(&small(), b"bin-ntt/test/rokoko/b");
     assert_ne!(a.claim, b.claim);
     same_layout(&a.layout().layout, &b.layout().layout);
+}
+
+/// The fixed prefix of a round's polys is the setup's atlas, whatever the round.
+#[test]
+fn the_fixed_polys_are_the_atlas() {
+    let a = round(&small(), b"bin-ntt/test/rokoko/a");
+    let b = round(&small(), b"bin-ntt/test/rokoko/b");
+    let (ra, rb) = (a.layout(), b.layout());
+    let setup = &a.setup;
+    assert_eq!(
+        setup.polys.len(),
+        setup.primes.len() * 8 * setup.n * CHUNKS * BLOCKS
+    );
+    assert_eq!(ra.fixed, setup.polys.len());
+    assert_eq!(ra.polys[..ra.fixed], setup.polys[..]);
+    assert_eq!(rb.fixed, ra.fixed);
+    assert_eq!(rb.polys[..rb.fixed], ra.polys[..ra.fixed]);
+    assert_ne!(ra.polys[ra.fixed..], rb.polys[rb.fixed..]);
+    for (limb, _) in setup.primes.iter().enumerate() {
+        for part in 0..8 {
+            for i in 0..setup.n {
+                for b in 0..CHUNKS {
+                    for a in 0..BLOCKS {
+                        let p = &setup.polys[setup.block(limb, part, i, b, a)];
+                        assert_eq!(p.len(), SUB);
+                    }
+                }
+            }
+        }
+    }
+    for eq in &ra.equations {
+        for d in &eq.diagonals {
+            for e in &d.entries {
+                assert!(e.poly < ra.polys.len());
+                assert!(ra.polys[e.poly].len() <= SUB + 1);
+            }
+        }
+    }
 }
 
 #[test]
@@ -197,7 +237,13 @@ fn one_tampered_coefficient_breaks_an_equation() {
 #[test]
 fn the_small_shape_clears_the_no_wrap_bound() {
     let r = round(&small(), b"bin-ntt/test/rokoko");
-    let bound = relation::no_wrap_bound(&r.layout());
+    let clock = std::time::Instant::now();
+    let relation = r.layout();
+    eprintln!(
+        "small shape: layout {:.1} ms",
+        clock.elapsed().as_secs_f64() * 1e3
+    );
+    let bound = relation::no_wrap_bound(&relation);
     assert!(bound < (1u64 << 49) as f64, "2^{:.2}", bound.log2());
 }
 
@@ -206,11 +252,14 @@ fn the_small_shape_clears_the_no_wrap_bound() {
 fn the_basic_shape_clears_the_no_wrap_bound() {
     let params = Params::new(18, 8, vec![Modulus::Q9721_FS_S], true).unwrap();
     let r = round(&params, b"bin-ntt/test/rokoko");
+    let clock = std::time::Instant::now();
     let relation = r.layout();
+    let layout_ms = clock.elapsed().as_secs_f64() * 1e3;
     let bound = relation::no_wrap_bound(&relation);
     eprintln!(
-        "basic shape: N = {}, bound 2^{:.2}",
+        "basic shape: N = {}, fixed polys {}, bound 2^{:.2}, layout {layout_ms:.1} ms",
         relation.layout.len,
+        relation.fixed,
         bound.log2()
     );
     assert!(bound < (1u64 << 49) as f64, "2^{:.2}", bound.log2());

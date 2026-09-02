@@ -9,9 +9,13 @@
 //! component `m`), `e[q]` (element `(m levels + d) BLOCKS + a` the digit `d` of carry `a` of
 //! component `m`); then `w`, `e[w]`, `w'`, `e[w']` for the binary fold and evaluation. An
 //! `S`-element `s` of a vector occupies elements `CHUNKS s + b`, `b` its chunk.
+//!
+//! The weight polynomials of a round, `Relation::polys`: the key's block atlas of [`Setup`]
+//! first (`fixed` of them), then `[1]`, `-Z^SUB`, and the blocks of the negated challenges and of
+//! the lifts, twelve consecutive polys `(b, a)` per public `S`-element.
 use super::{
-    BlockEquations, Cap, Diagonal, Element, Gadget, Layout, Overflow, Poly, Region, Relation,
-    SElem, Vector, Witness, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, DIGIT, SPAN, SUB, SUPPORT,
+    BlockEquations, Cap, Diagonal, Element, Entry, Gadget, Layout, Overflow, Poly, Region,
+    Relation, SElem, Vector, Witness, BLOCKS, CARRY, CHUNK, CHUNKS, DEG, DIGIT, SPAN, SUB, SUPPORT,
 };
 use crate::api::{PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162};
 use crate::eval::eq_table;
@@ -37,6 +41,8 @@ const V1: usize = 1;
 const U: usize = 2;
 const FIRST_LIMB: usize = 3;
 const PER_LIMB: usize = 10;
+/// Blocks of one public `S`-element, `(b, a)` at `b * BLOCKS + a`.
+const PER_ELEMENT: usize = CHUNKS * BLOCKS;
 
 /// The quotient and carry gadgets of one chain, base `DIGIT`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,34 +79,32 @@ pub struct Setup {
     pub fold_cap: f64,
     pub limbs: Vec<Shape>,
     pub binary: Shape,
-    /// `keys[limb][(k * 2 + twist) * n + i]`: component `k` of key row `i` modulo the limb's
-    /// prime, centred, times `-Z` when twisted.
-    pub keys: Vec<Vec<SElem>>,
+    /// The key's block atlas, `polys[block(limb, part, i, b, a)]`: block `(b, a)` of component
+    /// `k` of key row `i` modulo the limb's prime, centred, times `-Z` when twisted,
+    /// `part = 2 k + twist`. The fixed prefix of every round's `Relation::polys`.
+    pub polys: Vec<Poly>,
 }
 
 impl Setup {
     pub fn new(pp: &PublicParameters) -> Setup {
         let (n, r) = (pp.key().len_ring(), pp.params().columns());
         let primes = pp.params().primes();
-        let keys = (0..primes.len())
-            .map(|limb| {
-                let rows = limbs::key_rows(pp, limb);
-                let mut keys = Vec::with_capacity(8 * n);
-                for k in 0..4 {
-                    for twist in 0..2 {
-                        for row in &rows.rows {
-                            let mut g = row[k];
-                            if twist == 1 {
-                                g = chunk::shift(&g, 1);
-                                g.iter_mut().for_each(|x| *x = -*x);
-                            }
-                            keys.push(g);
+        let mut polys = Vec::with_capacity(primes.len() * 8 * n * PER_ELEMENT);
+        for limb in 0..primes.len() {
+            let rows = limbs::key_rows(pp, limb);
+            for k in 0..4 {
+                for twist in 0..2 {
+                    for row in &rows.rows {
+                        let mut g = row[k];
+                        if twist == 1 {
+                            g = chunk::shift(&g, 1);
+                            g.iter_mut().for_each(|x| *x = -*x);
                         }
+                        polys.extend(blocks(&g).iter().flatten().map(|b| b.to_vec()));
                     }
                 }
-                keys
-            })
-            .collect();
+            }
+        }
         Setup {
             n,
             r,
@@ -108,15 +112,19 @@ impl Setup {
             limbs: primes.iter().map(|&q| Shape::limb(q, n, r)).collect(),
             binary: Shape::binary(n, r),
             primes,
-            keys,
+            polys,
         }
     }
 
-    /// The multiplier of `v_{i,l}` in component `m` of a limb's identity: `F_{i,(m-l) mod 4}`,
-    /// twisted iff `l > m`.
-    pub fn key(&self, limb: usize, m: usize, l: usize, i: usize) -> &SElem {
+    pub fn block(&self, limb: usize, part: usize, i: usize, b: usize, a: usize) -> usize {
+        (((limb * 8 + part) * self.n + i) * CHUNKS + b) * BLOCKS + a
+    }
+
+    /// The first block of the multiplier of `v_{i,l}` in component `m` of a limb's identity:
+    /// `F_{i,(m-l) mod 4}`, twisted iff `l > m`.
+    pub fn key(&self, limb: usize, m: usize, l: usize, i: usize) -> usize {
         let k = (m + 4 - l) % 4;
-        &self.keys[limb][(k * 2 + usize::from(l > m)) * self.n + i]
+        self.block(limb, 2 * k + usize::from(l > m), i, 0, 0)
     }
 
     /// Layout indices of `C[q][m]^0`, `C[q][m]^1` in the order of [`residue_vectors`].
@@ -135,10 +143,6 @@ impl Setup {
 // =============================================================================================
 // S-elements, digits, chunks, blocks
 // =============================================================================================
-
-fn scaled(g: &SElem, c: i64) -> SElem {
-    core::array::from_fn(|t| c * g[t])
-}
 
 /// `x = low + DIGIT high`, `low` balanced.
 fn pair(x: &SElem) -> [SElem; 2] {
@@ -279,22 +283,6 @@ fn honest_carries(sums: &Sums) -> [[i64; CARRY]; BLOCKS] {
     e
 }
 
-/// The weight of carry `x` at diagonal `a` before the gadget power: `+1` from the previous
-/// diagonal, `-Z^SUB` at its own, and the `Phi_243` wrap of the last carry at `0` and `BLOCKS/2`.
-fn carry_weight(a: usize, x: usize) -> Option<Poly> {
-    let mut p = vec![0i64; SUB + 1];
-    if a > 0 && x == a - 1 {
-        p[0] += 1;
-    }
-    if x == a {
-        p[SUB] -= 1;
-    }
-    if (a == 0 || a == BLOCKS / 2) && x == BLOCKS - 1 {
-        p[0] -= 1;
-    }
-    p.iter().any(|&c| c != 0).then_some(p)
-}
-
 fn stats(kind: &str, name: &str, values: impl Iterator<Item = i64>, gadget: Gadget) {
     let all: Vec<i64> = values.collect();
     let max = all.iter().map(|x| x.abs()).max().unwrap();
@@ -312,9 +300,11 @@ fn stats(kind: &str, name: &str, values: impl Iterator<Item = i64>, gadget: Gadg
 // the builder
 // =============================================================================================
 
-/// The public `g` against `S`-element `s` of vector `vector`.
+/// `scale` times the public element whose blocks start at `blocks`, against `S`-element `s` of
+/// vector `vector`.
 struct Term {
-    g: SElem,
+    blocks: usize,
+    scale: i64,
     vector: usize,
     s: usize,
 }
@@ -337,10 +327,20 @@ struct Build {
     layout: Layout,
     witness: Option<Witness>,
     equations: Vec<BlockEquations>,
+    polys: Vec<Poly>,
+    /// `[1]` and `-Z^SUB`: the digit-term constants and the carry weights, under a scale.
+    one: usize,
+    minus_z: usize,
 }
 
 impl Build {
-    fn new(witness: bool) -> Build {
+    fn new(setup: &Setup, witness: bool) -> Build {
+        let mut polys = setup.polys.clone();
+        let one = polys.len();
+        polys.push(vec![1]);
+        let mut p = vec![0i64; SUB + 1];
+        p[SUB] = -1;
+        polys.push(p);
         Build {
             layout: Layout {
                 vectors: Vec::new(),
@@ -349,7 +349,18 @@ impl Build {
             },
             witness: witness.then(Vec::new),
             equations: Vec::new(),
+            polys,
+            one,
+            minus_z: one + 1,
         }
+    }
+
+    /// The blocks of a round's public element, appended; returns the first.
+    fn blocks(&mut self, g: &SElem) -> usize {
+        let first = self.polys.len();
+        self.polys
+            .extend(blocks(g).iter().flatten().map(|b| b.to_vec()));
+        first
     }
 
     /// A vector of `used` elements, placed as `WitnessBuilder::push` places a power-of-two run.
@@ -392,16 +403,17 @@ impl Build {
         quotient: Quotient,
         carries: Carries,
     ) -> Result<(), Overflow> {
-        let blocks: Vec<Blocks> = terms.iter().map(|t| blocks(&t.g)).collect();
         let stats_on = std::env::var_os("GADGET_STATS").is_some();
-        if let Some(w) = &mut self.witness {
+        let polys = &self.polys;
+        if let Some(w) = self.witness.as_mut() {
             let mut sums = [[0i64; DEG]; BLOCKS];
-            for (t, bl) in terms.iter().zip(&blocks) {
+            for t in terms {
                 for b in 0..CHUNKS {
                     let x = &w[t.vector][CHUNKS * t.s + b];
                     for a in 0..BLOCKS {
-                        for (u, &g) in bl[b][a].iter().enumerate() {
+                        for (u, &g) in polys[t.blocks + b * BLOCKS + a].iter().enumerate() {
                             if g != 0 {
+                                let g = t.scale * g;
                                 for j in 0..CHUNK {
                                     sums[a][u + j] += g * x[j];
                                 }
@@ -463,32 +475,51 @@ impl Build {
             }
         }
         let layout = &self.layout;
+        let (one, minus_z) = (self.one, self.minus_z);
         let diagonals = (0..BLOCKS)
             .map(|a| {
-                let mut entries = Vec::with_capacity(CHUNKS * terms.len() + 2 * BLOCKS);
-                for (t, bl) in terms.iter().zip(&blocks) {
+                let mut entries = Vec::with_capacity(CHUNKS * terms.len() + 3 * BLOCKS);
+                for t in terms {
                     for b in 0..CHUNKS {
-                        entries.push((layout.index(t.vector, CHUNKS * t.s + b), bl[b][a].to_vec()));
+                        entries.push(Entry {
+                            element: layout.index(t.vector, CHUNKS * t.s + b),
+                            poly: t.blocks + b * BLOCKS + a,
+                            scale: t.scale,
+                        });
                     }
                 }
                 if a % SPAN == 0 {
                     for d in 0..quotient.gadget.levels {
-                        entries.push((
-                            layout.index(quotient.vector, CHUNKS * (quotient.first + d) + a / SPAN),
-                            vec![-divisor * quotient.gadget.base.pow(d as u32)],
-                        ));
+                        entries.push(Entry {
+                            element: layout
+                                .index(quotient.vector, CHUNKS * (quotient.first + d) + a / SPAN),
+                            poly: one,
+                            scale: -divisor * quotient.gadget.base.pow(d as u32),
+                        });
                     }
                 }
                 for d in 0..carries.gadget.levels {
                     let power = carries.gadget.base.pow(d as u32);
-                    for x in 0..BLOCKS {
-                        if let Some(mut p) = carry_weight(a, x) {
-                            p.iter_mut().for_each(|c| *c *= power);
-                            entries.push((
-                                layout.index(carries.vector, carries.first + d * BLOCKS + x),
-                                p,
-                            ));
-                        }
+                    let carry =
+                        |x: usize| layout.index(carries.vector, carries.first + d * BLOCKS + x);
+                    if a > 0 {
+                        entries.push(Entry {
+                            element: carry(a - 1),
+                            poly: one,
+                            scale: power,
+                        });
+                    }
+                    entries.push(Entry {
+                        element: carry(a),
+                        poly: minus_z,
+                        scale: power,
+                    });
+                    if a == 0 || a == BLOCKS / 2 {
+                        entries.push(Entry {
+                            element: carry(BLOCKS - 1),
+                            poly: one,
+                            scale: -power,
+                        });
                     }
                 }
                 Diagonal {
@@ -508,7 +539,7 @@ impl Build {
 
 /// Verifier side: the layout and the block equations from public data alone. The layout is a
 /// function of the shape (`n`, `r`, the primes, the gadget levels) and of nothing else, so any
-/// challenges, point and claim give the same `Layout`.
+/// challenges, point and claim give the same `Layout`; `polys[..fixed]` is `setup.polys`.
 pub fn layout(
     setup: &Setup,
     challenges: &FoldingChallenges,
@@ -556,7 +587,7 @@ fn build(
 ) -> Result<(Relation, Option<Witness>), Overflow> {
     let (n, r) = (setup.n, setup.r);
     assert_eq!(challenges.len(), r, "one folding challenge per column");
-    let mut build = Build::new(honest.is_some());
+    let mut build = Build::new(setup, honest.is_some());
     let digit = Cap::PerCoefficient(HALF);
 
     let v0 = build.vector("v^0".into(), digit, false, CHUNKS * 4 * n);
@@ -584,14 +615,30 @@ fn build(
         }
         build.put(u, lift_vector(setup, row));
     }
-    let negated: Vec<SElem> = challenges
+    let negated: Vec<usize> = challenges
         .challenges()
         .iter()
         .map(|c| {
             let k = c.coeffs();
-            core::array::from_fn(|t| -(k[t] as i64))
+            build.blocks(&core::array::from_fn(|t| -(k[t] as i64)))
         })
         .collect();
+    let both = |blocks: usize, vectors: [usize; 2], s: usize| {
+        [
+            Term {
+                blocks,
+                scale: 1,
+                vector: vectors[0],
+                s,
+            },
+            Term {
+                blocks,
+                scale: DIGIT,
+                vector: vectors[1],
+                s,
+            },
+        ]
+    };
 
     let residues = honest.map(|(matrix, _, _)| limbs::residues(matrix, &setup.primes));
     for (limb, &q) in setup.primes.iter().enumerate() {
@@ -632,30 +679,11 @@ fn build(
             let mut terms = Vec::with_capacity(8 * n + 2 * r);
             for l in 0..4 {
                 for i in 0..n {
-                    let g = setup.key(limb, m, l, i);
-                    terms.push(Term {
-                        g: *g,
-                        vector: v0,
-                        s: l * n + i,
-                    });
-                    terms.push(Term {
-                        g: scaled(g, DIGIT),
-                        vector: v1,
-                        s: l * n + i,
-                    });
+                    terms.extend(both(setup.key(limb, m, l, i), [v0, v1], l * n + i));
                 }
             }
-            for (j, c) in negated.iter().enumerate() {
-                terms.push(Term {
-                    g: *c,
-                    vector: residue[m][0],
-                    s: j,
-                });
-                terms.push(Term {
-                    g: scaled(c, DIGIT),
-                    vector: residue[m][1],
-                    s: j,
-                });
+            for (j, &c) in negated.iter().enumerate() {
+                terms.extend(both(c, residue[m], j));
             }
             build.chain(
                 format!("limb {q} component {m}"),
@@ -681,22 +709,14 @@ fn build(
     let mut terms = Vec::with_capacity(8 * n + r);
     for l in 0..4 {
         for i in 0..n {
-            let g = binary::lift(&eq0[4 * i + l]);
-            terms.push(Term {
-                g,
-                vector: v0,
-                s: l * n + i,
-            });
-            terms.push(Term {
-                g: scaled(&g, DIGIT),
-                vector: v1,
-                s: l * n + i,
-            });
+            let g = build.blocks(&binary::lift(&eq0[4 * i + l]));
+            terms.extend(both(g, [v0, v1], l * n + i));
         }
     }
-    for (j, c) in negated.iter().enumerate() {
+    for (j, &c) in negated.iter().enumerate() {
         terms.push(Term {
-            g: *c,
+            blocks: c,
+            scale: 1,
             vector: u,
             s: j,
         });
@@ -709,7 +729,8 @@ fn build(
         .iter()
         .enumerate()
         .map(|(j, x)| Term {
-            g: binary::lift(x),
+            blocks: build.blocks(&binary::lift(x)),
+            scale: 1,
             vector: u,
             s: j,
         })
@@ -728,6 +749,8 @@ fn build(
         Relation {
             layout: build.layout,
             equations: build.equations,
+            polys: build.polys,
+            fixed: setup.polys.len(),
         },
         build.witness,
     ))
@@ -785,6 +808,13 @@ fn l2_cap(vector: &Vector) -> f64 {
     }
 }
 
+/// Does no element repeat within the diagonal? The per-vector rows below are exact only then.
+fn distinct(d: &Diagonal) -> bool {
+    let mut elements: Vec<usize> = d.entries.iter().map(|e| e.element).collect();
+    elements.sort_unstable();
+    elements.windows(2).all(|w| w[0] != w[1])
+}
+
 /// The largest integer magnitude any coefficient of any block equation's left side can reach for
 /// a witness within the caps: coefficient `t` is `sum_i <row_{t,i}, s_i>` over the vectors, at
 /// most `sum_i ‖row_{t,i}‖ cap_i` by Cauchy-Schwarz, `row_{t,i}` collecting the weight
@@ -799,20 +829,13 @@ pub fn no_wrap_bound(relation: &Relation) -> f64 {
     let mut rows = vec![[0f64; SUB + 1]; layout.vectors.len()];
     for eq in &relation.equations {
         for d in &eq.diagonals {
+            debug_assert!(distinct(d), "{}: an element repeats", eq.name);
             rows.iter_mut().for_each(|r| *r = [0f64; SUB + 1]);
-            debug_assert!(
-                {
-                    let mut seen: Vec<usize> = d.entries.iter().map(|(i, _)| *i).collect();
-                    seen.sort_unstable();
-                    seen.windows(2).all(|w| w[0] != w[1])
-                },
-                "{}: an element enters one diagonal twice, so Cauchy-Schwarz per vector is off",
-                eq.name
-            );
-            for (idx, w) in &d.entries {
-                let row = &mut rows[owner[*idx].expect("a claim reads a pad element")];
-                for (u, &x) in w.iter().enumerate() {
-                    row[u] += (x as f64) * (x as f64);
+            for e in &d.entries {
+                let row = &mut rows[owner[e.element].expect("a claim reads a pad element")];
+                for (u, &x) in relation.polys[e.poly].iter().enumerate() {
+                    let w = (e.scale * x) as f64;
+                    row[u] += w * w;
                 }
             }
             for t in 0..DEG {
@@ -860,6 +883,13 @@ pub fn check(relation: &Relation, witness: &Witness) -> Result<(), String> {
             }
         }
     }
+    if relation.fixed > relation.polys.len() {
+        return Err(format!(
+            "{} fixed polys of {}",
+            relation.fixed,
+            relation.polys.len()
+        ));
+    }
     let owner = owners(layout);
     let at = |idx: usize| -> Option<&Element> {
         let v = owner[idx]?;
@@ -869,20 +899,26 @@ pub fn check(relation: &Relation, witness: &Witness) -> Result<(), String> {
     for eq in &relation.equations {
         for (a, d) in eq.diagonals.iter().enumerate() {
             acc.fill(0);
-            for (idx, w) in &d.entries {
-                let x = at(*idx)
-                    .ok_or_else(|| format!("{} diagonal {a} reads pad element {idx}", eq.name))?;
-                if w.len() > SUB + 1 {
+            for e in &d.entries {
+                let x = at(e.element).ok_or_else(|| {
+                    format!("{} diagonal {a} reads pad element {}", eq.name, e.element)
+                })?;
+                let p = relation
+                    .polys
+                    .get(e.poly)
+                    .ok_or_else(|| format!("{} diagonal {a} reads poly {}", eq.name, e.poly))?;
+                if p.len() > SUB + 1 {
                     return Err(format!(
                         "{} diagonal {a}: a weight of degree {}",
                         eq.name,
-                        w.len() - 1
+                        p.len() - 1
                     ));
                 }
-                for (u, &c) in w.iter().enumerate() {
+                for (u, &c) in p.iter().enumerate() {
                     if c != 0 {
+                        let w = (e.scale * c) as i128;
                         for j in 0..DEG {
-                            acc[u + j] += c as i128 * x[j] as i128;
+                            acc[u + j] += w * x[j] as i128;
                         }
                     }
                 }

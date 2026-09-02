@@ -85,12 +85,20 @@ impl Layout {
     }
 }
 
+/// One term of a block equation: `scale * polys[poly]` times the committed element at `element`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub element: usize,
+    pub poly: usize,
+    pub scale: i64,
+}
+
 /// The weighted elements of one diagonal of one identity: `sum (weight * element) = output` as
 /// polynomials, every term of degree below `DEG`.
 #[derive(Clone, Debug)]
 pub struct Diagonal {
-    /// `(global index, weight)`; an index may repeat.
-    pub entries: Vec<(usize, Poly)>,
+    /// An element may repeat.
+    pub entries: Vec<Entry>,
     /// The `SUB` output coefficients of this diagonal.
     pub output: Poly,
 }
@@ -102,11 +110,16 @@ pub struct BlockEquations {
     pub diagonals: Vec<Diagonal>,
 }
 
-/// Everything the verifier rebuilds from public data: the layout and the block equations.
+/// Everything the verifier rebuilds from public data: the layout, the block equations, and the
+/// weight polynomials their entries index. The first `fixed` polynomials are the key's blocks,
+/// identical in every round and in the order the setup holds them, so a backend keeps their
+/// transformed form from key time; the rest come from the round's challenges, lifts and outputs.
 #[derive(Clone, Debug)]
 pub struct Relation {
     pub layout: Layout,
     pub equations: Vec<BlockEquations>,
+    pub polys: Vec<Poly>,
+    pub fixed: usize,
 }
 
 /// The honest committed values, one `Vec<Element>` per vector of the layout, `used` elements each.

@@ -160,9 +160,17 @@ witness, all at or above 128 bits; the tables in the doc comments say which.
 
 | shape | committed vector | proof | prover | verifier | LaBRADOR proof |
 |---|---|---|---|---|---|
-| small (2^18, 256 columns, 3889 + 9721) | 2^14 | 100.4 KB | 0.64 s | 0.14 s | 79.5 KB |
-| medium (2^20, 512 columns, 3889 + 9721) | 2^15 | 108.0 KB | 1.26 s | 0.28 s | |
-| large (2^22, 1024 columns, 3889 + 2917 + 4861) | 2^17 | 110.8 KB | 4.08 s | 0.79 s | |
+| small (2^18, 256 columns, 3889 + 9721) | 2^14 | 100.4 KB | 0.53 s | 0.08 s | 79.5 KB |
+| medium (2^20, 512 columns, 3889 + 9721) | 2^15 | 108.0 KB | 1.05 s | 0.16 s | |
+| large (2^22, 1024 columns, 3889 + 2917 + 4861) | 2^17 | 110.8 KB | 3.18 s | 0.52 s | |
+
+Everything that depends on the key alone is built at key time: the blocks of every twisted key
+row in NTT form (`Setup::polys`, 49152 at the small shape, 25 MB per limb), the expanded rows
+of the outer keys, the CRS. A round transforms only its own polynomials (challenge and lift
+blocks) and forms each table entry as a few multiply-adds under the powers of `rho`. At the
+small shape the verifier's 79 ms are the tables (34 ms, the linear read of the key), rokoko's
+`verify_claims` (15 ms), the no-wraparound bound (10 ms), rokoko's chain (6 ms) and the layout
+(3 ms). `ROKOKO_TIMINGS=1` prints the breakdown.
 
 Security on the real witness (`rokoko-hardness`), the lowest level of each chain: 137 bits for
 `N14`, 137 for `N15`, 134 for `N17` (all basic commitments of the root or a middle round; every

@@ -1,10 +1,11 @@
 #![cfg(feature = "rokoko")]
 use bin_ntt::rng::Rng;
 use bin_ntt::rokoko::claims::{
-    coefficients, commit_lift, commit_residues, committed, prove, ring, verify, Crs, Keys, Proof,
+    coefficients, commit_lift, commit_residues, committed, prove, ring, verify, Crs, Fixed, Keys,
+    Proof,
 };
 use bin_ntt::rokoko::{
-    BlockEquations, Cap, Diagonal, Element, Layout, Poly, Region, Relation, Vector, Witness,
+    BlockEquations, Cap, Diagonal, Element, Entry, Layout, Poly, Region, Relation, Vector, Witness,
     BLOCKS, DEG, SUB, SUPPORT,
 };
 use rokoko::common::ring_arithmetic::{Representation, RingElement};
@@ -95,11 +96,14 @@ const V: usize = 0;
 const C: usize = 1;
 const U: usize = 2;
 const LOOSE: usize = 5;
+/// Weight polynomials treated as the key's own, of `2 * BLOCKS * 3`.
+const FIXED: usize = 20;
 
 struct Fixture {
     relation: Relation,
     witness: Witness,
     keys: Keys,
+    fixed: Fixed,
     t_y: Vec<RingElement>,
     t_u: Vec<RingElement>,
     digest: [u8; 32],
@@ -142,7 +146,13 @@ fn witness(rng: &mut Rng) -> Witness {
     ]
 }
 
-fn equations(rng: &mut Rng, layout: &Layout, witness: &Witness) -> Vec<BlockEquations> {
+/// Two chains of `BLOCKS` diagonals, three entries each over a fresh weight polynomial, with a
+/// small scale; the outputs are the true sums.
+fn equations(
+    rng: &mut Rng,
+    layout: &Layout,
+    witness: &Witness,
+) -> (Vec<BlockEquations>, Vec<Poly>) {
     let readable: Vec<usize> = (0..3)
         .flat_map(|v| (0..layout.vectors[v].used).map(move |e| (v, e)))
         .filter(|&(v, e)| !(v == V && e == LOOSE))
@@ -156,32 +166,36 @@ fn equations(rng: &mut Rng, layout: &Layout, witness: &Witness) -> Vec<BlockEqua
             })
             .unwrap()
     };
-    (0..2)
+    let mut polys = Vec::new();
+    let equations = (0..2)
         .map(|c| BlockEquations {
             name: format!("chain {c}"),
             diagonals: (0..BLOCKS)
                 .map(|_| {
-                    let entries: Vec<(usize, Poly)> = (0..3)
+                    let entries: Vec<Entry> = (0..3)
                         .map(|_| {
-                            (
-                                readable[rng.below(readable.len() as u32) as usize],
-                                block(rng),
-                            )
+                            polys.push(block(rng));
+                            Entry {
+                                element: readable[rng.below(readable.len() as u32) as usize],
+                                poly: polys.len() - 1,
+                                scale: [-3, -1, 1, 2][rng.below(4) as usize],
+                            }
                         })
                         .collect();
                     let mut output = vec![0i64; DEG];
-                    for (i, w) in &entries {
-                        let v = owner(*i);
-                        let e = &witness[v][*i - layout.regions[v].start];
-                        for (o, p) in output.iter_mut().zip(product(w, e)) {
-                            *o += p;
+                    for entry in &entries {
+                        let v = owner(entry.element);
+                        let e = &witness[v][entry.element - layout.regions[v].start];
+                        for (o, p) in output.iter_mut().zip(product(&polys[entry.poly], e)) {
+                            *o += entry.scale * p;
                         }
                     }
                     Diagonal { entries, output }
                 })
                 .collect(),
         })
-        .collect()
+        .collect();
+    (equations, polys)
 }
 
 fn fixture(seed: u64, tamper: impl FnOnce(&mut Witness)) -> Fixture {
@@ -189,14 +203,21 @@ fn fixture(seed: u64, tamper: impl FnOnce(&mut Witness)) -> Fixture {
     let layout = layout();
     let mut witness = witness(&mut rng);
     tamper(&mut witness);
-    let equations = equations(&mut rng, &layout, &witness);
+    let (equations, polys) = equations(&mut rng, &layout, &witness);
     let keys = Keys::new(&layout, &[C], U, [7u8; 32], 2, 1);
     let t_y = commit_residues(&keys, &witness[C..=C]);
     let t_u = commit_lift(&keys, &witness[U]);
+    let fixed = Fixed::new(&polys[..FIXED]);
     Fixture {
-        relation: Relation { layout, equations },
+        relation: Relation {
+            layout,
+            equations,
+            polys,
+            fixed: FIXED,
+        },
         witness,
         keys,
+        fixed,
         t_y,
         t_u,
         digest: [3u8; 32],
@@ -209,6 +230,7 @@ impl Fixture {
             &self.relation,
             &self.witness,
             &self.keys,
+            &self.fixed,
             &self.t_y,
             &self.t_u,
             &CRS,
@@ -222,6 +244,7 @@ impl Fixture {
         verify(
             &self.relation,
             &self.keys,
+            &self.fixed,
             &self.t_y,
             &self.t_u,
             &CRS,

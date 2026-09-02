@@ -22,6 +22,7 @@ pub struct Setup {
     pub shape: config::Shape,
     pub config: Config,
     pub crs: claims::Crs,
+    pub fixed: claims::Fixed,
 }
 
 impl Setup {
@@ -60,6 +61,7 @@ impl Setup {
             Config::Sumcheck(c) => claims::Crs::new(c),
             _ => panic!("the chain starts with a sumcheck round"),
         };
+        let fixed = claims::Fixed::new(&relation.polys);
         Setup {
             relation,
             layout,
@@ -67,6 +69,7 @@ impl Setup {
             shape,
             config,
             crs,
+            fixed,
         }
     }
 
@@ -212,6 +215,7 @@ pub fn prove(
         &relation,
         &witness,
         &setup.keys,
+        &setup.fixed,
         t_y,
         t_u,
         &setup.crs,
@@ -234,7 +238,14 @@ pub fn verify(
     challenges: &FoldingChallenges,
     proof: &OpeningProof,
 ) -> Result<(), VerificationError> {
+    let clock = Instant::now();
     let relation = relation::layout(&setup.relation, challenges, point, claim);
+    if std::env::var_os("ROKOKO_TIMINGS").is_some() {
+        eprintln!(
+            "rokoko-timings layout {:.1} ms",
+            clock.elapsed().as_secs_f64() * 1e3
+        );
+    }
     if relation.layout != setup.layout {
         return Err(VerificationError::Rejected);
     }
@@ -242,6 +253,7 @@ pub fn verify(
     claims::verify(
         &relation,
         &setup.keys,
+        &setup.fixed,
         t_y,
         t_u,
         &setup.crs,
