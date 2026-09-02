@@ -22,7 +22,11 @@ fn main() {
     let base = modulus(&args[2]);
     let seed: u8 = args[3].parse().unwrap();
     let extra: Vec<Modulus> = args[4..].iter().map(|s| modulus(s)).collect();
-    let params = Params::with_base(witness_log, column_log, base, extra, true).unwrap();
+    let mut params = Params::with_base(witness_log, column_log, base, extra, true).unwrap();
+    #[cfg(feature = "rokoko")]
+    if std::env::var_os("ROKOKO").is_some() {
+        params = params.with_backend(bin_ntt::Backend::Rokoko);
+    }
     eprintln!(
         "shape: n {} r {} primes {:?}",
         params.witness_len() / params.columns() / 4,
@@ -40,6 +44,23 @@ fn main() {
     let row = witness.row_evaluate(&point);
     let left = prover.commit_left_expansion(&row);
     let challenges = verifier.derive_folding_challenges(&mut t, &left);
+    #[cfg(feature = "rokoko")]
+    if params.rokoko() {
+        let proof = prover
+            .prove_opening_rokoko(
+                &mut t,
+                opening,
+                &challenges,
+                &point,
+                &left,
+                &row,
+                &claim,
+                &commitment,
+            )
+            .expect("within cap");
+        eprintln!("proof {:.1} KB", proof.wire_bytes() as f64 / 1024.0);
+        return;
+    }
     let proof = prover
         .prove_opening(
             &mut t,

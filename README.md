@@ -276,6 +276,14 @@ same three take at two bytes a coefficient over its 331 776. `decode the opening
 two back off the wire, and the rows under it in that column check what it decoded. The stock
 total is its whole proof tape.
 
+## The rokoko backend
+
+`--features rokoko` (nightly) proves the same recursive opening with
+[rokoko](https://github.com/lattice-arguments/rokoko) instead of LaBRADOR: the relation is
+encoded as sumcheck claims over one committed vector of `Z_q[X]/(X^128 + 1)` elements, with a
+hand-drafted exact-norm chain per shape at 128 bits. `docs/rokoko.md` is the design note and
+holds the measured sizes; `cargo +nightly run --release --features rokoko,sizes` runs a round.
+
 ## Running it
 
 ```

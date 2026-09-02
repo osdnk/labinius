@@ -103,6 +103,15 @@ pub struct Params {
     /// Recurse the folded opening into LaBRADOR: the commitment becomes `T_Y`, the left expansion
     /// `T_u`, and the fold a proof of [`crate::recursion`]'s relation instead of `v` itself.
     pub recursion: bool,
+    /// Which proof system the recursion runs on.
+    pub backend: Backend,
+}
+
+/// The proof system of the recursive opening.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Backend {
+    Labrador,
+    Rokoko,
 }
 
 impl Params {
@@ -153,7 +162,17 @@ impl Params {
             base,
             extra_moduli,
             recursion,
+            backend: Backend::Labrador,
         })
+    }
+
+    pub fn with_backend(mut self, backend: Backend) -> Params {
+        self.backend = backend;
+        self
+    }
+
+    pub fn rokoko(&self) -> bool {
+        self.recursion && self.backend == Backend::Rokoko
     }
 
     /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
@@ -197,6 +216,8 @@ pub struct PublicParameters {
     matrix_seed: [u8; 32],
     key: Arc<CommitmentKey>,
     recursion: Option<Arc<recursion::setup::Setup>>,
+    #[cfg(feature = "rokoko")]
+    rokoko: Option<Arc<crate::rokoko::round::Setup>>,
 }
 
 impl PublicParameters {
@@ -212,7 +233,18 @@ impl PublicParameters {
             matrix_seed,
             key: Arc::new(key),
             recursion: None,
+            #[cfg(feature = "rokoko")]
+            rokoko: None,
         };
+        #[cfg(feature = "rokoko")]
+        if pp.params.rokoko() {
+            pp.rokoko = Some(Arc::new(crate::rokoko::round::Setup::new(&pp, matrix_seed)));
+            return pp;
+        }
+        assert!(
+            !pp.params.rokoko(),
+            "the rokoko backend needs the `rokoko` feature"
+        );
         if pp.params.recursion {
             let setup = recursion::setup::Setup::new(&pp, &pp.params.clone(), matrix_seed);
             let rank: usize = setup.ranks.iter().sum();
@@ -233,6 +265,11 @@ impl PublicParameters {
     }
 
     /// The key-time data of the recursion; `None` unless [`Params::recursion`] is set.
+    #[cfg(feature = "rokoko")]
+    pub fn rokoko(&self) -> Option<&Arc<crate::rokoko::round::Setup>> {
+        self.rokoko.as_ref()
+    }
+
     pub fn recursion(&self) -> Option<&Arc<recursion::setup::Setup>> {
         self.recursion.as_ref()
     }
@@ -338,7 +375,8 @@ impl Witness {
 /// The commitment: a `4 x columns()` matrix of `R_162` elements per modulus. Row `k` is the
 /// coefficient of `X^k` in the basis `1, X, X^2, X^3` of `R_648` over `R_162`, column `j` is the
 /// commitment of column `j` of the witness.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(not(feature = "rokoko"), derive(Eq))]
 pub struct Commitment {
     primes: Vec<u16>,
     columns: usize,
@@ -347,10 +385,13 @@ pub struct Commitment {
 
 /// The two forms a commitment takes: the matrix itself, or the Ajtai commitment `T_Y` to the
 /// residues of its columns, which is a few `polx` and is what the recursion sends.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(not(feature = "rokoko"), derive(Eq))]
 pub enum CommitmentValue {
     Matrix(VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>),
     Recursive(Arc<PolxBuf>),
+    #[cfg(feature = "rokoko")]
+    Rokoko(Arc<Vec<rokoko::common::ring_arithmetic::RingElement>>),
 }
 
 impl Commitment {
@@ -384,9 +425,7 @@ impl Commitment {
     pub fn matrix(&self) -> &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs> {
         match &self.value {
             CommitmentValue::Matrix(m) => m,
-            CommitmentValue::Recursive(_) => {
-                panic!("a recursive commitment is T_Y, not the matrix")
-            }
+            _ => panic!("a recursive commitment is T_Y, not the matrix"),
         }
     }
 
@@ -394,7 +433,15 @@ impl Commitment {
     pub fn t_y(&self) -> &Arc<PolxBuf> {
         match &self.value {
             CommitmentValue::Recursive(t) => t,
-            CommitmentValue::Matrix(_) => panic!("this commitment is the matrix, not T_Y"),
+            _ => panic!("this commitment is the matrix, not T_Y"),
+        }
+    }
+
+    #[cfg(feature = "rokoko")]
+    pub fn t_y_rokoko(&self) -> Option<&[rokoko::common::ring_arithmetic::RingElement]> {
+        match &self.value {
+            CommitmentValue::Rokoko(t) => Some(t),
+            _ => None,
         }
     }
 
@@ -419,6 +466,12 @@ impl Commitment {
                         }
                     }
                 }
+            }
+            #[cfg(feature = "rokoko")]
+            CommitmentValue::Rokoko(t) => {
+                out.push(2);
+                out.extend_from_slice(&(t.len() as u32).to_le_bytes());
+                out.extend_from_slice(&crate::rokoko::round::bytes(t));
             }
             CommitmentValue::Recursive(t) => {
                 out.push(1);
@@ -474,6 +527,8 @@ impl Commitment {
         match &self.value {
             CommitmentValue::Matrix(m) => crate::wire::commitment_bytes(&self.primes, m.cols()),
             CommitmentValue::Recursive(t) => t.len() * labrador::N * labrador::logq().div_ceil(8),
+            #[cfg(feature = "rokoko")]
+            CommitmentValue::Rokoko(t) => crate::rokoko::round::wire_bytes(t),
         }
     }
 }
@@ -484,6 +539,8 @@ impl Commitment {
 pub struct CommitmentOpening {
     aux: AuxData,
     residues: Option<recursion::limbs::Residues>,
+    #[cfg(feature = "rokoko")]
+    matrix: Option<VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>>,
 }
 
 impl CommitmentOpening {
@@ -641,18 +698,43 @@ impl FoldedCommitment {
 
 /// `T_u = Com_{H_u}(lift(u))`: what the prover sends in place of the left expansion, and what
 /// the folding challenges are derived from.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(not(feature = "rokoko"), derive(Eq))]
 pub struct LeftExpansionCommitment {
-    t_u: Arc<PolxBuf>,
+    t_u: LeftExpansionValue,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(not(feature = "rokoko"), derive(Eq))]
+enum LeftExpansionValue {
+    Labrador(Arc<PolxBuf>),
+    #[cfg(feature = "rokoko")]
+    Rokoko(Arc<Vec<rokoko::common::ring_arithmetic::RingElement>>),
 }
 
 impl LeftExpansionCommitment {
     pub fn t_u(&self) -> &Arc<PolxBuf> {
-        &self.t_u
+        match &self.t_u {
+            LeftExpansionValue::Labrador(t) => t,
+            #[cfg(feature = "rokoko")]
+            LeftExpansionValue::Rokoko(_) => panic!("this T_u is rokoko's"),
+        }
+    }
+
+    #[cfg(feature = "rokoko")]
+    pub fn t_u_rokoko(&self) -> Option<&[rokoko::common::ring_arithmetic::RingElement]> {
+        match &self.t_u {
+            LeftExpansionValue::Rokoko(t) => Some(t),
+            LeftExpansionValue::Labrador(_) => None,
+        }
     }
 
     pub fn wire_bytes(&self) -> usize {
-        self.t_u.len() * labrador::N * labrador::logq().div_ceil(8)
+        match &self.t_u {
+            LeftExpansionValue::Labrador(t) => t.len() * labrador::N * labrador::logq().div_ceil(8),
+            #[cfg(feature = "rokoko")]
+            LeftExpansionValue::Rokoko(t) => crate::rokoko::round::wire_bytes(t),
+        }
     }
 }
 
@@ -677,7 +759,13 @@ impl FoldingSource for RowEvaluation {
 impl FoldingSource for LeftExpansionCommitment {
     fn absorb(&self, transcript: &mut Transcript) {
         transcript.absorb_bytes(b"bin-ntt/left-expansion-commitment");
-        transcript.absorb_bytes(self.t_u.as_bytes());
+        match &self.t_u {
+            LeftExpansionValue::Labrador(t) => transcript.absorb_bytes(t.as_bytes()),
+            #[cfg(feature = "rokoko")]
+            LeftExpansionValue::Rokoko(t) => {
+                transcript.absorb_bytes(&crate::rokoko::round::bytes(t))
+            }
+        }
     }
 }
 
@@ -768,6 +856,8 @@ pub enum OpeningError {
     GadgetOverflow(recursion::Overflow),
     /// LaBRADOR refused the statement or the witness.
     Labrador(String),
+    /// rokoko refused the statement or the witness.
+    Rokoko(String),
 }
 
 impl fmt::Display for OpeningError {
@@ -782,6 +872,7 @@ impl fmt::Display for OpeningError {
                 o.chain, o.magnitude, o.gadget.levels, o.gadget.base
             ),
             OpeningError::Labrador(e) => write!(f, "LaBRADOR refused the opening: {e}"),
+            OpeningError::Rokoko(e) => write!(f, "rokoko refused the opening: {e}"),
         }
     }
 }
@@ -816,6 +907,8 @@ pub struct Prover {
     params: Params,
     key: Arc<CommitmentKey>,
     setup: Option<Arc<recursion::setup::Setup>>,
+    #[cfg(feature = "rokoko")]
+    rokoko: Option<Arc<crate::rokoko::round::Setup>>,
     workspace: Option<AuxData>,
 }
 
@@ -827,6 +920,8 @@ impl Prover {
             params: pp.params.clone(),
             key: pp.key.clone(),
             setup: pp.recursion.clone(),
+            #[cfg(feature = "rokoko")]
+            rokoko: pp.rokoko.clone(),
             workspace: None,
         };
         let verifier = Verifier::new(pp);
@@ -859,6 +954,22 @@ impl Prover {
             .commit_into_aux(&witness.elements, self.params.columns(), &mut aux);
         let columns = matrix.cols();
         let primes = self.params.primes();
+        #[cfg(feature = "rokoko")]
+        if let Some(setup) = &self.rokoko {
+            let t_y = crate::rokoko::round::commit(setup, &matrix);
+            return (
+                Commitment {
+                    primes,
+                    columns,
+                    value: CommitmentValue::Rokoko(Arc::new(t_y)),
+                },
+                CommitmentOpening {
+                    aux,
+                    residues: None,
+                    matrix: Some(matrix),
+                },
+            );
+        }
         let (value, residues) = match &self.setup {
             None => (CommitmentValue::Matrix(matrix), None),
             Some(setup) => {
@@ -876,13 +987,26 @@ impl Prover {
                 columns,
                 value,
             },
-            CommitmentOpening { aux, residues },
+            CommitmentOpening {
+                aux,
+                residues,
+                #[cfg(feature = "rokoko")]
+                matrix: None,
+            },
         )
     }
 
     /// `T_u = Com_{H_u}(lift(u))`, the message the folding challenges are derived from when the
     /// left expansion is not sent.
     pub fn commit_left_expansion(&self, row: &RowEvaluation) -> LeftExpansionCommitment {
+        #[cfg(feature = "rokoko")]
+        if let Some(setup) = &self.rokoko {
+            return LeftExpansionCommitment {
+                t_u: LeftExpansionValue::Rokoko(Arc::new(crate::rokoko::round::commit_lift(
+                    setup, row,
+                ))),
+            };
+        }
         let setup = self.setup.as_ref().expect("recursion is off");
         let mut u = vec![0i16; setup.ranks[recursion::U] * labrador::N];
         let lifts: Vec<[recursion::Poly; recursion::CHUNKS]> = row
@@ -897,7 +1021,7 @@ impl Prover {
             }
         }
         LeftExpansionCommitment {
-            t_u: Arc::new(setup.key_u.commit_blocks(&[&u])),
+            t_u: LeftExpansionValue::Labrador(Arc::new(setup.key_u.commit_blocks(&[&u]))),
         }
     }
 
@@ -917,12 +1041,44 @@ impl Prover {
         FoldedWitness { elements }
     }
 
+    /// The fold, the encoding of [`crate::rokoko::relation`], and one rokoko proof of the whole
+    /// relation.
+    #[cfg(feature = "rokoko")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_opening_rokoko(
+        &mut self,
+        transcript: &mut Transcript,
+        mut opening: CommitmentOpening,
+        challenges: &FoldingChallenges,
+        point: &EvaluationPoint,
+        left: &LeftExpansionCommitment,
+        row: &RowEvaluation,
+        claimed_value: &F162,
+        commitment: &Commitment,
+    ) -> Result<crate::rokoko::round::OpeningProof, OpeningError> {
+        let setup = self.rokoko.clone().expect("the rokoko backend is off");
+        let matrix = opening.matrix.take().expect("the opening holds no matrix");
+        let folded = self.fold(opening, challenges);
+        crate::rokoko::round::prove(
+            &setup,
+            transcript,
+            &matrix,
+            &folded,
+            row,
+            challenges,
+            point,
+            claimed_value,
+            commitment.t_y_rokoko().expect("a rokoko T_Y"),
+            left.t_u_rokoko().expect("a rokoko T_u"),
+        )
+    }
+
     /// The fold, the encoding of [`crate::recursion`], `T_R`, the exact norms, the mask scalars,
     /// and one LaBRADOR proof of the whole relation.
     pub fn prove_opening(
         &mut self,
         transcript: &mut Transcript,
-        opening: CommitmentOpening,
+        mut opening: CommitmentOpening,
         challenges: &FoldingChallenges,
         point: &EvaluationPoint,
         left: &LeftExpansionCommitment,
@@ -931,17 +1087,13 @@ impl Prover {
         commitment: &Commitment,
     ) -> Result<OpeningProof, OpeningError> {
         let setup = self.setup.clone().expect("recursion is off");
-        let CommitmentOpening { aux, residues } = opening;
-        let residues = residues.expect("the opening holds no residues");
+        let residues = opening
+            .residues
+            .take()
+            .expect("the opening holds no residues");
         let mut timings = OpeningTimings::default();
         let clock = Instant::now();
-        let folded = self.fold(
-            CommitmentOpening {
-                aux,
-                residues: None,
-            },
-            challenges,
-        );
+        let folded = self.fold(opening, challenges);
         timings.fold = clock.elapsed();
         let normsq: u64 = folded
             .elements
@@ -996,7 +1148,7 @@ impl Prover {
         let phi_bytes = phi.footprint();
         let opening = recursion::statement::Opening {
             t_y: commitment.t_y(),
-            t_u: &left.t_u,
+            t_u: left.t_u(),
             t_r: &t_r,
             norms: &norms,
         };
@@ -1050,6 +1202,8 @@ pub struct Verifier {
     matrix_seed: [u8; 32],
     key: Arc<CommitmentKey>,
     setup: Option<Arc<recursion::setup::Setup>>,
+    #[cfg(feature = "rokoko")]
+    rokoko: Option<Arc<crate::rokoko::round::Setup>>,
 }
 
 impl Verifier {
@@ -1059,7 +1213,36 @@ impl Verifier {
             matrix_seed: pp.matrix_seed,
             key: pp.key.clone(),
             setup: pp.recursion.clone(),
+            #[cfg(feature = "rokoko")]
+            rokoko: pp.rokoko.clone(),
         }
+    }
+
+    /// The recursive opening check over rokoko: the layout, the no-wraparound bound and the
+    /// claims rebuilt from public data, then rokoko's own verifier.
+    #[cfg(feature = "rokoko")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_opening_rokoko(
+        &self,
+        transcript: &mut Transcript,
+        commitment: &Commitment,
+        left: &LeftExpansionCommitment,
+        point: &EvaluationPoint,
+        claimed_value: &F162,
+        challenges: &FoldingChallenges,
+        proof: &crate::rokoko::round::OpeningProof,
+    ) -> Result<(), VerificationError> {
+        let setup = self.rokoko.as_ref().ok_or(VerificationError::Rejected)?;
+        crate::rokoko::round::verify(
+            setup,
+            transcript,
+            commitment.t_y_rokoko().ok_or(VerificationError::Rejected)?,
+            left.t_u_rokoko().ok_or(VerificationError::Rejected)?,
+            point,
+            claimed_value,
+            challenges,
+            proof,
+        )
     }
 
     /// The shape, the moduli, the key seed and — with recursion on — LaBRADOR's modulus, absorbed
@@ -1072,8 +1255,15 @@ impl Verifier {
             transcript.absorb_u64(q as u64);
         }
         transcript.absorb_u64(u64::from(self.params.recursion));
+        transcript.absorb_u64(self.params.backend as u64);
         if self.params.recursion {
-            transcript.absorb_u64(labrador::logq() as u64);
+            transcript.absorb_u64(match self.params.backend {
+                Backend::Labrador => labrador::logq() as u64,
+                #[cfg(feature = "rokoko")]
+                Backend::Rokoko => rokoko::common::config::MOD_Q,
+                #[cfg(not(feature = "rokoko"))]
+                Backend::Rokoko => panic!("the rokoko backend needs the `rokoko` feature"),
+            });
         }
         transcript.absorb_bytes(&self.matrix_seed);
     }
@@ -1095,6 +1285,8 @@ impl Verifier {
                 }
             }
             CommitmentValue::Recursive(t) => transcript.absorb_bytes(t.as_bytes()),
+            #[cfg(feature = "rokoko")]
+            CommitmentValue::Rokoko(t) => transcript.absorb_bytes(&crate::rokoko::round::bytes(t)),
         }
         let (rows, cols) = (
             self.params.row_log_len() as usize,
@@ -1346,7 +1538,7 @@ impl Verifier {
         timings.phi = clock.elapsed();
         let opening = recursion::statement::Opening {
             t_y: commitment.t_y(),
-            t_u: &left.t_u,
+            t_u: left.t_u(),
             t_r: &proof.t_r,
             norms: &proof.norms,
         };

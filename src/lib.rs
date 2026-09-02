@@ -37,6 +37,8 @@ pub mod labrador;
 pub mod params;
 pub mod recursion;
 pub mod rng;
+#[cfg(feature = "rokoko")]
+pub mod rokoko;
 pub mod scalar;
 pub mod scheme;
 pub mod simd;
@@ -48,7 +50,7 @@ pub use api::PowerOfThreeRingElement as RingElement162;
 pub use challenge::Transcript;
 pub use fields::scalar::F162;
 pub use scheme::{
-    Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
+    Backend, Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
     FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, OpeningError,
     OpeningProof, OpeningTimings, ParamError, Params, Prover, PublicParameters, RowEvaluation,
     VerificationError, Verifier, VerifyTimings, Witness, WitnessError,

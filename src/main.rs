@@ -152,15 +152,21 @@ fn main() {
 
     pin(CPU);
     stats();
-    #[cfg(feature = "labrador")]
+    #[cfg(feature = "rokoko")]
+    {
+        recursive_rokoko();
+    }
+    #[cfg(all(feature = "labrador", not(feature = "rokoko")))]
     {
         recursive();
     }
-    #[cfg(not(feature = "labrador"))]
+    #[cfg(not(any(feature = "labrador", feature = "rokoko")))]
     {
         plain();
     }
     println!("\npeak resident set: {:.0} MB", peak_rss());
+    #[cfg(feature = "rokoko-calibration")]
+    rokoko::common::norms::calibration::print_table();
 }
 
 fn shape(recursion: bool) -> Params {
@@ -507,6 +513,116 @@ fn recursive() {
         "verification: {}",
         match verified {
             Ok(_) => "accepted".to_string(),
+            Err(e) => format!("rejected ({e})"),
+        }
+    );
+}
+
+#[cfg(feature = "rokoko")]
+fn recursive_rokoko() {
+    use bin_ntt::Backend;
+    let params = shape(true).with_backend(Backend::Rokoko);
+    let (setup_ms, public_parameters) =
+        once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
+    let setup = public_parameters.rokoko().expect("rokoko is on").clone();
+    let witness = Witness::random(&params, WITNESS_SEED);
+    let mut prover = Prover::new(&public_parameters);
+    let verifier = Verifier::new(&public_parameters);
+
+    let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
+
+    let mut transcript = Transcript::new(b"bin-ntt/reference");
+    let start = transcript.clone();
+    let (evaluation_point_ms, evaluation_point) = median_of(3, || {
+        transcript = start.clone();
+        verifier.derive_evaluation_point(&mut transcript, &commitment)
+    });
+    let (mle_ms, claimed_value) = median_of(3, || witness.mle_evaluate(&evaluation_point));
+    let (row_evaluate_ms, row_evaluation) =
+        median_of(3, || witness.row_evaluate(&evaluation_point));
+    let (left_ms, left) = median_of(3, || prover.commit_left_expansion(&row_evaluation));
+    let after_point = transcript.clone();
+    let (challenges_ms, folding_challenges) = median_of(3, || {
+        transcript = after_point.clone();
+        verifier.derive_folding_challenges(&mut transcript, &left)
+    });
+
+    let mut check = transcript.clone();
+    let (prove_ms, proof) = once(|| {
+        prover
+            .prove_opening_rokoko(
+                &mut transcript,
+                opening,
+                &folding_challenges,
+                &evaluation_point,
+                &left,
+                &row_evaluation,
+                &claimed_value,
+                &commitment,
+            )
+            .expect("the honest fold is within its gadgets")
+    });
+    let (verify_ms, verified) = once(|| {
+        verifier.verify_opening_rokoko(
+            &mut check,
+            &commitment,
+            &left,
+            &evaluation_point,
+            &claimed_value,
+            &folding_challenges,
+            &proof,
+        )
+    });
+
+    println!("\n=== recursion on, rokoko ===");
+    println!(
+        "witness: 2^{} F162 = {} ring elements of R_648, {} columns of {} F162",
+        params.witness_log_len,
+        params.witness_len() / 4,
+        params.columns(),
+        params.witness_len() / params.columns()
+    );
+    println!(
+        "  committed vector: {} elements of Z_q[X]/(X^128+1), {} vectors, chain {:?}",
+        setup.layout.len,
+        setup.layout.vectors.len(),
+        setup.shape
+    );
+    row("public parameters", setup_ms);
+
+    println!("\nPROVER");
+    row("commit (with T_Y)", commit_ms);
+    row("row_evaluate", row_evaluate_ms);
+    row("commit_left_expansion", left_ms);
+    row("prove_opening", prove_ms);
+    row("  encoding", duration_ms(proof.timings.encoding));
+    row("  rokoko", duration_ms(proof.timings.rokoko));
+    row("total", commit_ms + row_evaluate_ms + left_ms + prove_ms);
+
+    println!("\nSTATEMENT");
+    row("derive_evaluation_point", evaluation_point_ms);
+    row("mle_evaluate", mle_ms);
+    row("total", evaluation_point_ms + mle_ms);
+
+    println!("\nVERIFIER");
+    row("derive_folding_challenges", challenges_ms);
+    row("verify_opening", verify_ms);
+    row("total", challenges_ms + verify_ms);
+
+    println!(
+        "\nwire: T_Y {:.1} KB, T_u {:.1} KB, opening {:.1} KB",
+        commitment.wire_bytes() as f64 / 1024.0,
+        left.wire_bytes() as f64 / 1024.0,
+        proof.wire_bytes() as f64 / 1024.0
+    );
+    println!(
+        "proof: {:.1} KB total",
+        (commitment.wire_bytes() + left.wire_bytes() + proof.wire_bytes()) as f64 / 1024.0
+    );
+    println!(
+        "verification: {}",
+        match verified {
+            Ok(()) => "accepted".to_string(),
             Err(e) => format!("rejected ({e})"),
         }
     );
