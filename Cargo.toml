@@ -18,8 +18,8 @@ binius-frontend = { git = "https://github.com/IrreducibleOSS/binius64", rev = "3
 binius-field = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }
 binius-math = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }
 binius-compute = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }
-# The rokoko backend of the recursive opening, on rokoko's branch with enforced norm bounds; nightly.
-rokoko = { git = "ssh://git@github.com/lattice-arguments/rokoko.git", branch = "bin-ntt-hard-norms", optional = true, default-features = false, features = ["incomplete-rexl", "unsafe-sumcheck"] }
+# The rokoko backend of the recursive opening: rokoko main with enforced norm bounds (#111); nightly.
+rokoko = { git = "ssh://git@github.com/lattice-arguments/rokoko.git", rev = "69b94bc16fb9ae1a59a5c4b96d58eed2a651783f", optional = true, default-features = false, features = ["incomplete-rexl", "unsafe-sumcheck"] }
 binius-transcript = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }
 binius-ip = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }
 binius-ip-prover = { git = "https://github.com/IrreducibleOSS/binius64", rev = "32d8cd07de4eb2dd38e54f5a8a1e26fedc307933" }

@@ -2,8 +2,7 @@
 
 This note fixes the design of `src/rokoko`, the second backend of the recursive opening. It proves
 the relation of `src/recursion` with [rokoko](https://github.com/lattice-arguments/rokoko) (a git
-dependency on its branch `bin-ntt-hard-norms`, behind the `rokoko` feature, nightly only) instead
-of LaBRADOR. Read `docs/snark.md` in that repository first: everything below is written against
+dependency pinned to its `main`, behind the `rokoko` feature, nightly only) instead of LaBRADOR. Read `docs/snark.md` in that repository first: everything below is written against
 its claim language.
 
 ## The relation
@@ -130,9 +129,10 @@ Conjugates make it a two-opening statement, so the chain is compiled for `nof_op
   argument of `chain.rs`, and the `S`-identities follow.
 - The caps are exact statements about the extracted witness: rokoko's exact-norm chain certifies
   the aggregate `l2` norm, which keeps every shipped constant coefficient below `q / 2`. This
-  needs the chain's norm bounds to be *enforced*: on rokoko's `main` `assert_norm_bounded` only
-  reports a violation, so the dependency is its branch `bin-ntt-hard-norms`, where a norm over
-  its bound rejects the proof unless the `soft-norms` feature (implied by `calibration`) is on.
+  needs the chain's norm bounds to be *enforced*: rokoko's `assert_norm_bounded` used to only
+  report a violation; since lattice-arguments/rokoko#111 a norm over its bound rejects the proof
+  unless the `soft-norms` feature (implied by `calibration`) is on, and the dependency is pinned
+  past that commit.
 - `T_Y` and `T_u` bind under Module-SIS at length twice the residue and lift caps; their ranks
   come from rokoko's estimator (`common::estimator::estimate_rsis_security`) at 128 bits.
 - The chain's own commitments and openings are estimated per level by rokoko's `debug-hardness`
