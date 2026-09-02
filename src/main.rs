@@ -107,25 +107,134 @@ fn stats() {
 }
 
 fn main() {
+    let is_sizes: bool = {
+        #[cfg(feature = "sizes")]
+        {
+            println!("=== sizes feature enabled ===");
+            true
+        }
+        #[cfg(not(feature = "sizes"))]
+        {
+            false
+        }
+    };
+
+    let is_sizem: bool = {
+        #[cfg(feature = "sizem")]
+        {
+            println!("=== sizem feature enabled ===");
+            true
+        }
+        #[cfg(not(feature = "sizem"))]
+        {
+            false
+        }
+    };
+
+    let is_sizel: bool = {
+        #[cfg(feature = "sizel")]
+        {
+            println!("=== sizel feature enabled ===");
+            true
+        }
+        #[cfg(not(feature = "sizel"))]
+        {
+            false
+        }
+    };
+
+    let sizes = (is_sizes as u8) + (is_sizem as u8) + (is_sizel as u8);
+    if sizes != 1 {
+        panic!("only one of the features `sizes`, `sizem`, or `sizel` must be enabled at once");
+    }
+
+
+
     pin(CPU);
     stats();
-    plain();
-    recursive();
+    #[cfg(feature = "labrador")]
+    {
+        recursive();
+    }
+    #[cfg(not(feature = "labrador"))]
+    {
+        plain();
+    }
     println!("\npeak resident set: {:.0} MB", peak_rss());
 }
 
 fn shape(recursion: bool) -> Params {
-    Params::new(
-        WITNESS_LOG_LEN,
-        if recursion {
-            COLUMN_LOG_LEN_RECURSIVE
-        } else {
-            COLUMN_LOG_LEN_CLEAR
-        },
-        EXTRA_MODULI.to_vec(),
-        recursion,
-    )
-    .expect("valid parameters")
+    if recursion {
+        #[cfg(feature = "sizes")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN,
+                COLUMN_LOG_LEN_RECURSIVE,
+                Modulus::Q3889_FS_S,
+                vec![Modulus::Q9721_FS_S],
+                true,
+            )
+            .expect("valid parameters")
+        }
+        #[cfg(feature = "sizem")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN + 2,
+                COLUMN_LOG_LEN_RECURSIVE + 1,
+                Modulus::Q3889_FS_S,
+                vec![Modulus::Q9721_FS_S],
+                true,
+            )
+            .expect("valid parameters")
+        }
+        #[cfg(feature = "sizel")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN + 4,
+                COLUMN_LOG_LEN_RECURSIVE + 2,
+                Modulus::Q17497_FS_L,
+                vec![Modulus::Q19441_FS_L], 
+                true,
+            )
+            .expect("valid parameters");
+        }
+        panic!("you should never be here");
+    } else {
+        #[cfg(feature = "sizes")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN,
+                COLUMN_LOG_LEN_CLEAR,
+                Modulus::Q3889_FS_S,
+                vec![Modulus::Q9721_FS_S],
+                false,
+            )
+            .expect("valid parameters")
+        }
+        #[cfg(feature = "sizem")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN + 2,
+                COLUMN_LOG_LEN_CLEAR + 1,
+                Modulus::Q3889_FS_S,
+                vec![Modulus::Q9721_FS_S],
+                false,
+            )
+            .expect("valid parameters")
+        }
+        #[cfg(feature = "sizel")]
+        {
+            return Params::with_base(
+                WITNESS_LOG_LEN + 4,
+                COLUMN_LOG_LEN_CLEAR + 2,
+                Modulus::Q17497_FS_L,
+                vec![Modulus::Q19441_FS_L],
+                false,
+            )
+            .expect("valid parameters");
+        }
+        panic!("you should never be here");
+    }
 }
 
 fn plain() {
@@ -140,15 +249,15 @@ fn plain() {
 
     let mut transcript = Transcript::new(b"bin-ntt/reference");
     let start = transcript.clone();
-    let (evaluation_point_ms, evaluation_point) = median_of(3, || {
+    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
         transcript = start.clone();
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
-    let (mle_ms, claimed_value) = median_of(3, || witness.mle_evaluate(&evaluation_point));
+    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
     let (row_evaluate_ms, row_evaluation) =
-        median_of(3, || witness.row_evaluate(&evaluation_point));
+        median_of(10, || witness.row_evaluate(&evaluation_point));
     let after_point = transcript.clone();
-    let (challenges_ms, folding_challenges) = median_of(3, || {
+    let (challenges_ms, folding_challenges) = median_of(10, || {
         transcript = after_point.clone();
         verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
     });
@@ -157,10 +266,15 @@ fn plain() {
 
     // What the prover puts on the wire, and what the verifier takes off it: everything below
     // this point runs against the decoded objects, so the round trip is on the real path.
-    let commitment_wire = wire::pack_commitment(&commitment);
-    let row_wire = wire::pack_row_evaluation(&row_evaluation);
-    let fold_wire = wire::encode(&folded_witness, params.base.prime());
-    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(3, || {
+    let (pack_ms, (commitment_wire, row_wire)) = median_of(10, || {
+        (
+            wire::pack_commitment(&commitment),
+            wire::pack_row_evaluation(&row_evaluation),
+        )
+    });
+    let (encode_ms, fold_wire) =
+        median_of(10, || wire::encode(&folded_witness, params.base.prime()));
+    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(10, || {
         (
             wire::unpack_commitment(&params, &commitment_wire).expect("a commitment off the wire"),
             wire::unpack_row_evaluation(&row_wire, params.columns())
@@ -169,16 +283,16 @@ fn plain() {
         )
     });
 
-    let (fold_commitment_ms, folded_commitment) = median_of(3, || {
+    let (fold_commitment_ms, folded_commitment) = median_of(10, || {
         verifier.fold_commitment(&commitment, &folding_challenges)
     });
-    let (fold_row_ms, folded_row_value) = median_of(3, || {
+    let (fold_row_ms, folded_row_value) = median_of(10, || {
         verifier.fold_row_evaluation(&row_evaluation, &folding_challenges)
     });
-    let (verify_evaluation_ms, evaluation_ok) = median_of(3, || {
+    let (verify_evaluation_ms, evaluation_ok) = median_of(10, || {
         verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
     });
-    let (verify_opening_ms, opening_ok) = median_of(3, || {
+    let (verify_opening_ms, opening_ok) = median_of(10, || {
         verifier.verify_folded_opening(
             &folded_commitment,
             &folded_witness,
@@ -211,7 +325,10 @@ fn plain() {
     row("commit", commit_ms);
     row("row_evaluate", row_evaluate_ms);
     row("fold", fold_ms);
-    row("total", commit_ms + row_evaluate_ms + fold_ms);
+    row("pack commitment, row", pack_ms);
+    row("encode folded witness", encode_ms);
+    row("total", commit_ms + row_evaluate_ms + fold_ms + pack_ms + encode_ms);
+    row("total except encode", commit_ms + row_evaluate_ms + fold_ms + pack_ms);
 
     println!("\nSTATEMENT");
     row("derive_evaluation_point", evaluation_point_ms);
@@ -234,11 +351,21 @@ fn plain() {
             + verify_evaluation_ms
             + verify_opening_ms,
     );
+        row(
+        "total except decode",
+        challenges_ms
+            // + decode_ms
+            + fold_commitment_ms
+            + fold_row_ms
+            + verify_evaluation_ms
+            + verify_opening_ms,
+    );
     println!(
-        "\nwire: commitment {:.1} KB, row evaluation {:.1} KB, folded witness {:.1} KB",
+        "\nwire: commitment {:.1} KB, row evaluation {:.1} KB, folded witness {:.1} KB, TOTAL {:.1} KB",
         commitment_wire.len() as f64 / 1024.0,
         row_wire.len() as f64 / 1024.0,
-        fold_wire.len() as f64 / 1024.0
+        fold_wire.len() as f64 / 1024.0,
+        (commitment_wire.len() + row_wire.len() + fold_wire.len()) as f64 / 1024.0
     );
     println!(
         "verification: {}",
@@ -265,16 +392,16 @@ fn recursive() {
 
     let mut transcript = Transcript::new(b"bin-ntt/reference");
     let start = transcript.clone();
-    let (evaluation_point_ms, evaluation_point) = median_of(3, || {
+    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
         transcript = start.clone();
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
-    let (mle_ms, claimed_value) = median_of(3, || witness.mle_evaluate(&evaluation_point));
+    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
     let (row_evaluate_ms, row_evaluation) =
-        median_of(3, || witness.row_evaluate(&evaluation_point));
-    let (left_ms, left) = median_of(3, || prover.commit_left_expansion(&row_evaluation));
+        median_of(10, || witness.row_evaluate(&evaluation_point));
+    let (left_ms, left) = median_of(10, || prover.commit_left_expansion(&row_evaluation));
     let after_point = transcript.clone();
-    let (challenges_ms, folding_challenges) = median_of(3, || {
+    let (challenges_ms, folding_challenges) = median_of(10, || {
         transcript = after_point.clone();
         verifier.derive_folding_challenges(&mut transcript, &left)
     });
