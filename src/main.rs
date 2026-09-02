@@ -192,8 +192,8 @@ fn shape(recursion: bool) -> Params {
             return Params::with_base(
                 WITNESS_LOG_LEN + 4,
                 COLUMN_LOG_LEN_RECURSIVE + 2,
-                Modulus::Q17497_FS_L,
-                vec![Modulus::Q19441_FS_L], 
+                Modulus::Q3889_FS_S,
+                vec![Modulus::Q2917_Q_S,Modulus::Q4861_Q_S], 
                 true,
             )
             .expect("valid parameters");
