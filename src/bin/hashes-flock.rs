@@ -23,7 +23,7 @@ fn once<T>(f: impl FnOnce() -> T) -> (f64, T) {
     (start.elapsed().as_secs_f64() * 1e3, value)
 }
 
-fn row(name: &str, values: [Option<f64>; 3], unit: &str) {
+fn row(name: &str, values: [Option<f64>; 4], unit: &str) {
     print!("  {name:<32}");
     for value in values {
         match value {
@@ -63,16 +63,38 @@ fn compare(hash: Hash) {
     let (setup_ms, instance) = once(|| Instance::new(hash));
     let (witness_ms, witness) = once(|| instance.witness());
 
-    let (stock_prove, (stock_proof, stock_commitment, _)) = once(|| {
+    let (union_prove, (union_proof, union_commitment, _)) = once(|| {
         let mut ch = FsChallenger::new(bin_ntt::flock::DOMAIN);
         instance.stock_prove(&mut ch)
     });
-    let (stock_verify, stock_ok) = once(|| {
+    let (union_verify, union_ok) = once(|| {
         let mut ch = FsChallenger::new(bin_ntt::flock::DOMAIN);
-        instance.stock_verify(&stock_commitment, &stock_proof, &mut ch)
+        instance.stock_verify(&union_commitment, &union_proof, &mut ch)
     });
-    stock_ok.expect("stock flock verifies its own proof");
-    let stock_size = encoded(&stock_proof) + encoded(&stock_commitment);
+    union_ok.expect("stock flock verifies its own proof");
+    let union_size = encoded(&union_proof) + encoded(&union_commitment);
+    drop(union_proof);
+
+    let core_params = instance.core_params();
+    let mut ch = FsChallenger::new(bin_ntt::flock::DOMAIN);
+    let core_witness = instance.witness();
+    let (core_reduce, core) = once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
+    let (core_open, core_proof) = once(|| instance.core_open(&core_params, core, &mut ch));
+    let mut ch = FsChallenger::new(bin_ntt::flock::DOMAIN);
+    let (core_verify_reduce, core_claims) =
+        once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
+    let core_claims = core_claims.expect("stock flock replays its own reductions");
+    let (core_verify_open, core_ok) =
+        once(|| instance.core_verify_open(&core_params, &core_proof, &core_claims, &mut ch));
+    core_ok.expect("stock flock verifies its own opening");
+    let core_sizes = Sizes {
+        commitment: core_proof.commitment.cap.len() * 32,
+        zerocheck: encoded(&core_proof.zerocheck),
+        lincheck: encoded(&core_proof.lincheck),
+        switch: encoded(&core_proof.open.ring_switches) + encoded(&core_proof.open.batching_nonces),
+        opening: encoded(&core_proof.open.ligerito),
+    };
+    drop(core_proof);
 
     let (off_setup, mut off) = once(|| Session::new(false, MATRIX_SEED));
     let (on_setup, mut on) = once(|| Session::new(true, MATRIX_SEED));
@@ -101,11 +123,18 @@ fn compare(hash: Hash) {
     );
     let params = instance.pcs_params();
     println!(
-        "stock flock at the setup's defaults: log_inv_rate {LOG_INV_RATE}, profile {:?}, \
-         Ligerito over the union commit of dense m = {} in {} F128",
+        "stock union: log_inv_rate {LOG_INV_RATE}, profile {:?}, Ligerito over the compacted \
+         stack, dense m = {} in {} F128",
         params.profile,
         params.m,
         params.msg_len_f128()
+    );
+    println!(
+        "stock core:  log_inv_rate {LOG_INV_RATE}, profile {:?}, Ligerito over the padded \
+         buffer, m = {} in {} F128",
+        core_params.profile,
+        core_params.m,
+        core_params.msg_len_f128()
     );
     let moduli = |session: &Session| {
         let p = session.params();
@@ -129,54 +158,77 @@ fn compare(hash: Hash) {
         moduli(&on)
     );
     println!(
-        "\n  {:<32}{:>13}{:>13}{:>13}",
-        "", "stock", "recursion", "recursion"
+        "\n  {:<32}{:>13}{:>13}{:>13}{:>13}",
+        "", "stock", "stock", "recursion", "recursion"
     );
-    println!("  {:<32}{:>13}{:>13}{:>13}", "", "flock", "off", "on");
+    println!(
+        "  {:<32}{:>13}{:>13}{:>13}{:>13}",
+        "", "union", "core", "off", "on"
+    );
 
     println!("\nSETUP (once, not per proof)");
-    row("R1CS and PCS parameters", [Some(setup_ms); 3], "ms");
+    row("R1CS and PCS parameters", [Some(setup_ms); 4], "ms");
     row(
         "commitment key",
-        [None, Some(off_setup), Some(on_setup)],
+        [None, None, Some(off_setup), Some(on_setup)],
         "ms",
     );
 
     println!("\nPROVER");
-    row("witness", [Some(witness_ms); 3], "ms");
+    row("witness", [Some(witness_ms); 4], "ms");
     row(
         "lift to F162",
-        [None, Some(off_prover.pack), Some(on_prover.pack)],
+        [None, None, Some(off_prover.pack), Some(on_prover.pack)],
+        "ms",
+    );
+    row(
+        "commit, bind, zerocheck, lincheck",
+        [None, Some(core_reduce), None, None],
         "ms",
     );
     row(
         "commit",
-        [None, Some(off_prover.commit), Some(on_prover.commit)],
+        [None, None, Some(off_prover.commit), Some(on_prover.commit)],
         "ms",
     );
     row(
         "bind the commitment",
-        [None, Some(off_prover.bind), Some(on_prover.bind)],
+        [None, None, Some(off_prover.bind), Some(on_prover.bind)],
         "ms",
     );
     row(
         "zerocheck",
-        [None, Some(off_prover.zerocheck), Some(on_prover.zerocheck)],
+        [
+            None,
+            None,
+            Some(off_prover.zerocheck),
+            Some(on_prover.zerocheck),
+        ],
         "ms",
     );
     row(
         "lincheck",
-        [None, Some(off_prover.lincheck), Some(on_prover.lincheck)],
+        [
+            None,
+            None,
+            Some(off_prover.lincheck),
+            Some(on_prover.lincheck),
+        ],
         "ms",
     );
     row(
         "ring-switch / cross-field switch",
-        [None, Some(off_prover.switch), Some(on_prover.switch)],
+        [None, None, Some(off_prover.switch), Some(on_prover.switch)],
         "ms",
     );
     row(
         "opening",
-        [None, Some(off_prover.opening), Some(on_prover.opening)],
+        [
+            None,
+            Some(core_open),
+            Some(off_prover.opening),
+            Some(on_prover.opening),
+        ],
         "ms",
     );
     let listed = |t: &ProverTiming| {
@@ -186,6 +238,7 @@ fn compare(hash: Hash) {
         "rest",
         [
             None,
+            None,
             Some(off_prover.total - listed(&off_prover)),
             Some(on_prover.total - listed(&on_prover)),
         ],
@@ -193,13 +246,19 @@ fn compare(hash: Hash) {
     );
     row(
         "proof after the witness",
-        [None, Some(off_prover.total), Some(on_prover.total)],
+        [
+            None,
+            Some(core_reduce + core_open),
+            Some(off_prover.total),
+            Some(on_prover.total),
+        ],
         "ms",
     );
     row(
         "total, witness included",
         [
-            Some(stock_prove),
+            Some(union_prove),
+            Some(witness_ms + core_reduce + core_open),
             Some(witness_ms + off_prover.total),
             Some(witness_ms + on_prover.total),
         ],
@@ -209,28 +268,44 @@ fn compare(hash: Hash) {
     println!("\nVERIFIER");
     row(
         "zerocheck and lincheck",
-        [None, Some(off_verifier.reduce), Some(on_verifier.reduce)],
+        [
+            None,
+            Some(core_verify_reduce),
+            Some(off_verifier.reduce),
+            Some(on_verifier.reduce),
+        ],
         "ms",
     );
     row(
         "ring-switch / cross-field switch",
-        [None, Some(off_verifier.switch), Some(on_verifier.switch)],
+        [
+            None,
+            None,
+            Some(off_verifier.switch),
+            Some(on_verifier.switch),
+        ],
         "ms",
     );
     row(
         "decode the opening",
-        [None, Some(off_verifier.decode), None],
+        [None, None, Some(off_verifier.decode), None],
         "ms",
     );
     row(
         "Ligerito / our opening",
-        [None, Some(off_verifier.opening), Some(on_verifier.opening)],
+        [
+            None,
+            Some(core_verify_open),
+            Some(off_verifier.opening),
+            Some(on_verifier.opening),
+        ],
         "ms",
     );
     row(
         "total",
         [
-            Some(stock_verify),
+            Some(union_verify),
+            Some(core_verify_reduce + core_verify_open),
             Some(off_verifier.total),
             Some(on_verifier.total),
         ],
@@ -241,33 +316,63 @@ fn compare(hash: Hash) {
     let kb = |b: usize| Some(b as f64 / 1024.0);
     row(
         "zerocheck",
-        [None, kb(off_sizes.zerocheck), kb(on_sizes.zerocheck)],
+        [
+            None,
+            kb(core_sizes.zerocheck),
+            kb(off_sizes.zerocheck),
+            kb(on_sizes.zerocheck),
+        ],
         "KB",
     );
     row(
         "lincheck",
-        [None, kb(off_sizes.lincheck), kb(on_sizes.lincheck)],
+        [
+            None,
+            kb(core_sizes.lincheck),
+            kb(off_sizes.lincheck),
+            kb(on_sizes.lincheck),
+        ],
         "KB",
     );
     row(
         "cross-field switch",
-        [None, kb(off_sizes.switch), kb(on_sizes.switch)],
+        [
+            None,
+            kb(core_sizes.switch),
+            kb(off_sizes.switch),
+            kb(on_sizes.switch),
+        ],
         "KB",
     );
     row(
         "commitment (wire form)",
-        [None, kb(off_sizes.commitment), kb(on_sizes.commitment)],
+        [
+            None,
+            kb(core_sizes.commitment),
+            kb(off_sizes.commitment),
+            kb(on_sizes.commitment),
+        ],
         "KB",
     );
     row(
         "opening",
-        [None, kb(off_sizes.opening), kb(on_sizes.opening)],
+        [
+            None,
+            kb(core_sizes.opening),
+            kb(off_sizes.opening),
+            kb(on_sizes.opening),
+        ],
         "KB",
     );
     let total = |s: &Sizes| kb(s.total());
     row(
         "total",
-        [kb(stock_size), total(&off_sizes), total(&on_sizes)],
+        [
+            kb(union_size),
+            total(&core_sizes),
+            total(&off_sizes),
+            total(&on_sizes),
+        ],
         "KB",
     );
 
