@@ -448,12 +448,13 @@ fn a_wrong_challenge_set_is_rejected() {
 // =============================================================================================
 
 /// The cap of the plan's D5 is the 95th percentile of the honest fold at the basic shape, so the
-/// prover has to be able to say no and be given fresh challenges. A random witness sits well
-/// under it. The lift `c(-X^4)` gives a challenge's terms alternating signs, so a witness whose
-/// bits all sit on even positions of their field elements cannot cancel: every challenge adds
-/// its even weight to one half of the coefficients and subtracts its odd weight from the other,
-/// coherently across the columns, so the fold grows with the square of the column count against
-/// a cap linear in it, and at sixteen columns lands at about four times the cap.
+/// prover has to be able to say no and be given fresh challenges. The witness cannot force that:
+/// the challenges carry a sign per coefficient that is a hash of the challenge itself, so what a
+/// witness aligned to one challenge's terms gains against another it loses, and the aligned
+/// witness below — every bit on an even position of its field element, which under the lift
+/// `c(-X^4)` used to make every column add coherently — now folds to about two thirds of the cap.
+/// What still crosses it is the honest tail the cap was cut from, one draw in twenty or so, and
+/// the round has to answer that draw with a refusal and the next draw with a proof.
 #[test]
 fn a_long_fold_is_refused_and_a_short_one_is_proven() {
     let even = F162([
@@ -464,17 +465,61 @@ fn a_long_fold_is_refused_and_a_short_one_is_proven() {
     let wide = Params::new(11, 4, vec![Modulus::Q9721_FS_S], true).unwrap();
     let aligned = Witness::from_elements(&wide, vec![even; wide.witness_len()]).unwrap();
     let mut long = Round::with_witness(&wide, b"cap/long", aligned);
-    match long.prove() {
+    let over = long.challenges_reaching_the_cap(true, 256);
+    match long.prove_with(&over) {
         Err(OpeningError::FoldTooLong { normsq, cap }) => assert!(normsq > cap),
-        other => panic!("the aligned fold was not refused: {:?}", other.map(|_| ())),
+        other => panic!("the long fold was not refused: {:?}", other.map(|_| ())),
     }
     let params = small(vec![Modulus::Q9721_FS_S]);
     let mut short = Round::new(&params, b"cap/short");
-    let proof = short.prove().expect("a random witness folds under the cap");
-    assert!(short.verify(&proof));
+    let under = short.challenges_reaching_the_cap(false, 256);
+    let proof = short
+        .prove_with(&under)
+        .expect("a fold inside the cap is proven");
+    assert!(short.verify_with(&short.commitment, &short.left, &under, &proof));
 }
 
 impl Round {
+    fn challenges_reaching_the_cap(&mut self, over: bool, tries: usize) -> FoldingChallenges {
+        for k in 0..tries {
+            let mut transcript = Transcript::new(b"bin-ntt/test/opening/cap");
+            transcript.absorb_u64(k as u64);
+            let challenges = self
+                .verifier
+                .derive_folding_challenges(&mut transcript, &self.left);
+            let (_, opening) = self.prover.commit(&self.witness);
+            let folded = self.prover.fold(opening, &challenges);
+            let normsq: u64 = folded
+                .elements()
+                .iter()
+                .flat_map(|e| e.v)
+                .map(|x| (x as i64 * x as i64) as u64)
+                .sum();
+            if (normsq > self.setup.fold_cap as u64) == over {
+                return challenges;
+            }
+        }
+        panic!(
+            "no fold in {tries} tries landed {} the cap",
+            if over { "over" } else { "under" }
+        );
+    }
+
+    fn prove_with(&mut self, challenges: &FoldingChallenges) -> Result<OpeningProof, OpeningError> {
+        let (_, opening) = self.prover.commit(&self.witness);
+        let mut transcript = self.transcript.clone();
+        self.prover.prove_opening(
+            &mut transcript,
+            opening,
+            challenges,
+            &self.point,
+            &self.left,
+            &self.row,
+            &self.claim,
+            &self.commitment,
+        )
+    }
+
     /// Another proof of the same round, for a test that tampers with the result.
     fn prove_again(&mut self) -> OpeningProof {
         let (_, opening) = self.prover.commit(&self.witness);
