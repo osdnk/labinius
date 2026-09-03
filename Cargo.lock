@@ -59,7 +59,7 @@ dependencies = [
 [[package]]
 name = "binius-circuits"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-core",
  "binius-frontend",
@@ -74,12 +74,15 @@ dependencies = [
 [[package]]
 name = "binius-compute"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "binius-core"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-field",
  "binius-utils",
@@ -92,7 +95,7 @@ dependencies = [
 [[package]]
 name = "binius-field"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-utils",
  "bytemuck",
@@ -105,7 +108,7 @@ dependencies = [
 [[package]]
 name = "binius-frontend"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-core",
@@ -124,10 +127,24 @@ dependencies = [
 [[package]]
 name = "binius-hash"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+dependencies = [
+ "binius-utils",
+ "blake3",
+ "bytemuck",
+ "bytes",
+ "digest",
+ "sha2",
+]
+
+[[package]]
+name = "binius-hash-prover"
+version = "0.1.0"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-field",
+ "binius-hash",
  "binius-utils",
  "blake3",
  "bytemuck",
@@ -143,7 +160,7 @@ dependencies = [
 [[package]]
 name = "binius-iop"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -161,12 +178,13 @@ dependencies = [
 [[package]]
 name = "binius-iop-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-core",
  "binius-field",
  "binius-hash",
+ "binius-hash-prover",
  "binius-iop",
  "binius-ip",
  "binius-ip-prover",
@@ -183,7 +201,7 @@ dependencies = [
 [[package]]
 name = "binius-ip"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "array-util",
  "binius-core",
@@ -197,7 +215,7 @@ dependencies = [
 [[package]]
 name = "binius-ip-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "auto_impl",
  "binius-compute",
@@ -215,7 +233,7 @@ dependencies = [
 [[package]]
 name = "binius-math"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-field",
@@ -230,12 +248,13 @@ dependencies = [
 [[package]]
 name = "binius-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-core",
  "binius-field",
  "binius-hash",
+ "binius-hash-prover",
  "binius-iop",
  "binius-iop-prover",
  "binius-ip",
@@ -260,7 +279,7 @@ dependencies = [
 [[package]]
 name = "binius-spartan-frontend"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-field",
  "binius-utils",
@@ -271,12 +290,13 @@ dependencies = [
 [[package]]
 name = "binius-spartan-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-compute",
  "binius-core",
  "binius-field",
  "binius-hash",
+ "binius-hash-prover",
  "binius-iop",
  "binius-iop-prover",
  "binius-ip",
@@ -296,7 +316,7 @@ dependencies = [
 [[package]]
 name = "binius-spartan-verifier"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -314,7 +334,7 @@ dependencies = [
 [[package]]
 name = "binius-transcript"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "auto_impl",
  "binius-field",
@@ -328,14 +348,13 @@ dependencies = [
 [[package]]
 name = "binius-utils"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "array-util",
  "bytes",
- "cfg-if",
  "hybrid-array",
- "itertools",
  "rand",
+ "rayon",
  "thiserror",
  "trait-set",
 ]
@@ -343,7 +362,7 @@ dependencies = [
 [[package]]
 name = "binius-verifier"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=32d8cd07de4eb2dd38e54f5a8a1e26fedc307933#32d8cd07de4eb2dd38e54f5a8a1e26fedc307933"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -468,22 +487,47 @@ dependencies = [
 
 [[package]]
 name = "cranelift-bitset"
-version = "0.134.4"
+version = "0.135.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ce4e57dbb7f73d08011808a19787c3a03c3e7854b2a479ed0b788915fb671be"
+checksum = "a58c8447cc59ef98c49096679f81392ad0acec2224cea2bef52011f5169f9d02"
 dependencies = [
  "wasmtime-internal-core",
 ]
 
 [[package]]
 name = "cranelift-entity"
-version = "0.134.4"
+version = "0.135.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26b8bc91c0a3530d132acbf118965dabe9a084029eb0fa74b64760360dec3316"
+checksum = "e0ec225d6b79c5d61358cb5ea081a1384ec541dbf8c1a8c618d187875af326ad"
 dependencies = [
  "cranelift-bitset",
  "wasmtime-internal-core",
 ]
+
+[[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crypto-common"
@@ -774,6 +818,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -992,9 +1056,9 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "wasmtime-internal-core"
-version = "47.0.4"
+version = "48.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f41d3b2cb9c3de7b696690af070d408b5e357011832f8b8bb7fbb315dbb620ed"
+checksum = "821385794cf44baf2967fd2515368429ed2bff9b9b256f62d09a0f1301474fd8"
 dependencies = [
  "hashbrown 0.17.1",
  "libm",

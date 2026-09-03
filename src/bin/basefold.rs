@@ -161,7 +161,7 @@ pub fn commit(pcs: &Pcs, pool: &BufferPool, message: &Buffer<'_>) -> Vec<u8> {
             &mut transcript,
             pool,
         );
-    channel.send_oracle(message.to_ref());
+    channel.send_oracle(message.as_view());
     channel.finish();
     transcript.finalize()
 }
@@ -188,7 +188,7 @@ pub fn prove(
         );
 
     let committed = pack(pool, log_len, words);
-    let (commit_ms, oracle) = once(|| channel.send_oracle(committed.to_ref()));
+    let (commit_ms, oracle) = once(|| channel.send_oracle(committed.as_view()));
     timing.commit = commit_ms;
 
     let message = match tamper {
@@ -209,7 +209,7 @@ pub fn prove(
     let RingSwitchOutput {
         rs_eq_ind,
         sumcheck_claim,
-    } = binius_prover::ring_switch::prove(&pool, message.to_ref(), &eval_point, &mut channel);
+    } = binius_prover::ring_switch::prove(&pool, message.as_view(), &eval_point, &mut channel);
     channel.prove_oracle_relation(oracle, rs_eq_ind, sumcheck_claim);
     channel.finalize_oracle(oracle, message);
     channel.finish();
