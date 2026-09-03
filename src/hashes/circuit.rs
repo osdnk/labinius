@@ -1,7 +1,7 @@
-//! The Keccak-256 example circuit of binius64 and its witness, built against the upstream crates
-//! the way `binius_examples::circuits::keccak::KeccakExample` builds it: the message as `inout`
-//! words, the digest as four more, and one `assert_eq` per digest word against
-//! [`keccak256`](binius_circuits::keccak::fixed_length::keccak256)'s output.
+//! The Keccak-256, SHA-256 and BLAKE3 example circuits of binius64 and their witnesses, built
+//! against the upstream crates the way `binius_examples` builds them: the message as `inout`
+//! words, the digest as more of them, and one `assert_eq` per digest word against the gadget's
+//! output.
 use binius_circuits::blake3::blake3_fixed;
 use binius_circuits::keccak::{fixed_length::keccak256, ref_keccak_f1600, RATE_BYTES};
 use binius_circuits::sha256::{compress::ref_compress, sha256_fixed};

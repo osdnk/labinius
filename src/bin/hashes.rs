@@ -1,10 +1,10 @@
-//! binius64's keccak circuit at `--message-len 65536` — 482 keccak-f permutations — proved three
-//! ways: stock binius64, and this crate's commitment in place of its BaseFold oracle with the
-//! recursion off and on.
+//! binius64's Keccak-256, SHA-256 and BLAKE3 circuits, each at the message the compiled size
+//! rung fills, proved three ways: stock binius64, and this crate's commitment in place of its
+//! BaseFold oracle with the recursion off and on.
 //!
-//! `cargo run --release --offline --bin keccak`, pinned with `taskset -c 3`.
-use bin_ntt::keccak::stock::{Stock, LOG_INV_RATE};
-use bin_ntt::keccak::{Circuit, Hash, Session, Sizes};
+//! `cargo run --release --offline --bin hashes`, pinned with `taskset -c 3`.
+use bin_ntt::hashes::stock::{Stock, LOG_INV_RATE};
+use bin_ntt::hashes::{Circuit, Hash, Session, Sizes};
 use bin_ntt::scheme::SIZE;
 use std::time::Instant;
 
@@ -197,7 +197,7 @@ fn compare(hash: Hash) {
         [None, Some(off_prover.opening), Some(on_prover.opening)],
         "ms",
     );
-    let listed = |t: &bin_ntt::keccak::ProverTiming| {
+    let listed = |t: &bin_ntt::hashes::ProverTiming| {
         t.pack + t.commit + t.bitand + t.shift + t.switch + t.opening
     };
     row(

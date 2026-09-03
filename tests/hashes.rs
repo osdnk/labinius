@@ -2,7 +2,7 @@
 //! real 482-permutation instance end to end in both PCS modes, honest and tampered.
 use bin_ntt::fields::crossfield::eval_pi1;
 use bin_ntt::fields::scalar::B128;
-use bin_ntt::keccak::{Circuit, Error, Hash, Session};
+use bin_ntt::hashes::{Circuit, Error, Hash, Session};
 use bin_ntt::rng::Rng;
 use bin_ntt::{EvaluationPoint, Modulus, Params, Witness, F162};
 

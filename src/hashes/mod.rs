@@ -1,4 +1,4 @@
-//! binius64's keccak proof with this crate's commitment in place of its BaseFold oracle.
+//! binius64's hash proofs with this crate's commitment in place of its BaseFold oracle.
 //!
 //! One transcript throughout. binius64's own `ProverTranscript` is the channel: the statement is
 //! observed into it, our commitment is written into it before any challenge is drawn, its
