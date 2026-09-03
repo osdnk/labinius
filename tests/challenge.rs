@@ -1,4 +1,4 @@
-//! Short challenges: determinism of the transcript, the binary shape of a challenge, the
+//! Short challenges: determinism of the transcript, the shape of a challenge, the sign map, the
 //! canonical embedding against a naive reference, the rejection bound, and the acceptance
 //! statistics.
 use bin_ntt::api::N162;
@@ -130,7 +130,7 @@ fn canonical_norm_matches_naive() {
     let mut worst: f64 = 0.0;
     for weight in [0usize, 1, 2, 7, 21, 30, MAX_WEIGHT] {
         for _ in 0..300 {
-            let c = sample_attempt(&mut t, weight);
+            let c = sample_attempt(&mut t, weight).signed();
             let (a, b) = (canonical_inf_norm_sq(&c), canonical_inf_norm_sq_naive(&c));
             worst = worst.max((a - b).abs());
             assert!((a - b).abs() <= 1e-9, "{a} vs {b} at weight {weight}");
@@ -161,31 +161,58 @@ fn sampled_challenges_meet_the_bound() {
 }
 
 /// What the rest of the crate is entitled to assume of a folding challenge: exactly
-/// `DEFAULT_WEIGHT` coefficients, all of them `1`, and a canonical norm inside `DEFAULT_BOUND`.
-/// The expansion factor a security argument uses is `sqrt(3)` times that bound, because the power
-/// basis of a power-of-three conductor is not orthogonal under the canonical embedding.
+/// `DEFAULT_WEIGHT` coefficients, all of them `+-1`, and a canonical norm inside `DEFAULT_BOUND`
+/// once signed. The expansion factor a security argument uses is `sqrt(3)` times that bound,
+/// because the power basis of a power-of-three conductor is not orthogonal under the canonical
+/// embedding.
 #[test]
-fn the_default_challenge_is_binary_and_short() {
+fn the_default_challenge_is_signed_and_short() {
     let mut t = transcript(9);
     let mut worst = 0.0f64;
+    let (mut plus, mut minus) = (0usize, 0usize);
     for _ in 0..500 {
         let (c, _) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
         let d = c.coeffs();
         assert!(
-            d.iter().all(|&x| x == 0 || x == 1),
-            "a challenge coefficient is not 0 or 1"
+            d.iter().all(|&x| x == 0 || x == 1 || x == -1),
+            "a challenge coefficient is not 0, 1 or -1"
         );
-        assert_eq!(d.iter().filter(|&&x| x == 1).count(), DEFAULT_WEIGHT);
+        assert_eq!(d.iter().filter(|&&x| x != 0).count(), DEFAULT_WEIGHT);
+        assert_eq!(ShortChallenge::from_coeffs(&d), c);
+        plus += d.iter().filter(|&&x| x == 1).count();
+        minus += d.iter().filter(|&&x| x == -1).count();
         let norm = canonical_inf_norm_sq(&c);
         assert!(norm <= DEFAULT_BOUND * DEFAULT_BOUND + 1e-12);
         assert!((canonical_inf_norm_sq_naive(&c) - norm).abs() <= 1e-9);
         worst = worst.max(norm);
     }
+    let n = (plus + minus) as f64;
+    assert!((plus as f64 / n - 0.5).abs() < 0.05, "the signs are skewed");
     println!(
-        "weight {DEFAULT_WEIGHT} binary, worst canonical norm {:.3} of {DEFAULT_BOUND} \
-         (expansion sqrt(3) * {DEFAULT_BOUND} = {:.2})",
+        "weight {DEFAULT_WEIGHT} signed ({:.3} of the coefficients are +1), worst canonical norm \
+         {:.3} of {DEFAULT_BOUND} (expansion sqrt(3) * {DEFAULT_BOUND} = {:.2})",
+        plus as f64 / n,
         worst.sqrt(),
         3f64.sqrt() * DEFAULT_BOUND
+    );
+}
+
+#[test]
+fn signs_are_a_function_of_the_positions() {
+    let mut t = transcript(10);
+    let mut seen = 0u32;
+    for _ in 0..500 {
+        let (c, _) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
+        let bare = ShortChallenge { signs: 0, ..c };
+        assert_eq!(bare.signed(), c);
+        assert_eq!(c.signed(), c);
+        assert_eq!(bare.positions, c.positions);
+        seen |= c.signs;
+    }
+    assert_eq!(
+        seen,
+        (1u32 << DEFAULT_WEIGHT) - 1,
+        "some sign bit is never set"
     );
 }
 

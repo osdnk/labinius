@@ -1,10 +1,11 @@
 //! Short challenges over the 3^5-th cyclotomic ring `R_162 = Z[Z]/Phi_243(Z)`,
 //! `Phi_243(Z) = Z^162 + Z^81 + 1`, and the blake3 transcript that samples them.
 //!
-//! A challenge is a weight-`w` *binary* element of `R_162`: `w` of the 162 coefficients are `1`
-//! and the rest are zero, stored sparsely as the sorted positions. Sampling is uniform over that
-//! set (a partial Fisher-Yates driven by the transcript's XOF) and then rejected until the
-//! challenge is *short in the canonical embedding*:
+//! A challenge is a weight-`w` *signed* element of `R_162`: `w` of the 162 coefficients are `+-1`
+//! and the rest are zero, stored sparsely as the sorted positions and a sign per position.
+//! Sampling is uniform over the weight-`w` position sets (a partial Fisher-Yates driven by the
+//! transcript's XOF), each candidate is signed, and the pair is rejected until the challenge is
+//! *short in the canonical embedding*:
 //!
 //! ```text
 //!     max_u |c(zeta^u)|^2 <= bound^2,     zeta = exp(2 pi i / 243), gcd(u, 3) = 1,
@@ -16,9 +17,13 @@
 //! on coefficient vectors that a security argument uses is `sqrt(3)` times the canonical bound —
 //! `sqrt(3) * 12 = 20.78` at the default, not `12`. The default is `weight = 28`, `bound = 12`.
 //!
-//! The challenge is binary rather than ternary because the lift into `R_648` is `c(-X^4)`: the
-//! parity of the exponent already carries a `+-` into the `X`-basis, which is where the fold's
-//! cancellation happens, so sign bits bought nothing the positions do not already give.
+//! The signs are not drawn from the transcript: they are a keyed blake3 hash of the candidate's
+//! own position set ([`ShortChallenge::signed`]), a public map that leaves the sampler's
+//! randomness, the number of squeezes and the wire untouched. It is applied to the candidate
+//! *before* the bound is tested, because `Z^162 = -Z^81 - 1` mixes coefficients sign-dependently
+//! and the accepted challenge is the signed one. Signs exist because the sum `C = sum_j c_j` over
+//! a round's `r` challenges is the offset the fold carries: with `0/1` coefficients its
+//! coefficients grow like `r`, with zero-mean ones like `sqrt(r)`.
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
@@ -162,11 +167,13 @@ impl Xof {
 // the challenge
 // =============================================================================================
 
-/// A weight-`w` binary element of `R_162`: coefficient `positions[i]` is `1`, every other
-/// coefficient zero. Positions are sorted and distinct; entries beyond `weight` are unused.
+/// A weight-`w` signed element of `R_162`: coefficient `positions[i]` is `-1` when bit `i` of
+/// `signs` is set and `+1` otherwise, every other coefficient zero. Positions are sorted and
+/// distinct; bits and entries beyond `weight` are unused and must be zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShortChallenge {
     pub positions: [u8; MAX_WEIGHT],
+    pub signs: u32,
     pub weight: usize,
 }
 
@@ -175,6 +182,7 @@ impl ShortChallenge {
     pub fn zero() -> Self {
         ShortChallenge {
             positions: [0u8; MAX_WEIGHT],
+            signs: 0,
             weight: 0,
         }
     }
@@ -183,14 +191,26 @@ impl ShortChallenge {
     pub fn coeffs(&self) -> [i8; N162] {
         let mut c = [0i8; N162];
         for i in 0..self.weight {
-            c[self.positions[i] as usize] = 1;
+            c[self.positions[i] as usize] = 1 - 2 * ((self.signs >> i) & 1) as i8;
         }
         c
     }
 
+    pub fn signed(&self) -> Self {
+        let mut h = Hasher::new_derive_key("bin-ntt 2026 challenge signs v1");
+        h.update(&(self.weight as u64).to_le_bytes());
+        h.update(&self.positions[..self.weight]);
+        let bits = u32::from_le_bytes(h.finalize().as_bytes()[..4].try_into().unwrap());
+        let mask = ((1u64 << self.weight) - 1) as u32;
+        ShortChallenge {
+            signs: bits & mask,
+            ..*self
+        }
+    }
+
     /// The challenge modulo 2, as an element of `F162 = GF(2)[x]/(x^162 + x^81 + 1)`: a bit at
-    /// each of its positions. `R_162 mod 2` *is* that field under the crate's plain lift, on which
-    /// a binary challenge is its own reduction.
+    /// each of its positions. `R_162 mod 2` *is* that field under the crate's plain lift, and
+    /// `+-1` reduce alike, so the signs do not reach it.
     pub fn to_f162(&self) -> F162 {
         let mut x = F162::ZERO;
         for i in 0..self.weight {
@@ -200,15 +220,19 @@ impl ShortChallenge {
         x
     }
 
-    /// The sparse form of a binary coefficient vector. Panics unless every entry is in `{0, 1}`
-    /// and at most [`MAX_WEIGHT`] of them are nonzero.
+    /// The sparse form of a signed coefficient vector. Panics unless every entry is in
+    /// `{-1, 0, 1}` and at most [`MAX_WEIGHT`] of them are nonzero.
     pub fn from_coeffs(c: &[i8; N162]) -> Self {
         let mut out = Self::zero();
         for (p, &x) in c.iter().enumerate() {
-            assert!(x == 0 || x == 1, "coefficient {p} is not binary");
+            assert!(
+                x == 0 || x == 1 || x == -1,
+                "coefficient {p} is not signed binary"
+            );
             if x != 0 {
                 assert!(out.weight < MAX_WEIGHT, "weight exceeds MAX_WEIGHT");
                 out.positions[out.weight] = p as u8;
+                out.signs |= ((x < 0) as u32) << out.weight;
                 out.weight += 1;
             }
         }
@@ -275,8 +299,8 @@ static PHASE: LazyLock<(Vec<f64>, Vec<f64>)> = LazyLock::new(|| {
     (re, im)
 });
 
-/// Accumulate `sum_i exp(2 pi i p_i u_k / 243)` over the challenge's nonzero terms, for the
-/// [`BLOCK`] lanes starting at `off`.
+/// Accumulate `sum_i s_i exp(2 pi i p_i u_k / 243)` over the challenge's nonzero terms and their
+/// signs, for the [`BLOCK`] lanes starting at `off`.
 #[inline]
 fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f64; BLOCK]) {
     let (re, im) = &*PHASE;
@@ -286,9 +310,10 @@ fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f
         let base = c.positions[i] as usize * LANES + off;
         let pr = &re[base..base + BLOCK];
         let pi = &im[base..base + BLOCK];
+        let s = 1.0 - 2.0 * ((c.signs >> i) & 1) as f64;
         for k in 0..BLOCK {
-            ar[k] += pr[k];
-            ai[k] += pi[k];
+            ar[k] += s * pr[k];
+            ai[k] += s * pi[k];
         }
     }
 }
@@ -361,8 +386,8 @@ pub fn canonical_inf_norm_sq_naive(c: &ShortChallenge) -> f64 {
 // sampling
 // =============================================================================================
 
-/// One uniform weight-`w` binary element: a partial Fisher-Yates over the 162 positions driven by
-/// the transcript's XOF, then the positions sorted.
+/// One uniform weight-`w` position set, unsigned: a partial Fisher-Yates over the 162 positions
+/// driven by the transcript's XOF, then the positions sorted.
 pub fn sample_attempt(t: &mut Transcript, weight: usize) -> ShortChallenge {
     let mut perm = [0u8; N162];
     attempt(
@@ -398,7 +423,9 @@ fn attempt(x: &mut Xof, weight: usize, perm: &mut [u8; N162]) -> ShortChallenge 
 }
 
 /// Rejection-sample a weight-`w` challenge with `canonical_inf_norm_sq <= bound^2`, returning it
-/// together with the number of attempts it took.
+/// together with the number of attempts it took. Each candidate position set is signed by
+/// [`ShortChallenge::signed`] before the bound is tested, so the bound holds of the challenge the
+/// round actually uses.
 ///
 /// All attempts read one XOF derivation of the transcript, so the whole loop is one deterministic
 /// function of what has been absorbed and costs one blake3 finalisation however many attempts the
@@ -415,7 +442,7 @@ pub fn sample_short_challenge(
     let mut attempts = 0u64;
     loop {
         attempts += 1;
-        let c = attempt(&mut x, weight, &mut perm);
+        let c = attempt(&mut x, weight, &mut perm).signed();
         if within(&c, bound_sq) {
             return (c, attempts);
         }
