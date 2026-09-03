@@ -18,10 +18,10 @@ pub enum Hash {
     Blake3,
 }
 
-pub const MESSAGE_LEN: [[usize; 3]; 3] = [
-    [118727, 475319, 1901415],
-    [72567, 290487, 1162039],
-    [123840, 495488, 1982120],
+pub const MESSAGE_LEN: [[usize; 4]; 3] = [
+    [118727, 475319, 1901415, 0],
+    [72567, 290487, 1162039, 0],
+    [123840, 495488, 1982120, 0],
 ];
 
 impl Hash {
@@ -36,7 +36,12 @@ impl Hash {
     }
 
     pub const fn message_len(self) -> usize {
-        MESSAGE_LEN[self as usize][(SIZE_STEP / 2) as usize]
+        let len = MESSAGE_LEN[self as usize][(SIZE_STEP / 2) as usize];
+        assert!(
+            len != 0,
+            "no message length is measured for this hash at this rung"
+        );
+        len
     }
 
     pub const fn compressions(self, len_bytes: usize) -> usize {

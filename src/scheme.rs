@@ -108,29 +108,38 @@ pub struct Params {
 #[cfg(any(
     all(feature = "sizes", feature = "sizem"),
     all(feature = "sizes", feature = "sizel"),
-    all(feature = "sizem", feature = "sizel")
+    all(feature = "sizes", feature = "sizexl"),
+    all(feature = "sizem", feature = "sizel"),
+    all(feature = "sizem", feature = "sizexl"),
+    all(feature = "sizel", feature = "sizexl")
 ))]
-compile_error!("only one of the features `sizes`, `sizem`, or `sizel` must be enabled at once");
+compile_error!(
+    "only one of the features `sizes`, `sizem`, `sizel`, or `sizexl` must be enabled at once"
+);
 
+#[cfg(feature = "sizexl")]
+pub const SIZE: &str = "sizexl";
 #[cfg(feature = "sizel")]
 pub const SIZE: &str = "sizel";
 #[cfg(feature = "sizem")]
 pub const SIZE: &str = "sizem";
-#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
 pub const SIZE: &str = "sizes";
 
+#[cfg(feature = "sizexl")]
+pub const SIZE_STEP: u32 = 6;
 #[cfg(feature = "sizel")]
 pub const SIZE_STEP: u32 = 4;
 #[cfg(feature = "sizem")]
 pub const SIZE_STEP: u32 = 2;
-#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
 pub const SIZE_STEP: u32 = 0;
 
 pub const WITNESS_LOG_LEN: u32 = 18;
 pub const COLUMN_LOG_LEN_CLEAR: u32 = 7;
 pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
 
-#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
     (Modulus::Q3889_FS_S, vec![Modulus::Q4861_Q_S])
 }
@@ -150,6 +159,14 @@ fn moduli(recursion: bool) -> (Modulus, Vec<Modulus>) {
     } else {
         (Modulus::Q17497_FS_L, vec![Modulus::Q19441_FS_L])
     }
+}
+
+#[cfg(feature = "sizexl")]
+fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+    )
 }
 
 impl Params {
