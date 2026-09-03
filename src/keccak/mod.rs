@@ -20,12 +20,11 @@ pub mod phases;
 pub mod stock;
 pub mod switch;
 
-use crate::api::Modulus;
 use crate::fields::scalar::{B128 as SB, F162};
 use crate::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
-    Witness,
+    Witness, SIZE_STEP, WITNESS_LOG_LEN,
 };
 use crate::wire;
 use crate::Transcript;
@@ -61,9 +60,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-/// The message length of the example instance: 482 keccak-f permutations, whose packed non-public
-/// trace is 2^18 `B128`.
-pub const MESSAGE_LEN: usize = 65536;
+pub const MESSAGE_LEN: usize = 1 << (WITNESS_LOG_LEN + SIZE_STEP - 2);
 
 /// Milliseconds of wall clock per prover stage, named as binius64's phase spans name them.
 #[derive(Clone, Copy, Default)]
@@ -146,13 +143,7 @@ impl Session {
         matrix_seed: [u8; 32],
     ) -> Session {
         let liop = Liop::new(constraint_system);
-        let params = Params::new(
-            18,
-            if recursion { 8 } else { 7 },
-            vec![Modulus::Q9721_FS_S],
-            recursion,
-        )
-        .expect("the basic shape is valid");
+        let params = Params::sized(recursion);
         assert_eq!(
             liop.log_witness_elems(),
             params.witness_log_len as usize,

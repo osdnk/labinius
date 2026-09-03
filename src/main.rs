@@ -1,9 +1,9 @@
 //! The reference usage: one round end to end in each mode, with the wall clock on every step.
 //!
-//! `cargo run --release --offline`, pinned with `taskset -c 2`. The configuration is the three
-//! constants below; edit them to change it (`Params::basic()` is the same shape as the defaults).
+//! `cargo run --release --offline`, pinned with `taskset -c 2`.
+use bin_ntt::scheme::SIZE;
 use bin_ntt::wire;
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::{Duration, Instant};
 
 /// The seed the public matrix `A` is expanded from.
@@ -12,17 +12,6 @@ const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const WITNESS_SEED: [u8; 32] = [0xC7; 32];
 /// The core the process pins itself to.
 const CPU: usize = 3;
-
-/// The shape of the instance: 2^WITNESS_LOG_LEN elements of F162 in 2^COLUMN_LOG_LEN columns,
-/// committed modulo the base modulus 3889 and every modulus listed in EXTRA_MODULI
-/// (any subset of Modulus::{Q2917_Q_S, Q4861_Q_S, Q9721_FS_S, Q12637_Q_S}).
-const WITNESS_LOG_LEN: u32 = 18;
-/// The clear-text opening ships the commitment and the folded witness, whose sizes trade at
-/// `columns` against `witness / columns`; 2^7 columns sits at that optimum. The recursion's
-/// cost grows with the column length instead, so it stays at 2^8.
-const COLUMN_LOG_LEN_CLEAR: u32 = 7;
-const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
-const EXTRA_MODULI: &[Modulus] = &[Modulus::Q9721_FS_S];
 
 extern "C" {
     fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;
@@ -107,48 +96,7 @@ fn stats() {
 }
 
 fn main() {
-    let is_sizes: bool = {
-        #[cfg(feature = "sizes")]
-        {
-            println!("=== sizes feature enabled ===");
-            true
-        }
-        #[cfg(not(feature = "sizes"))]
-        {
-            false
-        }
-    };
-
-    let is_sizem: bool = {
-        #[cfg(feature = "sizem")]
-        {
-            println!("=== sizem feature enabled ===");
-            true
-        }
-        #[cfg(not(feature = "sizem"))]
-        {
-            false
-        }
-    };
-
-    let is_sizel: bool = {
-        #[cfg(feature = "sizel")]
-        {
-            println!("=== sizel feature enabled ===");
-            true
-        }
-        #[cfg(not(feature = "sizel"))]
-        {
-            false
-        }
-    };
-
-    let sizes = (is_sizes as u8) + (is_sizem as u8) + (is_sizel as u8);
-    if sizes != 1 {
-        panic!("only one of the features `sizes`, `sizem`, or `sizel` must be enabled at once");
-    }
-
-
+    println!("=== size {SIZE} ===");
 
     pin(CPU);
     stats();
@@ -163,82 +111,8 @@ fn main() {
     println!("\npeak resident set: {:.0} MB", peak_rss());
 }
 
-fn shape(recursion: bool) -> Params {
-    if recursion {
-        #[cfg(feature = "sizes")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN,
-                COLUMN_LOG_LEN_RECURSIVE,
-                Modulus::Q3889_FS_S,
-                vec![Modulus::Q9721_FS_S],
-                true,
-            )
-            .expect("valid parameters")
-        }
-        #[cfg(feature = "sizem")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN + 2,
-                COLUMN_LOG_LEN_RECURSIVE + 1,
-                Modulus::Q9721_FS_S,
-                vec![Modulus::Q12637_Q_S],
-                true,
-            )
-            .expect("valid parameters")
-        }
-        #[cfg(feature = "sizel")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN + 4,
-                COLUMN_LOG_LEN_RECURSIVE + 2,
-                Modulus::Q3889_FS_S,
-                vec![Modulus::Q2917_Q_S,Modulus::Q4861_Q_S], 
-                true,
-            )
-            .expect("valid parameters");
-        }
-        panic!("you should never be here");
-    } else {
-        #[cfg(feature = "sizes")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN,
-                COLUMN_LOG_LEN_CLEAR,
-                Modulus::Q3889_FS_S,
-                vec![Modulus::Q9721_FS_S],
-                false,
-            )
-            .expect("valid parameters")
-        }
-        #[cfg(feature = "sizem")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN + 2,
-                COLUMN_LOG_LEN_CLEAR + 1,
-                Modulus::Q9721_FS_S,
-                vec![Modulus::Q12637_Q_S],
-                false,
-            )
-            .expect("valid parameters")
-        }
-        #[cfg(feature = "sizel")]
-        {
-            return Params::with_base(
-                WITNESS_LOG_LEN + 4,
-                COLUMN_LOG_LEN_CLEAR + 2,
-                Modulus::Q17497_FS_L,
-                vec![Modulus::Q19441_FS_L],
-                false,
-            )
-            .expect("valid parameters");
-        }
-        panic!("you should never be here");
-    }
-}
-
 fn plain() {
-    let params = shape(false);
+    let params = Params::sized(false);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
@@ -377,7 +251,7 @@ fn plain() {
 }
 
 fn recursive() {
-    let params = shape(true);
+    let params = Params::sized(true);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let setup = public_parameters
