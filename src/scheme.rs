@@ -132,12 +132,12 @@ pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
 
 #[cfg(not(any(feature = "sizem", feature = "sizel")))]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
-    (Modulus::Q3889_FS_S, vec![Modulus::Q9721_FS_S])
+    (Modulus::Q3889_FS_S, vec![Modulus::Q4861_Q_S])
 }
 
 #[cfg(feature = "sizem")]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
-    (Modulus::Q9721_FS_S, vec![Modulus::Q4861_Q_S])
+    (Modulus::Q9721_FS_S, vec![Modulus::Q12637_Q_S])
 }
 
 #[cfg(feature = "sizel")]
