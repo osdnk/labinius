@@ -5,6 +5,7 @@
 //! `cargo run --release --offline --bin keccak`, pinned with `taskset -c 3`.
 use bin_ntt::keccak::stock::{Stock, LOG_INV_RATE};
 use bin_ntt::keccak::{Circuit, Session, Sizes, MESSAGE_LEN};
+use bin_ntt::scheme::SIZE;
 use std::time::Instant;
 
 /// The seed the public matrix `A` is expanded from.
@@ -89,16 +90,37 @@ fn main() {
         .verify(witness.inout(), &on_proof)
         .expect("the honest proof verifies");
 
-    println!("bin-ntt over binius64 keccak, core {CPU}, one thread");
+    println!("bin-ntt over binius64 keccak, core {CPU}, one thread, size {SIZE}");
     println!(
         "keccak-256 of {MESSAGE_LEN} bytes: {} permutations, {} AND constraints, {} non-public words",
         (MESSAGE_LEN + 1).div_ceil(136),
         constraint_system.and_constraints.len(),
         witness.non_public().len()
     );
+    let moduli = |session: &Session| {
+        let params = session.params();
+        let mut all = vec![params.base];
+        all.extend(params.extra_moduli.iter().copied());
+        all.iter()
+            .map(|q| q.prime().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     println!(
         "stock binius64 at the example's defaults: --log-inv-rate {LOG_INV_RATE}, \
-         --hash-suite sha256, rayon off; the other two commit 2^18 F162 in 256 columns"
+         --hash-suite sha256, rayon off"
+    );
+    println!(
+        "recursion off: 2^{} F162 in {} columns, moduli {}",
+        off.params().witness_log_len,
+        off.params().columns(),
+        moduli(&off)
+    );
+    println!(
+        "recursion on:  2^{} F162 in {} columns, moduli {}",
+        on.params().witness_log_len,
+        on.params().columns(),
+        moduli(&on)
     );
     println!(
         "\n  {:<32}{:>13}{:>13}{:>13}",

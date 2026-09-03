@@ -105,6 +105,53 @@ pub struct Params {
     pub recursion: bool,
 }
 
+#[cfg(any(
+    all(feature = "sizes", feature = "sizem"),
+    all(feature = "sizes", feature = "sizel"),
+    all(feature = "sizem", feature = "sizel")
+))]
+compile_error!("only one of the features `sizes`, `sizem`, or `sizel` must be enabled at once");
+
+#[cfg(feature = "sizel")]
+pub const SIZE: &str = "sizel";
+#[cfg(feature = "sizem")]
+pub const SIZE: &str = "sizem";
+#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+pub const SIZE: &str = "sizes";
+
+#[cfg(feature = "sizel")]
+pub const SIZE_STEP: u32 = 4;
+#[cfg(feature = "sizem")]
+pub const SIZE_STEP: u32 = 2;
+#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+pub const SIZE_STEP: u32 = 0;
+
+pub const WITNESS_LOG_LEN: u32 = 18;
+pub const COLUMN_LOG_LEN_CLEAR: u32 = 7;
+pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
+
+#[cfg(not(any(feature = "sizem", feature = "sizel")))]
+fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (Modulus::Q3889_FS_S, vec![Modulus::Q9721_FS_S])
+}
+
+#[cfg(feature = "sizem")]
+fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (Modulus::Q9721_FS_S, vec![Modulus::Q4861_Q_S])
+}
+
+#[cfg(feature = "sizel")]
+fn moduli(recursion: bool) -> (Modulus, Vec<Modulus>) {
+    if recursion {
+        (
+            Modulus::Q3889_FS_S,
+            vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        )
+    } else {
+        (Modulus::Q17497_FS_L, vec![Modulus::Q19441_FS_L])
+    }
+}
+
 impl Params {
     /// The checked constructor over the default base modulus 3889.
     pub fn new(
@@ -161,6 +208,23 @@ impl Params {
     pub fn basic() -> Params {
         Params::new(18, 7, vec![Modulus::Q9721_FS_S], false)
             .expect("the basic parameters are valid")
+    }
+
+    pub fn sized(recursion: bool) -> Params {
+        let columns = if recursion {
+            COLUMN_LOG_LEN_RECURSIVE
+        } else {
+            COLUMN_LOG_LEN_CLEAR
+        };
+        let (base, extra_moduli) = moduli(recursion);
+        Params::with_base(
+            WITNESS_LOG_LEN + SIZE_STEP,
+            columns + SIZE_STEP / 2,
+            base,
+            extra_moduli,
+            recursion,
+        )
+        .expect("the sized parameters are valid")
     }
 
     /// Witness length in `F162` elements.
