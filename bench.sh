@@ -62,7 +62,8 @@ run() {
         echo "  END  $name    ok    ${secs}s    peak ${peak:-?} MB"
     else
         echo "  END  $name    FAILED rc=$rc    ${secs}s    peak ${peak:-?} MB"
-        echo "       $(tail -1 "$log")"
+        grep -B1 -m1 -E 'panicked|error:' "$log" | sed 's/^/       /'
+        sed -n '/panicked/{n;p;}' "$log" | head -1 | sed 's/^/       /'
     fi
     echo "$BAR"
     echo
