@@ -1,10 +1,6 @@
 //! binius64's own commitment and BaseFold opening at 2^12 `B128`: one honest round, and one whose
 //! opening speaks about a vector the Merkle root does not bind.
-#[allow(dead_code)]
-#[path = "../src/bin/basefold.rs"]
-mod basefold;
-
-use basefold::{prove, random_words, verify, Pcs};
+use bin_ntt::competitors::basefold::{prove, random_words, verify, Pcs};
 use binius_compute::BufferPool;
 
 const LOG_LEN: usize = 12;
@@ -13,7 +9,7 @@ const WITNESS_SEED: u64 = 0x5A;
 #[test]
 fn the_opening_verifies_and_a_tampered_one_does_not() {
     let pool = BufferPool::new();
-    let pcs = Pcs::new(LOG_LEN);
+    let pcs = Pcs::new(LOG_LEN, 1);
     let words = random_words(LOG_LEN, WITNESS_SEED);
 
     let (proof, claim, _) = prove(&pcs, &pool, LOG_LEN, &words, None);

@@ -1,17 +1,15 @@
 //! binius64's own polynomial commitment, standalone: the Merkle-committed oracle, the `B128` ring
-//! switch and the BaseFold opening, on a uniformly random vector of 2^LOG_LEN `B128` and no
+//! switch and the BaseFold opening, on a uniformly random vector of 2^log_len `B128` and no
 //! circuit at all.
 //!
 //! The seam is the IOP channel pair binius64's `Prover::prove` and `Verifier::verify` drive:
 //! `send_oracle` / `recv_oracle` commit the trace, `binius_prover::ring_switch::prove` turns the
 //! `B1` evaluation claim on its bits into the sumcheck claim BaseFold opens,
 //! `prove_oracle_relation` / `verify_oracle_relation` queue that opening and `finish` runs it. The
-//! compilers are built at the keccak example's defaults, so the commitment and the opening are the
-//! ones `src/keccak/stock.rs` measures inside a whole proof.
-//!
-//! `cargo run --release --offline --bin basefold`, pinned with `taskset -c 3`.
-use bin_ntt::hashes::stock::LOG_INV_RATE;
-use bin_ntt::rng::Rng;
+//! compilers are built at the keccak example's hash suite, so the commitment and the opening are
+//! the ones `src/hashes/stock.rs` measures inside a whole proof, read at the rate the caller asks
+//! for rather than at that example's single one.
+use super::{median_of, milliseconds, once, rate_label, Row, SECURITY_BITS};
 use binius_compute::BufferPool;
 use binius_core::word::Word;
 use binius_field::ExtensionField;
@@ -33,91 +31,61 @@ use binius_transcript::{ProverTranscript, VerifierTranscript};
 use binius_verifier::config::{StdChallenger, B1, B128};
 use binius_verifier::fri::{calculate_n_test_queries, ConstantArityStrategy};
 use binius_verifier::merkle_tree::BinaryMerkleTreeScheme;
-use binius_verifier::{ring_switch, SECURITY_BITS};
+use binius_verifier::ring_switch;
 use std::time::Instant;
-
-/// The committed vector is 2^LOG_LEN `B128`, the size of the keccak example's packed trace.
-const LOG_LEN: usize = 18;
-/// The seed the committed vector is drawn from.
-const WITNESS_SEED: u64 = 0xC7;
-/// The core the process pins itself to.
-const CPU: usize = 3;
 
 /// `log2` of the number of `B1` coordinates one `B128` packs, which is the number of leading
 /// coordinates of the evaluation point the ring switch consumes.
-const LOG_PACKING: usize = <B128 as ExtensionField<B1>>::LOG_DEGREE;
+pub const LOG_PACKING: usize = <B128 as ExtensionField<B1>>::LOG_DEGREE;
 
 type Packed = OptimalPackedB128;
 type Buffer<'a> = FieldVec<Packed, &'a BufferPool>;
 type ProverNTT = NeighborsLastMultiThread<GaoMateerPreExpanded<B128>>;
 
-extern "C" {
-    fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;
-}
-
-fn pin(cpu: usize) {
-    let mut mask = [0u64; 16];
-    mask[cpu / 64] |= 1 << (cpu % 64);
-    unsafe { sched_setaffinity(0, 128, mask.as_ptr()) };
-}
-
-fn milliseconds(start: Instant) -> f64 {
-    start.elapsed().as_secs_f64() * 1e3
-}
-
-/// Median of `reps` wall milliseconds, and the last value produced.
-fn median_of<T>(reps: usize, mut f: impl FnMut() -> T) -> (f64, T) {
-    let mut samples = Vec::with_capacity(reps);
-    let mut out = None;
-    for _ in 0..reps {
-        let start = Instant::now();
-        let value = std::hint::black_box(f());
-        samples.push(milliseconds(start));
-        out = Some(value);
-    }
-    samples.sort_by(f64::total_cmp);
-    (samples[reps / 2], out.unwrap())
-}
-
-fn once<T>(f: impl FnOnce() -> T) -> (f64, T) {
-    let start = Instant::now();
-    let value = std::hint::black_box(f());
-    (milliseconds(start), value)
-}
-
 /// The two compilers `Prover::setup` and `Verifier::setup` build, for one non-ZK oracle of
-/// 2^LOG_LEN elements at the keccak example's defaults: `--log-inv-rate 1`, `--hash-suite sha256`,
-/// and a single NTT share because the process is pinned to one core.
+/// 2^log_len elements at `log_inv_rate`, the keccak example's `--hash-suite sha256`, and a single
+/// NTT share because the process is pinned to one core.
 pub struct Pcs {
     verifier: BaseFoldVerifierCompiler<B128>,
     prover: BaseFoldProverCompiler<Packed, ProverNTT>,
+    log_inv_rate: usize,
 }
 
 impl Pcs {
-    pub fn new(log_len: usize) -> Pcs {
+    pub fn new(log_len: usize, log_inv_rate: usize) -> Pcs {
         let merkle_scheme = BinaryMerkleTreeScheme::<B128, StdHashSuite>::new();
         let arity = ConstantArityStrategy::with_optimal_arity::<B128, _>(
             &merkle_scheme,
-            log_len + LOG_INV_RATE,
+            log_len + log_inv_rate,
         );
         let verifier = BaseFoldVerifierCompiler::new(
             &merkle_scheme,
             vec![OracleSpec::new(log_len)],
-            LOG_INV_RATE,
-            calculate_n_test_queries(SECURITY_BITS, LOG_INV_RATE),
+            log_inv_rate,
+            calculate_n_test_queries(SECURITY_BITS, log_inv_rate),
             &ConstantArityStrategy::new(arity.arity),
         );
         let domain_context = GaoMateerPreExpanded::<B128>::generate(verifier.max_log_domain_size());
         let ntt = NeighborsLastMultiThread::new(domain_context, 0);
         let prover = BaseFoldProverCompiler::from_verifier_compiler(&verifier, ntt);
-        Pcs { verifier, prover }
+        Pcs {
+            verifier,
+            prover,
+            log_inv_rate,
+        }
+    }
+
+    pub fn n_test_queries(&self) -> usize {
+        calculate_n_test_queries(SECURITY_BITS, self.log_inv_rate)
     }
 }
 
 /// 2^(log_len + 1) uniform words, which pack into 2^log_len uniform `B128`.
 pub fn random_words(log_len: usize, seed: u64) -> Vec<Word> {
-    let mut rng = Rng::new(seed);
-    (0..2 << log_len).map(|_| Word(rng.next_u64())).collect()
+    super::random_u64s(log_len, seed)
+        .into_iter()
+        .map(Word)
+        .collect()
 }
 
 fn pack<'a>(pool: &'a BufferPool, log_len: usize, words: &[Word]) -> Buffer<'a> {
@@ -129,7 +97,7 @@ fn pack<'a>(pool: &'a BufferPool, log_len: usize, words: &[Word]) -> Buffer<'a> 
 /// The point's low [`LOG_PACKING`] coordinates address the bit within an element and the high ones
 /// the element, which is the split `ring_switch::prove` asserts. Folding the bit rows against the
 /// high coordinates and then evaluating at the low ones is that extension, read out of the
-/// vector's own memory rather than through a 2^(LOG_LEN + LOG_PACKING) tensor.
+/// vector's own memory rather than through a 2^(log_len + LOG_PACKING) tensor.
 pub fn evaluate_bits(message: &Buffer<'_>, eval_point: &[B128]) -> B128 {
     let suffix = &eval_point[LOG_PACKING..];
     let (lo, hi) = suffix.split_at(suffix.len().min(LOG_SPLIT_BLOCK));
@@ -247,60 +215,35 @@ pub fn verify(
     Ok(())
 }
 
-fn main() {
-    pin(CPU);
+pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
     let pool = BufferPool::new();
-    let (setup_ms, pcs) = once(|| Pcs::new(LOG_LEN));
-    let words = random_words(LOG_LEN, WITNESS_SEED);
+    let pcs = Pcs::new(log_len, log_inv_rate);
+    let words: Vec<Word> = u64s.iter().map(|&w| Word(w)).collect();
 
     let (commit_ms, commitment) = {
-        let message = pack(&pool, LOG_LEN, &words);
+        let message = pack(&pool, log_len, &words);
         median_of(3, || commit(&pcs, &pool, &message))
     };
 
-    let (_, (proof, claim, timing)) = once(|| prove(&pcs, &pool, LOG_LEN, &words, None));
-    let (verify_ms, verified) = median_of(3, || verify(&pcs, LOG_LEN, &proof, claim));
+    let (_, (proof, claim, timing)) = once(|| prove(&pcs, &pool, log_len, &words, None));
+    let (verify_ms, verified) = median_of(3, || verify(&pcs, log_len, &proof, claim));
     verified.expect("the honest opening verifies");
 
-    let (tampered, tampered_claim, _) = prove(&pcs, &pool, LOG_LEN, &words, Some(0));
+    let (tampered, tampered_claim, _) = prove(&pcs, &pool, log_len, &words, Some(0));
     assert!(
-        verify(&pcs, LOG_LEN, &tampered, tampered_claim).is_err(),
+        verify(&pcs, log_len, &tampered, tampered_claim).is_err(),
         "an opening of a vector the root does not bind must be rejected"
     );
 
-    let kb = |bytes: usize| bytes as f64 / 1024.0;
-    let opening_bytes = proof.len() - commitment.len();
-
-    println!("binius64 BaseFold, core {CPU}, one thread");
-    println!(
-        "committed vector: 2^{LOG_LEN} B128 = 2^{} bits, log_inv_rate {LOG_INV_RATE}, \
-         sha256 Merkle, {} FRI test queries",
-        LOG_LEN + LOG_PACKING,
-        calculate_n_test_queries(SECURITY_BITS, LOG_INV_RATE)
-    );
-    println!(
-        "\n  {:>10}{:>10}{:>10}{:>10}{:>10}",
-        "Comm.", "Prover", "Verifier", "C", "|pi|"
-    );
-    println!(
-        "  {:>10}{:>10}{:>10}{:>10}{:>10}",
-        "ms", "ms", "ms", "KB", "KB"
-    );
-    println!(
-        "  {:>10.2}{:>10.2}{:>10.2}{:>10.2}{:>10.2}",
+    Row {
+        scheme: "binius64 BaseFold",
+        rate: rate_label(log_inv_rate),
+        security: format!("{SECURITY_BITS} bits, {} queries", pcs.n_test_queries()),
+        claim: "bit-MLE",
         commit_ms,
-        timing.opening,
+        open_ms: timing.opening,
         verify_ms,
-        kb(commitment.len()),
-        kb(opening_bytes)
-    );
-    println!(
-        "\n  setup {setup_ms:.1} ms, claim {:.1} ms, commit inside the proving run {:.1} ms",
-        timing.statement, timing.commit
-    );
-    println!(
-        "  C is the Merkle root on the tape, the FRI parameters it is read with being public.\n  \
-         |pi| is the rest of the tape: the ring switch and the batched BaseFold opening.\n  \
-         The claimed value, 16 bytes, is the statement rather than the proof."
-    );
+        commitment: commitment.len(),
+        proof: proof.len() - commitment.len(),
+    }
 }
