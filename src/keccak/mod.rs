@@ -24,7 +24,7 @@ use crate::fields::scalar::{B128 as SB, F162};
 use crate::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
-    Witness, SIZE_STEP, WITNESS_LOG_LEN,
+    Witness,
 };
 use crate::wire;
 use crate::Transcript;
@@ -40,7 +40,7 @@ use channel::OracleFreeChannel;
 use liop::Liop;
 use std::time::Instant;
 
-pub use circuit::Circuit;
+pub use circuit::{Circuit, Hash, MESSAGE_LEN};
 
 /// Why a proof did not verify.
 #[derive(Debug)]
@@ -59,8 +59,6 @@ impl std::fmt::Display for Error {
         }
     }
 }
-
-pub const MESSAGE_LEN: usize = 1 << (WITNESS_LOG_LEN + SIZE_STEP - 2);
 
 /// Milliseconds of wall clock per prover stage, named as binius64's phase spans name them.
 #[derive(Clone, Copy, Default)]

@@ -2,11 +2,13 @@
 //! real 482-permutation instance end to end in both PCS modes, honest and tampered.
 use bin_ntt::fields::crossfield::eval_pi1;
 use bin_ntt::fields::scalar::B128;
-use bin_ntt::keccak::{Circuit, Error, Session, MESSAGE_LEN};
+use bin_ntt::keccak::{Circuit, Error, Hash, Session};
 use bin_ntt::rng::Rng;
 use bin_ntt::{EvaluationPoint, Modulus, Params, Witness, F162};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
+const HASH: Hash = Hash::Keccak256;
+const MESSAGE_LEN: usize = HASH.message_len();
 
 fn message() -> Vec<u8> {
     (0..MESSAGE_LEN)
@@ -48,7 +50,7 @@ fn the_switch_point_is_the_evaluation_point() {
 
 #[test]
 fn the_honest_proof_verifies_in_both_modes() {
-    let circuit = Circuit::new(MESSAGE_LEN);
+    let circuit = Circuit::new(HASH, MESSAGE_LEN);
     let witness = circuit.witness(&message());
     for recursion in [false, true] {
         let mut session = Session::new(circuit.constraint_system().clone(), recursion, MATRIX_SEED);
@@ -64,7 +66,7 @@ fn the_honest_proof_verifies_in_both_modes() {
 /// longer open binius64's claim, so the proof dies before the opening is even read.
 #[test]
 fn a_flipped_trace_bit_is_rejected() {
-    let circuit = Circuit::new(MESSAGE_LEN);
+    let circuit = Circuit::new(HASH, MESSAGE_LEN);
     let witness = circuit.witness(&message());
     let mut session = Session::new(circuit.constraint_system().clone(), false, MATRIX_SEED);
     let (proof, _, _) = session.prove(&witness, Some(12345));
