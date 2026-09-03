@@ -33,7 +33,7 @@ pub mod eval;
 pub mod f162;
 pub mod fields;
 pub mod fold;
-pub mod hashes;
+pub mod binius;
 pub mod labrador;
 pub mod params;
 pub mod recursion;
