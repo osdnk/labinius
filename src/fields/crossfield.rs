@@ -250,8 +250,19 @@ impl SwitchProver {
     }
 
     pub fn new(pi0: &[B128], eq_hi: &[B128], batch: &[F162]) -> Self {
+        Self::batched(pi0, &[eq_hi], &[F162::ONE], batch)
+    }
+
+    pub fn batched(pi0: &[B128], eq_his: &[&[B128]], gammas: &[F162], batch: &[F162]) -> Self {
         let tab = psi_table(batch);
-        let a: Vec<F162> = eq_hi.iter().map(|&e| psi(&tab, e)).collect();
+        let a: Vec<F162> = (0..pi0.len())
+            .map(|j| {
+                eq_his
+                    .iter()
+                    .zip(gammas)
+                    .fold(F162::ZERO, |acc, (e, &g)| acc + g * psi(&tab, e[j]))
+            })
+            .collect();
         let p: Vec<F162> = pi0.iter().map(|&x| F162::from_b128(x)).collect();
         let half = pi0.len();
         Self {
@@ -275,6 +286,20 @@ impl SwitchProver {
     }
 }
 
+pub fn slice_sum(v: &[B128], batch: &[F162]) -> F162 {
+    let mut u = vec![0u128; PACK];
+    for (i, &vi) in v.iter().enumerate() {
+        for k in 0..PACK {
+            if vi.bit(k) {
+                u[k] |= 1u128 << i;
+            }
+        }
+    }
+    (0..PACK).fold(F162::ZERO, |s, k| {
+        s + F162::from_b128(B128(u[k])) * batch[k]
+    })
+}
+
 pub struct SwitchVerifier {
     pub s: F162,
     round: usize,
@@ -295,19 +320,11 @@ impl SwitchVerifier {
         if recomputed != claim {
             return Err("partial evaluation mismatch");
         }
-        let mut u = vec![0u128; PACK];
-        for (i, &vi) in v.iter().enumerate() {
-            for k in 0..PACK {
-                if vi.bit(k) {
-                    u[k] |= 1u128 << i;
-                }
-            }
-        }
-        let mut s = F162::ZERO;
-        for k in 0..PACK {
-            s += F162::from_b128(B128(u[k])) * batch[k];
-        }
-        Ok(Self { s, round: 0 })
+        Ok(Self::from_sum(slice_sum(v, batch)))
+    }
+
+    pub const fn from_sum(s: F162) -> Self {
+        Self { s, round: 0 }
     }
 
     pub fn round(&mut self, msg: [F162; 2], r: F162) {
