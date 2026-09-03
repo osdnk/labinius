@@ -25,17 +25,32 @@ pub fn elements(u64s: &[u64]) -> Vec<F128> {
         .collect()
 }
 
-pub fn profile(log_inv_rate: usize) -> LigeritoProfile {
-    match log_inv_rate {
-        1 => LigeritoProfile::Fast,
-        2 => LigeritoProfile::Slim,
-        _ => panic!("flock ships a profile at rate 1/2 and 1/4 only"),
+pub const PROFILES: [LigeritoProfile; 4] = [
+    LigeritoProfile::Fast,
+    LigeritoProfile::Slim,
+    LigeritoProfile::Fast100,
+    LigeritoProfile::Slim100,
+];
+
+pub fn target(profile: LigeritoProfile) -> &'static str {
+    match profile {
+        LigeritoProfile::Fast | LigeritoProfile::Slim => "~128",
+        _ => "100",
     }
 }
 
-pub fn params(log_len: usize, log_inv_rate: usize) -> PcsParams {
+pub fn label(profile: LigeritoProfile) -> &'static str {
+    match profile {
+        LigeritoProfile::Fast => "flock-core Ligerito Fast",
+        LigeritoProfile::Slim => "flock-core Ligerito Slim",
+        LigeritoProfile::Fast100 => "flock-core Ligerito Fast100",
+        LigeritoProfile::Slim100 => "flock-core Ligerito Slim100",
+        LigeritoProfile::Secure => "flock-core Ligerito Secure",
+    }
+}
+
+pub fn params(log_len: usize, profile: LigeritoProfile) -> PcsParams {
     let m = log_len + LOG_PACKING;
-    let profile = profile(log_inv_rate);
     PcsParams {
         m,
         log_inv_rate: profile.log_inv_rate(),
@@ -52,8 +67,8 @@ fn claim(poly: &[F128], eq: &[F128]) -> F128 {
         .fold(F128::ZERO, |acc, (&e, &p)| acc + e * p)
 }
 
-pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
-    let params = params(log_len, log_inv_rate);
+pub fn run(log_len: usize, profile: LigeritoProfile, u64s: &[u64]) -> Row {
+    let params = params(log_len, profile);
     let prover = params
         .ligerito_prover_config()
         .expect("the profile ships a config at this size");
@@ -114,11 +129,12 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
 
     let cap = commitment.cap.len() * HASH_BYTES;
     Row {
-        scheme: "flock-core Ligerito",
-        rate: rate_label(log_inv_rate),
+        scheme: label(profile),
+        rate: rate_label(profile.log_inv_rate()),
+        target: target(profile).to_string(),
         security: format!(
-            "{:?} profile, 128-bit floor, queries {:?}, rates {:?}",
-            params.profile, prover.queries, prover.log_inv_rates
+            "queries {:?}, rates {:?}, grinding {:?}",
+            prover.queries, prover.log_inv_rates, prover.grinding_bits
         ),
         claim: "element-MLE, chosen point",
         commit_ms,

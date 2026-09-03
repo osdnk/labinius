@@ -238,7 +238,8 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
     Row {
         scheme: "binius64 BaseFold",
         rate: rate_label(log_inv_rate),
-        security: format!("{SECURITY_BITS} bits, {} queries", pcs.n_test_queries()),
+        target: format!("{SECURITY_BITS}"),
+        security: format!("unique decoding, {} queries, no grinding", pcs.n_test_queries()),
         claim: "bit-MLE",
         commit_ms,
         open_ms: timing.opening,

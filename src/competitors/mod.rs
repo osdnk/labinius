@@ -1,5 +1,4 @@
 pub mod basefold;
-pub mod ligerito_bolt;
 pub mod ligerito_flock;
 pub mod whir;
 
@@ -22,6 +21,7 @@ pub const SECURITY_BITS: usize = binius_verifier::SECURITY_BITS;
 pub struct Row {
     pub scheme: &'static str,
     pub rate: String,
+    pub target: String,
     pub security: String,
     pub claim: &'static str,
     pub commit_ms: f64,

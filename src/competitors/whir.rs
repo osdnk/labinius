@@ -168,8 +168,9 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
     Row {
         scheme: "binius64 WHIR",
         rate: rate_label(log_inv_rate),
+        target: format!("{SECURITY_BITS}"),
         security: format!(
-            "{SECURITY_BITS} bits target, {:.1} achieved, ladder {}",
+            "unique decoding, {:.1} achieved, no grinding, ladder {}",
             pcs.achieved(),
             pcs.ladder()
         ),
