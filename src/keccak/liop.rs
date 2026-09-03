@@ -9,17 +9,19 @@
 use binius_compute::Allocator;
 use binius_core::constraint_system::{ConstraintSystem, InoutSegment, Operand, ValueVec};
 use binius_core::word::Word;
-use binius_field::{AESTowerField8b as B8, PackedField};
+use binius_field::{PackedField, Rijndael8b as B8};
 use binius_iop::channel::IOPVerifierChannel;
 use binius_ip::channel::WordIPVerifierChannel;
 use binius_ip::sumcheck::SumcheckOutput;
 use binius_ip_prover::channel::{IPProverChannel, WordIPProverChannel};
+use binius_math::univariate::EvaluationDomain;
 use binius_math::BinarySubspace;
 use binius_prover::protocols::shift::{
-    build_key_collection, prove as prove_shift, KeyCollection, OperatorClaims, OperatorData,
-    ShiftOutput,
+    prove as prove_shift, KeyCollection, OperatorClaims, OperatorData, ShiftOutput,
 };
-use binius_prover::{and_reduction, protocols::binmul, ring_switch};
+use binius_prover::{
+    protocols::binmul, protocols::bitand as and_reduction, ring_switch,
+};
 use binius_verifier::config::B128;
 use binius_verifier::protocols::binmul::BinMulOutput;
 use binius_verifier::protocols::bitand::AndCheckOutput;
@@ -62,7 +64,7 @@ impl Liop {
             "the IntMul reduction is bounded on an IOP channel, which this pipeline has no oracle for"
         );
         let log_public_words = constraint_system.log_public_words(InoutSegment::Public);
-        let keys = build_key_collection(&constraint_system, InoutSegment::Public);
+        let keys = KeyCollection::build(&constraint_system, InoutSegment::Public);
         Liop {
             iop: IOPVerifier::new(constraint_system, log_public_words),
             keys,
@@ -137,7 +139,7 @@ impl Liop {
                 c_hi_evals,
             }) => {
                 let r_zhat_prime = bitand_claim.r_zhat_prime;
-                let l_tilde = binius_math::univariate::lagrange_evals(&subspace, r_zhat_prime);
+                let l_tilde = subspace.lagrange_evals_buffer(r_zhat_prime);
                 let collapse = |evals| {
                     binius_math::inner_product::inner_product(evals, l_tilde.iter_scalars())
                 };
