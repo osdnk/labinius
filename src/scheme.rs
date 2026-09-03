@@ -162,13 +162,11 @@ fn moduli(recursion: bool) -> (Modulus, Vec<Modulus>) {
 }
 
 #[cfg(feature = "sizexl")]
-fn moduli(recursion: bool) -> (Modulus, Vec<Modulus>) {
-    let base = if recursion {
-        Modulus::Q9721_FS_S
-    } else {
-        Modulus::Q3889_FS_S
-    };
-    (base, vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S])
+fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+    )
 }
 
 impl Params {
