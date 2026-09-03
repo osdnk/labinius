@@ -32,6 +32,7 @@ pub mod competitors;
 pub mod eval;
 pub mod f162;
 pub mod fields;
+pub mod flock;
 pub mod fold;
 pub mod binius;
 pub mod labrador;
