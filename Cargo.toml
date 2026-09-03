@@ -25,6 +25,8 @@ binius-iop = { git = "https://github.com/IrreducibleOSS/binius64", rev = "b3cacc
 binius-iop-prover = { git = "https://github.com/IrreducibleOSS/binius64", rev = "b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f" }
 binius-prover = { git = "https://github.com/IrreducibleOSS/binius64", rev = "b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f" }
 binius-verifier = { git = "https://github.com/IrreducibleOSS/binius64", rev = "b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f" }
+# Ligerito as Flock ports it, over F128, with the ring switch above it.
+flock-core = { git = "https://github.com/succinctlabs/flock", rev = "4ae92adf7c726ae78309a2377c2f78cb95eb7562" }
 
 [profile.release]
 opt-level = 3
