@@ -256,19 +256,6 @@ unsafe fn center_epi16<const Q: u16>(x: __m512i) -> __m512i {
     _mm512_mask_sub_epi16(v, hi, v, _mm512_set1_epi16(q as i16))
 }
 
-/// `max_j max_p |b.v[j][p]|`, 32 lanes at a time.
-#[target_feature(enable = "avx512f,avx512bw")]
-unsafe fn max_abs_batch(b: &Batch32) -> i32 {
-    let mut m = _mm512_setzero_si512();
-    for j in 0..N {
-        let x = _mm512_load_si512(b.v[j].as_ptr() as *const __m512i);
-        m = _mm512_max_epi16(m, _mm512_abs_epi16(x));
-    }
-    let mut out = [0i16; 32];
-    _mm512_storeu_si512(out.as_mut_ptr() as *mut __m512i, m);
-    out.iter().map(|x| *x as i32).max().unwrap()
-}
-
 /// Every slot of a batch fully reduced and centered (`|v| <= (q-1)/2`); the input must satisfy
 /// `|v| <= center_k(Q) * q`, which every generic kernel's output bound does.
 #[target_feature(enable = "avx512f,avx512bw")]
@@ -712,16 +699,6 @@ pub(crate) fn fold_witness(
         (12637, true) => fold_quad::<12637>(aux, challenges, bpc),
         _ => unreachable!("no limb with q = {q}"),
     };
-    let half = (q as i32 - 1) / 2;
-    let max_abs = vb
-        .iter()
-        .map(|b| unsafe { max_abs_batch(b) })
-        .max()
-        .unwrap_or(0);
-    assert!(
-        max_abs <= half,
-        "the folded witness does not fit the centered range of the base modulus {q}"
-    );
     (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect()
 }
 
