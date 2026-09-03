@@ -1,10 +1,10 @@
-//! binius64's keccak circuit at `--message-len 65536` — 482 keccak-f permutations — proved three
-//! ways: stock binius64, and this crate's commitment in place of its BaseFold oracle with the
-//! recursion off and on.
+//! binius64's Keccak-256, SHA-256 and BLAKE3 circuits, each at the message the compiled size
+//! rung fills, proved three ways: stock binius64, and this crate's commitment in place of its
+//! BaseFold oracle with the recursion off and on.
 //!
-//! `cargo run --release --offline --bin keccak`, pinned with `taskset -c 3`.
-use bin_ntt::keccak::stock::{Stock, LOG_INV_RATE};
-use bin_ntt::keccak::{Circuit, Session, Sizes, MESSAGE_LEN};
+//! `cargo run --release --offline --bin hashes`, pinned with `taskset -c 3`.
+use bin_ntt::hashes::stock::{Stock, LOG_INV_RATE};
+use bin_ntt::hashes::{Circuit, Hash, Session, Sizes};
 use bin_ntt::scheme::SIZE;
 use std::time::Instant;
 
@@ -55,10 +55,18 @@ fn peak_rss() -> f64 {
 
 fn main() {
     pin(CPU);
-    let message: Vec<u8> = (0..MESSAGE_LEN)
+    for hash in Hash::ALL {
+        compare(hash);
+        println!();
+    }
+}
+
+fn compare(hash: Hash) {
+    let len = hash.message_len();
+    let message: Vec<u8> = (0..len)
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect();
-    let (circuit_ms, circuit) = once(|| Circuit::new(MESSAGE_LEN));
+    let (circuit_ms, circuit) = once(|| Circuit::new(hash, len));
     let (witness_ms, witness) = once(|| circuit.witness(&message));
     let constraint_system = circuit.constraint_system();
 
@@ -90,10 +98,15 @@ fn main() {
         .verify(witness.inout(), &on_proof)
         .expect("the honest proof verifies");
 
-    println!("bin-ntt over binius64 keccak, core {CPU}, one thread, size {SIZE}");
     println!(
-        "keccak-256 of {MESSAGE_LEN} bytes: {} permutations, {} AND constraints, {} non-public words",
-        (MESSAGE_LEN + 1).div_ceil(136),
+        "bin-ntt over binius64 {}, core {CPU}, one thread, size {SIZE}",
+        hash.name()
+    );
+    println!(
+        "{} of {len} bytes: {} {}, {} AND constraints, {} non-public words",
+        hash.name(),
+        hash.compressions(len),
+        hash.unit(),
         constraint_system.and_constraints.len(),
         witness.non_public().len()
     );
@@ -184,7 +197,7 @@ fn main() {
         [None, Some(off_prover.opening), Some(on_prover.opening)],
         "ms",
     );
-    let listed = |t: &bin_ntt::keccak::ProverTiming| {
+    let listed = |t: &bin_ntt::hashes::ProverTiming| {
         t.pack + t.commit + t.bitand + t.shift + t.switch + t.opening
     };
     row(

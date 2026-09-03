@@ -10,7 +10,7 @@
 //! ones `src/keccak/stock.rs` measures inside a whole proof.
 //!
 //! `cargo run --release --offline --bin basefold`, pinned with `taskset -c 3`.
-use bin_ntt::keccak::stock::LOG_INV_RATE;
+use bin_ntt::hashes::stock::LOG_INV_RATE;
 use bin_ntt::rng::Rng;
 use binius_compute::BufferPool;
 use binius_core::word::Word;
