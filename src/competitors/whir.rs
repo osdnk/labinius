@@ -1,4 +1,4 @@
-use super::basefold::{evaluate_bits, LOG_PACKING};
+use super::basefold::evaluate_elements;
 use super::{median_of, milliseconds, once, rate_label, Row, SECURITY_BITS};
 use binius_compute::BufferPool;
 use binius_core::word::Word;
@@ -12,13 +12,12 @@ use binius_ip::channel::IPVerifierChannel;
 use binius_ip_prover::channel::IPProverChannel;
 use binius_math::ntt::domain_context::GaoMateerPreExpanded;
 use binius_math::ntt::NeighborsLastMultiThread;
+use binius_math::multilinear::eq::{eq_ind, eq_ind_partial_eval_in};
 use binius_math::FieldVec;
-use binius_prover::ring_switch::RingSwitchOutput;
 use binius_prover::{pack_witness, OptimalPackedB128};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
 use binius_verifier::config::{StdChallenger, B128};
 use binius_verifier::merkle_tree::BinaryMerkleTreeScheme;
-use binius_verifier::ring_switch;
 use std::time::Instant;
 
 type Packed = OptimalPackedB128;
@@ -101,15 +100,12 @@ pub fn prove(
         }
     };
 
-    let eval_point = channel.sample_many(log_len + LOG_PACKING);
-    let claim = evaluate_bits(&message, &eval_point);
+    let eval_point = channel.sample_many(log_len);
+    let claim = evaluate_elements(&message, &eval_point);
 
     let start = Instant::now();
-    let RingSwitchOutput {
-        rs_eq_ind,
-        sumcheck_claim,
-    } = binius_prover::ring_switch::prove(&pool, message.as_view(), &eval_point, &mut channel);
-    channel.prove_oracle_relation(oracle, rs_eq_ind, sumcheck_claim);
+    let eq = eq_ind_partial_eval_in::<_, Packed>(&pool, &eval_point);
+    channel.prove_oracle_relation(oracle, eq, claim);
     channel.finalize_oracle(oracle, message);
     channel.finish();
     let opening = milliseconds(start);
@@ -129,18 +125,9 @@ pub fn verify(
         .create_channel_from_transcript::<StdHashSuite, StdChallenger, _>(&mut transcript);
 
     let oracle = channel.recv_oracle(log_len, true)?;
-    let eval_point: Vec<B128> = channel.sample_many(log_len + LOG_PACKING);
-    let ring_switch::RingSwitchVerifyOutput {
-        eq_r_double_prime,
-        sumcheck_claim,
-    } = ring_switch::verify(claim, &eval_point, &mut channel).map_err(|e| match e {
-        ring_switch::Error::Channel(e) => binius_iop::channel::Error::IPChannel(e),
-    })?;
-
-    let suffix = eval_point[LOG_PACKING..].to_vec();
-    let transparent =
-        Box::new(move |point: &[B128]| ring_switch::eval_rs_eq(&suffix, point, &eq_r_double_prime));
-    channel.verify_oracle_relation(oracle, transparent, sumcheck_claim)?;
+    let eval_point: Vec<B128> = channel.sample_many(log_len);
+    let transparent = Box::new(move |point: &[B128]| eq_ind(&eval_point, point));
+    channel.verify_oracle_relation(oracle, transparent, claim)?;
     channel.finish()?;
     Ok(())
 }
@@ -174,7 +161,7 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
             pcs.achieved(),
             pcs.ladder()
         ),
-        claim: "bit-MLE",
+        claim: "element-MLE",
         commit_ms,
         open_ms: opening,
         verify_ms,

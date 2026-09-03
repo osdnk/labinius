@@ -8,10 +8,6 @@ use std::time::Instant;
 
 pub const LOG_LEN: usize = (WITNESS_LOG_LEN + SIZE_STEP) as usize;
 
-pub const LOG_ELEM_BITS: usize = 7;
-
-pub const LOG_BITS: usize = LOG_LEN + LOG_ELEM_BITS;
-
 pub const WITNESS_SEED: u64 = 0xC7;
 
 pub const CPU: usize = 3;

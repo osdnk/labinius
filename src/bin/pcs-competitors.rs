@@ -1,5 +1,5 @@
 use bin_ntt::competitors::{
-    basefold, ligerito_flock, pin, random_u64s, whir, Row, CPU, LOG_BITS, LOG_LEN, WITNESS_SEED,
+    basefold, ligerito_flock, pin, random_u64s, whir, Row, CPU, LOG_LEN, WITNESS_SEED,
 };
 
 fn print(rows: &[Row]) {
@@ -44,6 +44,9 @@ fn main() {
         rows.push(ligerito_flock::run(LOG_LEN, profile, &u64s));
     }
 
-    println!("three hash-based PCSs on 2^{LOG_LEN} B128 = 2^{LOG_BITS} bits, core {CPU}, one thread");
+    println!(
+        "three hash-based PCSs on 2^{LOG_LEN} B128, opened at one point of {LOG_LEN} \
+         coordinates, core {CPU}, one thread"
+    );
     print(&rows);
 }
