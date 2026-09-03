@@ -28,6 +28,7 @@
 
 pub mod api;
 pub mod challenge;
+pub mod competitors;
 pub mod eval;
 pub mod f162;
 pub mod fields;
