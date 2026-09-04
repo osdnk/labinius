@@ -428,9 +428,9 @@ fn attempt(x: &mut Xof, weight: usize, perm: &mut [u8; N162]) -> ShortChallenge 
 /// round actually uses.
 ///
 /// All attempts read one XOF derivation of the transcript, so the whole loop is one deterministic
-/// function of what has been absorbed and costs one blake3 finalisation however many attempts the
-/// bound needs; the per-attempt work is then the Fisher-Yates and the blocked evaluation, with no
-/// allocation.
+/// function of what has been absorbed and takes one transcript finalisation however many attempts
+/// the bound needs; the per-attempt work is then the Fisher-Yates, the sign hash of the candidate,
+/// and the blocked evaluation, with no allocation.
 pub fn sample_short_challenge(
     t: &mut Transcript,
     weight: usize,

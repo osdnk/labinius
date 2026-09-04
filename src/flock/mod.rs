@@ -249,6 +249,9 @@ impl Session {
 
         let start = Instant::now();
         let check = switch::verify(&[ab, c], &proof.switch, &mut ch).map_err(Error::Switch)?;
+        if check.d == F162::ZERO {
+            return Err(Error::Switch("the switch left the opened value unbound"));
+        }
         if check.s != check.d * proof.claimed_value {
             return Err(Error::Switch("the opened value does not close the switch"));
         }
