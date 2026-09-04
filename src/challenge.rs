@@ -448,3 +448,58 @@ pub fn sample_short_challenge(
         }
     }
 }
+
+pub const DEFAULT_OP_NORM_BOUND: f64 = 14.0;
+
+const OP_NORM_SINGLE: bool = true;
+
+pub fn op_norm_sq_f64(c: &ShortChallenge) -> f64 {
+    unsafe { crate::simd::opnorm::decide_f64(c, f64::INFINITY) }.1
+}
+
+pub fn op_norm_sq_f32(c: &ShortChallenge) -> f64 {
+    unsafe { crate::simd::opnorm::decide_f32(c, f64::INFINITY) }.1
+}
+
+pub fn operator_norm(c: &ShortChallenge) -> f64 {
+    op_norm_sq_f64(c).sqrt()
+}
+
+pub fn op_norm_within_prec(c: &ShortChallenge, bound: f64, single: bool) -> bool {
+    let bound_sq = bound * bound;
+    if single {
+        unsafe { crate::simd::opnorm::decide_f32(c, bound_sq) }.0
+    } else {
+        unsafe { crate::simd::opnorm::decide_f64(c, bound_sq) }.0
+    }
+}
+
+pub fn op_norm_within(c: &ShortChallenge, bound: f64) -> bool {
+    op_norm_within_prec(c, bound, OP_NORM_SINGLE)
+}
+
+pub fn sample_short_challenge_op_norm_prec(
+    t: &mut Transcript,
+    weight: usize,
+    bound: f64,
+    single: bool,
+) -> (ShortChallenge, u64) {
+    let mut x = Xof::new(t.reader(b"short-challenge"));
+    let mut perm = [0u8; N162];
+    let mut attempts = 0u64;
+    loop {
+        attempts += 1;
+        let c = attempt(&mut x, weight, &mut perm).signed();
+        if op_norm_within_prec(&c, bound, single) {
+            return (c, attempts);
+        }
+    }
+}
+
+pub fn sample_short_challenge_op_norm(
+    t: &mut Transcript,
+    weight: usize,
+    bound: f64,
+) -> (ShortChallenge, u64) {
+    sample_short_challenge_op_norm_prec(t, weight, bound, OP_NORM_SINGLE)
+}

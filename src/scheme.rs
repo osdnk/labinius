@@ -33,7 +33,8 @@ use crate::api::{
     PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
 };
 use crate::challenge::{
-    sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
+    sample_short_challenge_op_norm, ShortChallenge, Transcript, DEFAULT_OP_NORM_BOUND,
+    DEFAULT_WEIGHT,
 };
 use crate::fields::scalar::F162;
 use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb};
@@ -1215,7 +1216,14 @@ impl Verifier {
         source.absorb(transcript);
         FoldingChallenges {
             challenges: (0..self.params.columns())
-                .map(|_| sample_short_challenge(transcript, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
+                .map(|_| {
+                    sample_short_challenge_op_norm(
+                        transcript,
+                        DEFAULT_WEIGHT,
+                        DEFAULT_OP_NORM_BOUND,
+                    )
+                    .0
+                })
                 .collect(),
         }
     }
