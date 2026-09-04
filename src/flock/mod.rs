@@ -99,7 +99,14 @@ pub struct Session {
 
 impl Session {
     pub fn new(recursion: bool, matrix_seed: [u8; 32]) -> Session {
-        let params = Params::sized(recursion);
+        Session::with_params(Params::sized(recursion), matrix_seed)
+    }
+
+    pub fn bd(matrix_seed: [u8; 32]) -> Session {
+        Session::with_params(Params::sized_bd(), matrix_seed)
+    }
+
+    pub fn with_params(params: Params, matrix_seed: [u8; 32]) -> Session {
         let public_parameters = PublicParameters::from_seed(params.clone(), matrix_seed);
         Session {
             params,
@@ -318,8 +325,17 @@ impl Session {
         folded: &FoldedWitness,
         point: &EvaluationPoint,
     ) -> Result<(), VerificationError> {
-        let folded_commitment = self.verifier.fold_commitment(commitment, challenges);
         let folded_row = self.verifier.fold_row_evaluation(row, challenges);
+        if self.params.dropped_bits > 0 {
+            return self.verifier.verify_folded_opening_bd(
+                commitment,
+                challenges,
+                folded,
+                point,
+                &folded_row,
+            );
+        }
+        let folded_commitment = self.verifier.fold_commitment(commitment, challenges);
         self.verifier
             .verify_folded_opening(&folded_commitment, folded, point, &folded_row)
     }

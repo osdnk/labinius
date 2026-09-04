@@ -1,7 +1,3 @@
-//! binius64's Keccak-256, SHA-256 and BLAKE3 circuits, each at the message the compiled size
-//! rung fills, proved three ways: stock binius64, and this crate's commitment in place of its
-//! BaseFold oracle with the recursion off and on.
-//!
 //! `cargo run --release --offline --bin hashes-binius`, pinned with `taskset -c 3`.
 use bin_ntt::binius::stock::{Stock, LOG_INV_RATE};
 use bin_ntt::binius::{Circuit, Hash, Session, Sizes};
@@ -30,7 +26,7 @@ fn once<T>(f: impl FnOnce() -> T) -> (f64, T) {
 }
 
 /// One column per mode, `None` where that mode has no such stage.
-fn row(name: &str, values: [Option<f64>; 3], unit: &str) {
+fn row(name: &str, values: [Option<f64>; 4], unit: &str) {
     print!("  {name:<32}");
     for value in values {
         match value {
@@ -89,13 +85,18 @@ fn compare(hash: Hash) {
     // The same instance with our commitment, without and with the recursion.
     let (off_setup, mut off) = once(|| Session::new(constraint_system.clone(), false, MATRIX_SEED));
     let (on_setup, mut on) = once(|| Session::new(constraint_system.clone(), true, MATRIX_SEED));
+    let (bd_setup, mut bd) = once(|| Session::bd(constraint_system.clone(), MATRIX_SEED));
     let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&witness, None));
     let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&witness, None));
+    let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&witness, None));
     let off_verifier = off
         .verify(witness.inout(), &off_proof)
         .expect("the honest proof verifies");
     let on_verifier = on
         .verify(witness.inout(), &on_proof)
+        .expect("the honest proof verifies");
+    let bd_verifier = bd
+        .verify(witness.inout(), &bd_proof)
         .expect("the honest proof verifies");
 
     println!(
@@ -136,24 +137,44 @@ fn compare(hash: Hash) {
         moduli(&on)
     );
     println!(
-        "\n  {:<32}{:>13}{:>13}{:>13}",
-        "", "stock", "recursion", "recursion"
+        "bit-drop:      2^{} F162 in {} columns, moduli {}, {} bits dropped",
+        bd.params().witness_log_len,
+        bd.params().columns(),
+        moduli(&bd),
+        bd.params().dropped_bits
     );
-    println!("  {:<32}{:>13}{:>13}{:>13}", "", "binius64", "off", "on");
+    println!(
+        "\n  {:<32}{:>13}{:>13}{:>13}{:>13}",
+        "", "stock", "recursion", "recursion", ""
+    );
+    println!(
+        "  {:<32}{:>13}{:>13}{:>13}{:>13}",
+        "", "binius64", "off", "on", "bit-drop"
+    );
 
     println!("\nSETUP (once, not per proof)");
-    row("circuit", [Some(circuit_ms); 3], "ms");
+    row("circuit", [Some(circuit_ms); 4], "ms");
     row(
         "commitment key and constraints",
-        [Some(stock_setup), Some(off_setup), Some(on_setup)],
+        [
+            Some(stock_setup),
+            Some(off_setup),
+            Some(on_setup),
+            Some(bd_setup),
+        ],
         "ms",
     );
 
     println!("\nPROVER");
-    row("witness", [Some(witness_ms); 3], "ms");
+    row("witness", [Some(witness_ms); 4], "ms");
     row(
         "packing",
-        [None, Some(off_prover.pack), Some(on_prover.pack)],
+        [
+            None,
+            Some(off_prover.pack),
+            Some(on_prover.pack),
+            Some(bd_prover.pack),
+        ],
         "ms",
     );
     row(
@@ -162,6 +183,7 @@ fn compare(hash: Hash) {
             Some(stock_commit),
             Some(off_prover.commit),
             Some(on_prover.commit),
+            Some(bd_prover.commit),
         ],
         "ms",
     );
@@ -171,6 +193,7 @@ fn compare(hash: Hash) {
             Some(stock_bitand),
             Some(off_prover.bitand),
             Some(on_prover.bitand),
+            Some(bd_prover.bitand),
         ],
         "ms",
     );
@@ -180,6 +203,7 @@ fn compare(hash: Hash) {
             Some(stock_shift),
             Some(off_prover.shift),
             Some(on_prover.shift),
+            Some(bd_prover.shift),
         ],
         "ms",
     );
@@ -189,12 +213,18 @@ fn compare(hash: Hash) {
             Some(stock_pcs),
             Some(off_prover.switch),
             Some(on_prover.switch),
+            Some(bd_prover.switch),
         ],
         "ms",
     );
     row(
         "opening",
-        [None, Some(off_prover.opening), Some(on_prover.opening)],
+        [
+            None,
+            Some(off_prover.opening),
+            Some(on_prover.opening),
+            Some(bd_prover.opening),
+        ],
         "ms",
     );
     let listed = |t: &bin_ntt::binius::ProverTiming| {
@@ -206,6 +236,7 @@ fn compare(hash: Hash) {
             Some(stock_prove - stock_commit - stock_bitand - stock_shift - stock_pcs),
             Some(off_prover.total - listed(&off_prover)),
             Some(on_prover.total - listed(&on_prover)),
+            Some(bd_prover.total - listed(&bd_prover)),
         ],
         "ms",
     );
@@ -215,6 +246,7 @@ fn compare(hash: Hash) {
             Some(stock_prove),
             Some(off_prover.total),
             Some(on_prover.total),
+            Some(bd_prover.total),
         ],
         "ms",
     );
@@ -226,6 +258,7 @@ fn compare(hash: Hash) {
             None,
             Some(off_verifier.commitment),
             Some(on_verifier.commitment),
+            Some(bd_verifier.commitment),
         ],
         "ms",
     );
@@ -235,6 +268,7 @@ fn compare(hash: Hash) {
             Some(stock_verify_reduce),
             Some(off_verifier.reduce),
             Some(on_verifier.reduce),
+            Some(bd_verifier.reduce),
         ],
         "ms",
     );
@@ -244,12 +278,18 @@ fn compare(hash: Hash) {
             Some(stock_verify_pcs),
             Some(off_verifier.switch),
             Some(on_verifier.switch),
+            Some(bd_verifier.switch),
         ],
         "ms",
     );
     row(
         "decode the opening",
-        [None, Some(off_verifier.decode), None],
+        [
+            None,
+            Some(off_verifier.decode),
+            None,
+            Some(bd_verifier.decode),
+        ],
         "ms",
     );
     row(
@@ -258,6 +298,7 @@ fn compare(hash: Hash) {
             Some(stock_basefold),
             Some(off_verifier.opening),
             Some(on_verifier.opening),
+            Some(bd_verifier.opening),
         ],
         "ms",
     );
@@ -267,6 +308,7 @@ fn compare(hash: Hash) {
             Some(stock_native),
             Some(off_verifier.wiring),
             Some(on_verifier.wiring),
+            Some(bd_verifier.wiring),
         ],
         "ms",
     );
@@ -276,6 +318,7 @@ fn compare(hash: Hash) {
             Some(stock_verify),
             Some(off_verifier.total),
             Some(on_verifier.total),
+            Some(bd_verifier.total),
         ],
         "ms",
     );
@@ -284,12 +327,22 @@ fn compare(hash: Hash) {
     let kb = |b: usize| Some(b as f64 / 1024.0);
     row(
         "binius64 LIOP",
-        [None, kb(off_sizes.liop), kb(on_sizes.liop)],
+        [
+            None,
+            kb(off_sizes.liop),
+            kb(on_sizes.liop),
+            kb(bd_sizes.liop),
+        ],
         "KB",
     );
     row(
         "cross-field switch",
-        [None, kb(off_sizes.switch), kb(on_sizes.switch)],
+        [
+            None,
+            kb(off_sizes.switch),
+            kb(on_sizes.switch),
+            kb(bd_sizes.switch),
+        ],
         "KB",
     );
     row(
@@ -298,18 +351,29 @@ fn compare(hash: Hash) {
             None,
             kb(off_sizes.commitment_wire),
             kb(on_sizes.commitment_wire),
+            kb(bd_sizes.commitment_wire),
         ],
         "KB",
     );
     row(
         "opening",
-        [None, kb(off_sizes.opening), kb(on_sizes.opening)],
+        [
+            None,
+            kb(off_sizes.opening),
+            kb(on_sizes.opening),
+            kb(bd_sizes.opening),
+        ],
         "KB",
     );
     let total = |s: &Sizes| kb(s.liop + s.switch + s.commitment_wire + s.opening);
     row(
         "total",
-        [kb(stock_proof.len()), total(&off_sizes), total(&on_sizes)],
+        [
+            kb(stock_proof.len()),
+            total(&off_sizes),
+            total(&on_sizes),
+            total(&bd_sizes),
+        ],
         "KB",
     );
 

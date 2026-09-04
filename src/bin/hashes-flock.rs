@@ -23,7 +23,7 @@ fn once<T>(f: impl FnOnce() -> T) -> (f64, T) {
     (start.elapsed().as_secs_f64() * 1e3, value)
 }
 
-fn row(name: &str, values: [Option<f64>; 4], unit: &str) {
+fn row(name: &str, values: [Option<f64>; 5], unit: &str) {
     print!("  {name:<32}");
     for value in values {
         match value {
@@ -98,13 +98,18 @@ fn compare(hash: Hash) {
 
     let (off_setup, mut off) = once(|| Session::new(false, MATRIX_SEED));
     let (on_setup, mut on) = once(|| Session::new(true, MATRIX_SEED));
+    let (bd_setup, mut bd) = once(|| Session::bd(MATRIX_SEED));
     let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&instance, &witness));
     let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&instance, &witness));
+    let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&instance, &witness));
     let off_verifier = off
         .verify(&instance, &off_proof)
         .expect("the honest proof verifies");
     let on_verifier = on
         .verify(&instance, &on_proof)
+        .expect("the honest proof verifies");
+    let bd_verifier = bd
+        .verify(&instance, &bd_proof)
         .expect("the honest proof verifies");
 
     let r1cs = instance.r1cs();
@@ -158,42 +163,67 @@ fn compare(hash: Hash) {
         moduli(&on)
     );
     println!(
-        "\n  {:<32}{:>13}{:>13}{:>13}{:>13}",
-        "", "stock", "stock", "recursion", "recursion"
+        "bit-drop:      2^{} F162 in {} columns, moduli {}, {} bits dropped",
+        bd.params().witness_log_len,
+        bd.params().columns(),
+        moduli(&bd),
+        bd.params().dropped_bits
     );
     println!(
-        "  {:<32}{:>13}{:>13}{:>13}{:>13}",
-        "", "union", "core", "off", "on"
+        "\n  {:<32}{:>13}{:>13}{:>13}{:>13}{:>13}",
+        "", "stock", "stock", "recursion", "recursion", ""
+    );
+    println!(
+        "  {:<32}{:>13}{:>13}{:>13}{:>13}{:>13}",
+        "", "union", "core", "off", "on", "bit-drop"
     );
 
     println!("\nSETUP (once, not per proof)");
-    row("R1CS and PCS parameters", [Some(setup_ms); 4], "ms");
+    row("R1CS and PCS parameters", [Some(setup_ms); 5], "ms");
     row(
         "commitment key",
-        [None, None, Some(off_setup), Some(on_setup)],
+        [None, None, Some(off_setup), Some(on_setup), Some(bd_setup)],
         "ms",
     );
 
     println!("\nPROVER");
-    row("witness", [Some(witness_ms); 4], "ms");
+    row("witness", [Some(witness_ms); 5], "ms");
     row(
         "lift to F162",
-        [None, None, Some(off_prover.pack), Some(on_prover.pack)],
+        [
+            None,
+            None,
+            Some(off_prover.pack),
+            Some(on_prover.pack),
+            Some(bd_prover.pack),
+        ],
         "ms",
     );
     row(
         "commit, bind, zerocheck, lincheck",
-        [None, Some(core_reduce), None, None],
+        [None, Some(core_reduce), None, None, None],
         "ms",
     );
     row(
         "commit",
-        [None, None, Some(off_prover.commit), Some(on_prover.commit)],
+        [
+            None,
+            None,
+            Some(off_prover.commit),
+            Some(on_prover.commit),
+            Some(bd_prover.commit),
+        ],
         "ms",
     );
     row(
         "bind the commitment",
-        [None, None, Some(off_prover.bind), Some(on_prover.bind)],
+        [
+            None,
+            None,
+            Some(off_prover.bind),
+            Some(on_prover.bind),
+            Some(bd_prover.bind),
+        ],
         "ms",
     );
     row(
@@ -203,6 +233,7 @@ fn compare(hash: Hash) {
             None,
             Some(off_prover.zerocheck),
             Some(on_prover.zerocheck),
+            Some(bd_prover.zerocheck),
         ],
         "ms",
     );
@@ -213,12 +244,19 @@ fn compare(hash: Hash) {
             None,
             Some(off_prover.lincheck),
             Some(on_prover.lincheck),
+            Some(bd_prover.lincheck),
         ],
         "ms",
     );
     row(
         "ring-switch / cross-field switch",
-        [None, None, Some(off_prover.switch), Some(on_prover.switch)],
+        [
+            None,
+            None,
+            Some(off_prover.switch),
+            Some(on_prover.switch),
+            Some(bd_prover.switch),
+        ],
         "ms",
     );
     row(
@@ -228,6 +266,7 @@ fn compare(hash: Hash) {
             Some(core_open),
             Some(off_prover.opening),
             Some(on_prover.opening),
+            Some(bd_prover.opening),
         ],
         "ms",
     );
@@ -241,6 +280,7 @@ fn compare(hash: Hash) {
             None,
             Some(off_prover.total - listed(&off_prover)),
             Some(on_prover.total - listed(&on_prover)),
+            Some(bd_prover.total - listed(&bd_prover)),
         ],
         "ms",
     );
@@ -251,6 +291,7 @@ fn compare(hash: Hash) {
             Some(core_reduce + core_open),
             Some(off_prover.total),
             Some(on_prover.total),
+            Some(bd_prover.total),
         ],
         "ms",
     );
@@ -261,6 +302,7 @@ fn compare(hash: Hash) {
             Some(witness_ms + core_reduce + core_open),
             Some(witness_ms + off_prover.total),
             Some(witness_ms + on_prover.total),
+            Some(witness_ms + bd_prover.total),
         ],
         "ms",
     );
@@ -273,6 +315,7 @@ fn compare(hash: Hash) {
             Some(core_verify_reduce),
             Some(off_verifier.reduce),
             Some(on_verifier.reduce),
+            Some(bd_verifier.reduce),
         ],
         "ms",
     );
@@ -283,12 +326,19 @@ fn compare(hash: Hash) {
             None,
             Some(off_verifier.switch),
             Some(on_verifier.switch),
+            Some(bd_verifier.switch),
         ],
         "ms",
     );
     row(
         "decode the opening",
-        [None, None, Some(off_verifier.decode), None],
+        [
+            None,
+            None,
+            Some(off_verifier.decode),
+            None,
+            Some(bd_verifier.decode),
+        ],
         "ms",
     );
     row(
@@ -298,6 +348,7 @@ fn compare(hash: Hash) {
             Some(core_verify_open),
             Some(off_verifier.opening),
             Some(on_verifier.opening),
+            Some(bd_verifier.opening),
         ],
         "ms",
     );
@@ -308,6 +359,7 @@ fn compare(hash: Hash) {
             Some(core_verify_reduce + core_verify_open),
             Some(off_verifier.total),
             Some(on_verifier.total),
+            Some(bd_verifier.total),
         ],
         "ms",
     );
@@ -321,6 +373,7 @@ fn compare(hash: Hash) {
             kb(core_sizes.zerocheck),
             kb(off_sizes.zerocheck),
             kb(on_sizes.zerocheck),
+            kb(bd_sizes.zerocheck),
         ],
         "KB",
     );
@@ -331,6 +384,7 @@ fn compare(hash: Hash) {
             kb(core_sizes.lincheck),
             kb(off_sizes.lincheck),
             kb(on_sizes.lincheck),
+            kb(bd_sizes.lincheck),
         ],
         "KB",
     );
@@ -341,6 +395,7 @@ fn compare(hash: Hash) {
             kb(core_sizes.switch),
             kb(off_sizes.switch),
             kb(on_sizes.switch),
+            kb(bd_sizes.switch),
         ],
         "KB",
     );
@@ -351,6 +406,7 @@ fn compare(hash: Hash) {
             kb(core_sizes.commitment),
             kb(off_sizes.commitment),
             kb(on_sizes.commitment),
+            kb(bd_sizes.commitment),
         ],
         "KB",
     );
@@ -361,6 +417,7 @@ fn compare(hash: Hash) {
             kb(core_sizes.opening),
             kb(off_sizes.opening),
             kb(on_sizes.opening),
+            kb(bd_sizes.opening),
         ],
         "KB",
     );
@@ -372,6 +429,7 @@ fn compare(hash: Hash) {
             total(&core_sizes),
             total(&off_sizes),
             total(&on_sizes),
+            total(&bd_sizes),
         ],
         "KB",
     );

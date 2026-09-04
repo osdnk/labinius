@@ -140,8 +140,19 @@ impl Session {
         recursion: bool,
         matrix_seed: [u8; 32],
     ) -> Session {
+        Session::with_params(constraint_system, Params::sized(recursion), matrix_seed)
+    }
+
+    pub fn bd(constraint_system: ConstraintSystem, matrix_seed: [u8; 32]) -> Session {
+        Session::with_params(constraint_system, Params::sized_bd(), matrix_seed)
+    }
+
+    pub fn with_params(
+        constraint_system: ConstraintSystem,
+        params: Params,
+        matrix_seed: [u8; 32],
+    ) -> Session {
         let liop = Liop::new(constraint_system);
-        let params = Params::sized(recursion);
         assert_eq!(
             liop.log_witness_elems(),
             params.witness_log_len as usize,
@@ -380,8 +391,17 @@ impl Session {
         folded: &FoldedWitness,
         point: &EvaluationPoint,
     ) -> Result<(), VerificationError> {
-        let folded_commitment = self.verifier.fold_commitment(commitment, challenges);
         let folded_row = self.verifier.fold_row_evaluation(row, challenges);
+        if self.params.dropped_bits > 0 {
+            return self.verifier.verify_folded_opening_bd(
+                commitment,
+                challenges,
+                folded,
+                point,
+                &folded_row,
+            );
+        }
+        let folded_commitment = self.verifier.fold_commitment(commitment, challenges);
         self.verifier
             .verify_folded_opening(&folded_commitment, folded, point, &folded_row)
     }
