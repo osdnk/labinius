@@ -55,9 +55,9 @@
 //! [`fold_period`] is per prime and runs from 64 chunks down to 4. The inverse transform back to
 //! coefficients is that tree's ([`intt_gen_batch32`], `vertical_gen_large`'s, or
 //! `vertical_gen_quad`'s).
-use crate::api::{components_of, AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
+use crate::api::{AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::challenge::ShortChallenge;
-use crate::params::{quadratic_slots, N, QS, QS_LARGE, QS_QUAD, QUAD_SLOTS};
+use crate::params::{quadratic_slots, N, QS, QS_LARGE, QS_QUAD, QUAD_CLASS_SLOT, QUAD_SLOTS};
 use crate::simd::commit as cm;
 use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
@@ -276,8 +276,6 @@ pub(crate) unsafe fn center_batch<const Q: u16>(b: &mut Batch32) {
 pub(crate) struct ChallengeNtt {
     /// `pair[i][u]` = `c_{2i}[u] as u16 | (c_{2i+1}[u] as u16) << 16`.
     pair: Vec<[u32; N]>,
-    /// The same transforms per challenge, for the consistency check: `slot[j][u]`.
-    pub(crate) slot: Vec<[i16; N]>,
 }
 
 /// The `r` challenges embedded as `c(-X^4)` into as many `Batch32` of coefficients as they need.
@@ -331,19 +329,6 @@ pub(crate) fn challenge_ntt<const Q: u16>(challenges: &[ShortChallenge]) -> Chal
     pack(&bs, challenges.len())
 }
 
-/// The same on the quadratic-slot tree: the 648 rows are then the two coefficients of each of the
-/// 324 leaves.
-pub(crate) fn challenge_ntt_quad<const Q: u16>(challenges: &[ShortChallenge]) -> ChallengeNtt {
-    let mut bs = slots(challenges);
-    unsafe {
-        for b in bs.iter_mut() {
-            ntt_quad_gen_batch32::<Q>(b);
-            center_batch::<Q>(b);
-        }
-    }
-    pack(&bs, challenges.len())
-}
-
 /// Each leaf's scalar written into both of the leaf's rows.
 ///
 /// `c(-X^4)` is a polynomial in `X^4`, and `X^4 = psi'^{2u}` in the leaf `X^2 - psi'^u`, so a
@@ -373,22 +358,10 @@ pub(crate) fn challenge_ntt_quad_base<const Q: u16>(challenges: &[ShortChallenge
     pack(&bs, challenges.len())
 }
 
-/// The challenge transforms of one limb, dispatched on its prime.
-pub(crate) fn challenge_ntt_limb(
-    q: u16,
-    quad: bool,
-    challenges: &[ShortChallenge],
-) -> ChallengeNtt {
-    match (q, quad) {
-        (3889, false) => challenge_ntt::<3889>(challenges),
-        (9721, false) => challenge_ntt::<9721>(challenges),
-        (17497, false) => challenge_ntt::<17497>(challenges),
-        (19441, false) => challenge_ntt::<19441>(challenges),
-        (2917, true) => challenge_ntt_quad::<2917>(challenges),
-        (4861, true) => challenge_ntt_quad::<4861>(challenges),
-        (12637, true) => challenge_ntt_quad::<12637>(challenges),
-        _ => unreachable!("no limb with q = {q}"),
-    }
+pub(crate) fn challenge_batches(q: u16, quad: bool, challenges: &[ShortChallenge]) -> Vec<Batch32> {
+    let mut bs = slots(challenges);
+    forward_limb(q, quad, &mut bs);
+    bs
 }
 
 fn slots(challenges: &[ShortChallenge]) -> Vec<Batch32> {
@@ -403,20 +376,15 @@ fn slots(challenges: &[ShortChallenge]) -> Vec<Batch32> {
 /// The transformed batches read out per challenge and packed into the dword pairs the
 /// accumulation wants.
 fn pack(bs: &[Batch32], r: usize) -> ChallengeNtt {
-    let mut slot = vec![[0i16; N]; r];
-    for j in 0..r {
-        for u in 0..N {
-            slot[j][u] = bs[j / 32].v[u][j % 32];
-        }
-    }
     let mut pair = vec![[0u32; N]; r / 2];
     for i in 0..r / 2 {
         for u in 0..N {
-            pair[i][u] =
-                (slot[2 * i][u] as u16) as u32 | (((slot[2 * i + 1][u] as u16) as u32) << 16);
+            let lo = bs[(2 * i) / 32].v[u][(2 * i) % 32] as u16;
+            let hi = bs[(2 * i + 1) / 32].v[u][(2 * i + 1) % 32] as u16;
+            pair[i][u] = lo as u32 | ((hi as u32) << 16);
         }
     }
-    ChallengeNtt { pair, slot }
+    ChallengeNtt { pair }
 }
 
 // =============================================================================================
@@ -702,30 +670,40 @@ pub(crate) fn fold_witness(
     (0..32 * bpc).map(|i| vb[i / 32].get(i % 32)).collect()
 }
 
-/// `NTT_162(c_j)[s] = c_j(-theta^{v_s})` for every challenge, modulo one limb, centered.
-///
-/// `Phi_243` splits into 162 linear factors modulo every limb (`q = 1 mod 243`), so a challenge
-/// has 162 slots whatever the tree of `R_648` looks like. For a splitting limb the value sits at
-/// slot [`SLOT_648`]`[0][s]` of the big transform (all four `t` carry it, the embedding lives in
-/// the subring); for a quadratic-slot limb it is component 0 of the same decomposition a
-/// commitment goes through.
-pub(crate) fn challenge_slots162(
-    q: u16,
-    quad: bool,
-    challenges: &[ShortChallenge],
-) -> Vec<[i16; N162]> {
-    let ch = challenge_ntt_limb(q, quad, challenges);
-    (0..challenges.len())
-        .map(|j| {
-            if quad {
-                let raw: [u32; N] =
-                    core::array::from_fn(|u| (ch.slot[j][u] as i32).rem_euclid(q as i32) as u32);
-                components_of(q, quad, &raw)[0].v
-            } else {
-                core::array::from_fn(|s| ch.slot[j][SLOT_648[0][s] as usize])
-            }
-        })
-        .collect()
+const QUAD_COMPONENT_SLOT: [[u16; N162]; 4] = {
+    let mut m = [[0u16; N162]; 4];
+    let mut s = 0;
+    while s < N162 {
+        m[0][s] = 2 * QUAD_CLASS_SLOT[0][s];
+        m[1][s] = 2 * QUAD_CLASS_SLOT[0][s] + 1;
+        m[2][s] = 2 * QUAD_CLASS_SLOT[1][s];
+        m[3][s] = 2 * QUAD_CLASS_SLOT[1][s] + 1;
+        s += 1;
+    }
+    m
+};
+
+const _: () = {
+    let mut seen = [false; N];
+    let mut t = 0;
+    while t < 4 {
+        let mut s = 0;
+        while s < N162 {
+            let u = QUAD_COMPONENT_SLOT[t][s] as usize;
+            assert!(!seen[u]);
+            seen[u] = true;
+            s += 1;
+        }
+        t += 1;
+    }
+};
+
+pub(crate) fn component_slots(quad: bool) -> &'static [[u16; N162]; 4] {
+    if quad {
+        &QUAD_COMPONENT_SLOT
+    } else {
+        &SLOT_648
+    }
 }
 
 /// `NTT(v)` for one limb, in place on centered coefficient batches, fully reduced and centered.
