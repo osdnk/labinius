@@ -36,7 +36,7 @@ use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
 use crate::fields::scalar::F162;
-use crate::fold::{a_times_v_limb, challenge_slots162, fold_witness, forward_limb};
+use crate::fold::{a_times_v_limb, challenge_batches, component_slots, fold_witness, forward_limb};
 use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
@@ -1249,27 +1249,34 @@ impl Verifier {
             "one challenge per column"
         );
         let limbs = self.key.limbs();
+        let columns = commitment.columns();
         let mut rows: [PowerOfThreeRingElementWithLimbs; 4] =
             core::array::from_fn(|_| PowerOfThreeRingElementWithLimbs::zero(limbs));
+        let mut v: Vec<Batch32> = (0..columns.div_ceil(32))
+            .map(|_| Batch32::zero(Representation::Ntt))
+            .collect();
         for k in 0..limbs {
-            let q = self.key.prime(k) as i64;
-            let chi = challenge_slots162(
-                self.key.prime(k),
-                self.key.is_quadratic(k),
-                &challenges.challenges,
-            );
-            for (row, out) in rows.iter_mut().enumerate() {
-                let mut acc = [0i64; N162];
-                for (j, c) in chi.iter().enumerate() {
-                    let e = &commitment.matrix().get(row, j).limbs[k].v;
-                    for s in 0..N162 {
-                        acc[s] += c[s] as i64 * e[s] as i64;
+            let (q, quad) = (self.key.prime(k), self.key.is_quadratic(k));
+            let map = component_slots(quad);
+            for (b, batch) in v.iter_mut().enumerate() {
+                let first = 32 * b;
+                for p in 0..(columns - first).min(32) {
+                    for (t, m) in map.iter().enumerate() {
+                        let e = &commitment.matrix().get(t, first + p).limbs[k].v;
+                        for s in 0..N162 {
+                            batch.v[m[s] as usize][p] = e[s];
+                        }
                     }
                 }
+            }
+            let ch = challenge_batches(q, quad, &challenges.challenges);
+            let y = a_times_v_limb(q, quad, &ch, &v);
+            let half = ((q - 1) / 2) as u32;
+            for (t, m) in map.iter().enumerate() {
                 for s in 0..N162 {
-                    let x = acc[s].rem_euclid(q);
-                    out.limbs[k].v[s] = if x > (q - 1) / 2 {
-                        (x - q) as i16
+                    let x = y[m[s] as usize];
+                    rows[t].limbs[k].v[s] = if x > half {
+                        (x as i32 - q as i32) as i16
                     } else {
                         x as i16
                     };
