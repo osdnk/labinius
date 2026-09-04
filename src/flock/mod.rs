@@ -142,9 +142,8 @@ impl Session {
         timing.commit = milliseconds(start);
 
         let start = Instant::now();
-        let bytes = commitment.to_bytes();
         sizes.commitment = commitment.wire_bytes();
-        let carrier = piop::carrier(&bytes, instance.pcs_params());
+        let carrier = piop::carrier(&commitment, instance.pcs_params());
         timing.bind = milliseconds(start);
 
         let mut ch = FsChallenger::new(DOMAIN);
@@ -213,7 +212,7 @@ impl Session {
 
         (
             Proof {
-                commitment: bytes,
+                commitment: commitment.to_bytes(),
                 core,
                 switch: switch_proof,
                 claimed_value: switched.opened,
@@ -229,7 +228,7 @@ impl Session {
         let whole = Instant::now();
         let commitment =
             Commitment::from_bytes(&self.params, &proof.commitment).map_err(Error::Opening)?;
-        let carrier = piop::carrier(&proof.commitment, instance.pcs_params());
+        let carrier = piop::carrier(&commitment, instance.pcs_params());
         let mut ch = FsChallenger::new(DOMAIN);
 
         let start = Instant::now();
