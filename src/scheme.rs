@@ -135,34 +135,49 @@ pub const SIZE_STEP: u32 = 2;
 #[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
 pub const SIZE_STEP: u32 = 0;
 
+#[cfg(feature = "sizexl")]
+pub const DROPPED_BITS: u32 = 7;
+#[cfg(feature = "sizel")]
+pub const DROPPED_BITS: u32 = 8;
+#[cfg(feature = "sizem")]
+pub const DROPPED_BITS: u32 = 9;
+#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
+pub const DROPPED_BITS: u32 = 10;
+
 pub const WITNESS_LOG_LEN: u32 = 18;
 pub const COLUMN_LOG_LEN_CLEAR: u32 = 7;
 pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
 
 #[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
-    (Modulus::Q3889_FS_S, vec![Modulus::Q4861_Q_S])
+    (Modulus::Q9721_FS_S, vec![Modulus::Q12637_Q_S])
 }
 
 #[cfg(feature = "sizem")]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
-    (Modulus::Q9721_FS_S, vec![Modulus::Q12637_Q_S])
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+    )
 }
 
 #[cfg(feature = "sizel")]
-fn moduli(recursion: bool) -> (Modulus, Vec<Modulus>) {
-    if recursion {
-        (
-            Modulus::Q3889_FS_S,
-            vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
-        )
-    } else {
-        (Modulus::Q17497_FS_L, vec![Modulus::Q19441_FS_L])
-    }
+fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+    )
 }
 
 #[cfg(feature = "sizexl")]
 fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S],
+    )
+}
+
+pub fn moduli_bd() -> (Modulus, Vec<Modulus>) {
     (
         Modulus::Q3889_FS_S,
         vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
