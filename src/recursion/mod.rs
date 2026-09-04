@@ -77,9 +77,8 @@ pub const Q: i128 = (1i128 << 48) - 59;
 /// rank the keys reach reads `extlen(len, kappa) = len` polynomials of every block it spans.
 pub const PAD: usize = 32;
 
-/// The cap on `‖v‖^2` per ring element and challenge, the plan's D5. Over 4000 honest folds the
-/// worst filled 0.82 of it; the 55.7 it replaces refused one in twenty, and nothing retries.
-pub const FOLD_CAP: f64 = 131.0;
+/// The cap on `‖v‖^2` per ring element and challenge, the plan's D5.
+pub const FOLD_CAP: f64 = 108.0;
 
 /// Largest witness coefficient: a residue of the widest limb, which is a centered residue modulo
 /// 19441. LaBRADOR's own `int16` norm limit is 23170, so this clears it with a factor of 2.4.
