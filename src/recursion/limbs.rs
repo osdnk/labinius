@@ -246,7 +246,7 @@ impl Residues {
 ///
 /// `psi^{v_s k}` for `k = 0..4` is three multiplications by `psi^{v_s}` and `i^{tk}` is one of
 /// four constants, so the whole table costs `N162` exponentiations rather than `16 N162`.
-fn recombination<const Q: u16>() -> Vec<u16> {
+pub(crate) fn recombination<const Q: u16>() -> Vec<u16> {
     let q = Q as u64;
     let psi = Params::<Q>::PSI as u64;
     let i4 = pow_mod(psi, (CONDUCTOR / 4) as u64, q);

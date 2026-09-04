@@ -267,7 +267,7 @@ const PAD: usize = 176;
 /// conditional subtract. `M = floor(2^43/q)` has to fit the u32 halves `vpmuludq` reads and the
 /// product has to stay inside a u64 lane; `barrett31_fits` asserts both for every limb.
 #[target_feature(enable = "avx512f")]
-unsafe fn barrett31<const Q: u16>(p: __m512i) -> __m512i {
+pub(crate) unsafe fn barrett31<const Q: u16>(p: __m512i) -> __m512i {
     let q = _mm512_set1_epi32(Q as i32);
     let mag = _mm512_set1_epi64(Pow3Consts::<Q>::BARRETT_M as i64);
     let lo = _mm512_set1_epi64(0xFFFF_FFFFu32 as i64);

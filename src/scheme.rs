@@ -32,6 +32,7 @@ use crate::api::{
     components_of, AuxData, CommitmentKey, Modulus, PowerOfThreeRingElement,
     PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
 };
+use crate::bd::Dropped;
 use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
@@ -103,6 +104,7 @@ pub struct Params {
     /// Recurse the folded opening into LaBRADOR: the commitment becomes `T_Y`, the left expansion
     /// `T_u`, and the fold a proof of [`crate::recursion`]'s relation instead of `v` itself.
     pub recursion: bool,
+    pub dropped_bits: u32,
 }
 
 #[cfg(any(
@@ -232,6 +234,7 @@ impl Params {
             base,
             extra_moduli,
             recursion,
+            dropped_bits: 0,
         })
     }
 
@@ -257,6 +260,28 @@ impl Params {
             recursion,
         )
         .expect("the sized parameters are valid")
+    }
+
+    pub fn sized_bd() -> Params {
+        let (base, extra_moduli) = moduli_bd();
+        Params::with_base(
+            WITNESS_LOG_LEN + SIZE_STEP,
+            COLUMN_LOG_LEN_CLEAR + SIZE_STEP / 2,
+            base,
+            extra_moduli,
+            false,
+        )
+        .expect("the sized bd parameters are valid")
+        .dropping(DROPPED_BITS)
+    }
+
+    pub fn dropping(mut self, dropped_bits: u32) -> Params {
+        self.dropped_bits = dropped_bits;
+        self
+    }
+
+    pub fn bd_cap(&self) -> u64 {
+        crate::bd::cap(self.columns(), self.dropped_bits)
     }
 
     /// Witness length in `F162` elements.
@@ -454,6 +479,7 @@ pub struct Commitment {
 pub enum CommitmentValue {
     Matrix(VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>),
     Recursive(Arc<PolxBuf>),
+    Dropped(Arc<Dropped>),
 }
 
 impl Commitment {
@@ -490,6 +516,16 @@ impl Commitment {
             CommitmentValue::Recursive(_) => {
                 panic!("a recursive commitment is T_Y, not the matrix")
             }
+            CommitmentValue::Dropped(_) => {
+                panic!("a bit-dropped commitment is its digits, not the matrix")
+            }
+        }
+    }
+
+    pub fn dropped(&self) -> &Arc<Dropped> {
+        match &self.value {
+            CommitmentValue::Dropped(d) => d,
+            _ => panic!("this commitment is not bit-dropped"),
         }
     }
 
@@ -497,7 +533,7 @@ impl Commitment {
     pub fn t_y(&self) -> &Arc<PolxBuf> {
         match &self.value {
             CommitmentValue::Recursive(t) => t,
-            CommitmentValue::Matrix(_) => panic!("this commitment is the matrix, not T_Y"),
+            _ => panic!("this commitment is the matrix, not T_Y"),
         }
     }
 
@@ -528,6 +564,11 @@ impl Commitment {
                 out.extend_from_slice(&(t.len() as u32).to_le_bytes());
                 out.extend_from_slice(t.as_bytes());
             }
+            CommitmentValue::Dropped(d) => {
+                out.push(2);
+                out.extend_from_slice(&(d.columns() as u32).to_le_bytes());
+                out.extend_from_slice(&crate::wire::pack_dropped(d));
+            }
         }
         out
     }
@@ -536,12 +577,23 @@ impl Commitment {
     pub fn from_bytes(params: &Params, bytes: &[u8]) -> Result<Commitment, VerificationError> {
         let primes = params.primes();
         let (&tag, rest) = bytes.split_first().ok_or(VerificationError::Rejected)?;
-        if rest.len() < 4 || (tag == 1) != params.recursion {
+        if rest.len() < 4
+            || (tag == 1) != params.recursion
+            || (tag == 2) != (params.dropped_bits > 0)
+        {
             return Err(VerificationError::Rejected);
         }
         let count = u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
         let body = &rest[4..];
-        let value = if tag == 0 {
+        let value = if tag == 2 {
+            if count != params.columns() {
+                return Err(VerificationError::Rejected);
+            }
+            CommitmentValue::Dropped(Arc::new(
+                crate::wire::unpack_dropped(params, body)
+                    .map_err(|_| VerificationError::Rejected)?,
+            ))
+        } else if tag == 0 {
             let slots = 4 * count * primes.len() * N162;
             if count != params.columns() || body.len() != 2 * slots {
                 return Err(VerificationError::Rejected);
@@ -577,6 +629,7 @@ impl Commitment {
         match &self.value {
             CommitmentValue::Matrix(m) => crate::wire::commitment_bytes(&self.primes, m.cols()),
             CommitmentValue::Recursive(t) => t.len() * labrador::N * labrador::logq().div_ceil(8),
+            CommitmentValue::Dropped(d) => d.wire_bytes(),
         }
     }
 }
@@ -943,7 +996,7 @@ impl Prover {
         let row_evaluation = witness.row_evaluate(&point);
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
         std::hint::black_box(prover.fold(opening, &challenges));
-        if !prover.params.recursion {
+        if !prover.params.recursion && prover.params.dropped_bits == 0 {
             std::hint::black_box(verifier.fold_commitment(&commitment, &challenges));
         }
         prover
@@ -963,6 +1016,10 @@ impl Prover {
         let columns = matrix.cols();
         let primes = self.params.primes();
         let (value, residues) = match &self.setup {
+            None if self.params.dropped_bits > 0 => {
+                let dropped = crate::bd::drop_bits(&matrix, &primes, self.params.dropped_bits);
+                (CommitmentValue::Dropped(Arc::new(dropped)), None)
+            }
             None => (CommitmentValue::Matrix(matrix), None),
             Some(setup) => {
                 let residues = recursion::limbs::residues(&matrix, &primes);
@@ -1175,6 +1232,10 @@ impl Verifier {
             transcript.absorb_u64(q as u64);
         }
         transcript.absorb_u64(u64::from(self.params.recursion));
+        if self.params.dropped_bits > 0 {
+            transcript.absorb_bytes(b"bin-ntt/dropped-bits");
+            transcript.absorb_u64(self.params.dropped_bits as u64);
+        }
         if self.params.recursion {
             transcript.absorb_u64(labrador::logq() as u64);
         }
@@ -1198,6 +1259,10 @@ impl Verifier {
                 }
             }
             CommitmentValue::Recursive(t) => transcript.absorb_bytes(t.as_bytes()),
+            CommitmentValue::Dropped(d) => {
+                transcript.absorb_bytes(b"bin-ntt/dropped-commitment");
+                transcript.absorb_bytes(&crate::wire::pack_dropped(d));
+            }
         }
         let (rows, cols) = (
             self.params.row_log_len() as usize,
@@ -1363,6 +1428,54 @@ impl Verifier {
                     return Err(VerificationError::Rejected);
                 }
             }
+        }
+
+        if eval::binary_check(&point.p0, v, *folded_row_value) {
+            Ok(())
+        } else {
+            Err(VerificationError::Rejected)
+        }
+    }
+
+    pub fn verify_folded_opening_bd(
+        &self,
+        commitment: &Commitment,
+        challenges: &FoldingChallenges,
+        folded_witness: &FoldedWitness,
+        point: &EvaluationPoint,
+        folded_row_value: &F162,
+    ) -> Result<(), VerificationError> {
+        let v = &folded_witness.elements;
+        let half = ((self.key.prime(0) - 1) / 2) as i32;
+        if v.len() != self.key.len_ring() || commitment.moduli() != self.params.primes() {
+            return Err(VerificationError::Rejected);
+        }
+        let dropped = match commitment.value() {
+            CommitmentValue::Dropped(d) => d,
+            _ => return Err(VerificationError::Rejected),
+        };
+        if dropped.dropped_bits() != self.params.dropped_bits {
+            return Err(VerificationError::Rejected);
+        }
+        let mut normsq = 0u64;
+        let mut worst = 0i32;
+        for e in v {
+            if e.representation != Representation::Coefficients {
+                return Err(VerificationError::Rejected);
+            }
+            let (sq, top) = unsafe { crate::simd::norm::normsq_and_max(&e.v) }
+                .ok_or(VerificationError::Rejected)?;
+            normsq += sq;
+            worst = worst.max(top);
+        }
+        if worst > half || normsq > self.params.fold_cap() {
+            return Err(VerificationError::Rejected);
+        }
+
+        let residual = crate::bd::residual(&self.key, dropped, &challenges.challenges, v)
+            .ok_or(VerificationError::Rejected)?;
+        if residual > self.params.bd_cap() as u128 {
+            return Err(VerificationError::Rejected);
         }
 
         if eval::binary_check(&point.p0, v, *folded_row_value) {
