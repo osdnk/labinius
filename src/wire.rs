@@ -44,6 +44,7 @@
 //! Everything here is off the hot path: the recursive mode sends `T_Y`, `T_u`, `T_R` and one
 //! LaBRADOR proof, which are true wire widths already.
 use crate::api::{PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162};
+use crate::bd::{self, Dropped};
 use crate::fields::scalar::F162;
 use crate::params::N;
 use crate::scheme::{Commitment, CommitmentValue, FoldedWitness, Params, RowEvaluation};
@@ -221,6 +222,9 @@ impl<'a> BitReader<'a> {
 /// `T_Y`.
 pub fn pack_commitment(commitment: &Commitment) -> Vec<u8> {
     let primes = commitment.moduli();
+    if let CommitmentValue::Dropped(dropped) = commitment.value() {
+        return pack_dropped(dropped);
+    }
     let matrix = commitment.matrix();
     let mut w = BitWriter::with_capacity(commitment_bytes(primes, matrix.cols()));
     for element in matrix.iter() {
@@ -239,6 +243,15 @@ pub fn pack_commitment(commitment: &Commitment) -> Vec<u8> {
 pub fn unpack_commitment(params: &Params, bytes: &[u8]) -> Result<Commitment, WireError> {
     let primes = params.primes();
     let columns = params.columns();
+    if params.dropped_bits > 0 {
+        return unpack_dropped(params, bytes).map(|d| {
+            Commitment::of(
+                primes,
+                columns,
+                CommitmentValue::Dropped(std::sync::Arc::new(d)),
+            )
+        });
+    }
     if params.recursion || bytes.len() != commitment_bytes(&primes, columns) {
         return Err(WireError::Malformed);
     }
@@ -288,6 +301,53 @@ pub fn unpack_commitment(params: &Params, bytes: &[u8]) -> Result<Commitment, Wi
 pub fn commitment_bytes(primes: &[u16], columns: usize) -> usize {
     let bits: u32 = primes.iter().map(|&q| residue_bits(q)).sum();
     (4 * columns * N162 * bits as usize).div_ceil(8)
+}
+
+pub fn pack_dropped(dropped: &Dropped) -> Vec<u8> {
+    let primes = dropped.primes();
+    let top = bd::top_bits(primes[0], dropped.dropped_bits());
+    let mut w = BitWriter::with_capacity(dropped.wire_bytes());
+    for i in 0..dropped.columns() * N {
+        w.put(dropped.top()[i] as u64, top);
+        for (k, digit) in dropped.digits().iter().enumerate() {
+            w.put(digit[i] as u64, residue_bits(primes[k + 1]));
+        }
+    }
+    w.finish()
+}
+
+pub fn unpack_dropped(params: &Params, bytes: &[u8]) -> Result<Dropped, WireError> {
+    let primes = params.primes();
+    let columns = params.columns();
+    let dropped_bits = params.dropped_bits;
+    if params.recursion
+        || dropped_bits == 0
+        || bytes.len() != bd::bytes(&primes, columns, dropped_bits)
+    {
+        return Err(WireError::Malformed);
+    }
+    let bits = bd::top_bits(primes[0], dropped_bits);
+    let bound = bd::top_bound(primes[0], dropped_bits);
+    let count = columns * N;
+    let mut top = vec![0u16; count];
+    let mut digits: Vec<Vec<u16>> = (1..primes.len()).map(|_| vec![0u16; count]).collect();
+    let mut r = BitReader::new(bytes);
+    for i in 0..count {
+        let value = r.get(bits)? as u32;
+        if value > bound {
+            return Err(WireError::Malformed);
+        }
+        top[i] = value as u16;
+        for (k, digit) in digits.iter_mut().enumerate() {
+            let q = primes[k + 1];
+            let value = r.get(residue_bits(q))? as u32;
+            if value >= q as u32 {
+                return Err(WireError::Malformed);
+            }
+            digit[i] = value as u16;
+        }
+    }
+    Ok(Dropped::of(primes, columns, dropped_bits, top, digits))
 }
 
 /// The row evaluation, 162 bits per element back to back. Header-free: the length is

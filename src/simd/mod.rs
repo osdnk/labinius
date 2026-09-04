@@ -4,6 +4,7 @@
 //! is an i7-11850H, Tiger Lake); they are compiled with `-C target-cpu=native` (see
 //! `.cargo/config.toml`).
 
+pub mod bd;
 pub mod commit;
 pub mod norm;
 pub mod transpose_f162;

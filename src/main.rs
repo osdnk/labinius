@@ -107,6 +107,7 @@ fn main() {
     #[cfg(not(feature = "labrador"))]
     {
         plain();
+        plain_bd();
     }
     println!("\npeak resident set: {:.0} MB", peak_rss());
 }
@@ -201,8 +202,14 @@ fn plain() {
     row("fold", fold_ms);
     row("pack commitment, row", pack_ms);
     row("encode folded witness", encode_ms);
-    row("total", commit_ms + row_evaluate_ms + fold_ms + pack_ms + encode_ms);
-    row("total except encode", commit_ms + row_evaluate_ms + fold_ms + pack_ms);
+    row(
+        "total",
+        commit_ms + row_evaluate_ms + fold_ms + pack_ms + encode_ms,
+    );
+    row(
+        "total except encode",
+        commit_ms + row_evaluate_ms + fold_ms + pack_ms,
+    );
 
     println!("\nSTATEMENT");
     row("derive_evaluation_point", evaluation_point_ms);
@@ -225,7 +232,7 @@ fn plain() {
             + verify_evaluation_ms
             + verify_opening_ms,
     );
-        row(
+    row(
         "total except decode",
         challenges_ms
             // + decode_ms
@@ -246,6 +253,149 @@ fn plain() {
         match (evaluation_ok, opening_ok) {
             (Ok(()), Ok(())) => "accepted".to_string(),
             (e, o) => format!("rejected ({e:?}, {o:?})"),
+        }
+    );
+}
+
+fn plain_bd() {
+    let params = Params::sized_bd();
+    let (setup_ms, public_parameters) =
+        once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
+    let witness = Witness::random(&params, WITNESS_SEED);
+    let mut prover = Prover::new(&public_parameters);
+    let verifier = Verifier::new(&public_parameters);
+
+    let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
+
+    let mut transcript = Transcript::new(b"bin-ntt/reference");
+    let start = transcript.clone();
+    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
+        transcript = start.clone();
+        verifier.derive_evaluation_point(&mut transcript, &commitment)
+    });
+    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
+    let (row_evaluate_ms, row_evaluation) =
+        median_of(10, || witness.row_evaluate(&evaluation_point));
+    let after_point = transcript.clone();
+    let (challenges_ms, folding_challenges) = median_of(10, || {
+        transcript = after_point.clone();
+        verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
+    });
+
+    let (fold_ms, folded_witness) = once(|| prover.fold(opening, &folding_challenges));
+
+    let (pack_ms, (commitment_wire, row_wire)) = median_of(10, || {
+        (
+            wire::pack_commitment(&commitment),
+            wire::pack_row_evaluation(&row_evaluation),
+        )
+    });
+    let (encode_ms, fold_wire) =
+        median_of(10, || wire::encode(&folded_witness, params.base.prime()));
+    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(10, || {
+        (
+            wire::unpack_commitment(&params, &commitment_wire).expect("a commitment off the wire"),
+            wire::unpack_row_evaluation(&row_wire, params.columns())
+                .expect("a row evaluation off the wire"),
+            wire::decode(&fold_wire).expect("a folded witness off the wire"),
+        )
+    });
+
+    let (fold_row_ms, folded_row_value) = median_of(10, || {
+        verifier.fold_row_evaluation(&row_evaluation, &folding_challenges)
+    });
+    let (verify_evaluation_ms, evaluation_ok) = median_of(10, || {
+        verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
+    });
+    let (verify_opening_ms, opening_ok) = median_of(10, || {
+        verifier.verify_folded_opening_bd(
+            &commitment,
+            &folding_challenges,
+            &folded_witness,
+            &evaluation_point,
+            &folded_row_value,
+        )
+    });
+
+    let mut tampered = folded_witness.clone();
+    tampered.elements_mut()[0].v[0] = tampered.elements_mut()[0].v[0].wrapping_add(1000);
+    let tampered_ok = verifier.verify_folded_opening_bd(
+        &commitment,
+        &folding_challenges,
+        &tampered,
+        &evaluation_point,
+        &folded_row_value,
+    );
+
+    println!("\n=== plain-bd ===");
+    println!(
+        "witness: 2^{} F162 = {} ring elements of R_648, {} columns of {} F162",
+        params.witness_log_len,
+        params.witness_len() / 4,
+        params.columns(),
+        params.witness_len() / params.columns()
+    );
+    println!(
+        "dropped bits {}, residual cap {} over the expectation {:.3e}",
+        params.dropped_bits,
+        params.bd_cap(),
+        bin_ntt::bd::expected_normsq(params.columns(), params.dropped_bits)
+    );
+    row("public parameters", setup_ms);
+
+    println!("\nPROVER");
+    row("commit (with the digits)", commit_ms);
+    row("row_evaluate", row_evaluate_ms);
+    row("fold", fold_ms);
+    row("pack commitment, row", pack_ms);
+    row("encode folded witness", encode_ms);
+    row(
+        "total",
+        commit_ms + row_evaluate_ms + fold_ms + pack_ms + encode_ms,
+    );
+    row(
+        "total except encode",
+        commit_ms + row_evaluate_ms + fold_ms + pack_ms,
+    );
+
+    println!("\nSTATEMENT");
+    row("derive_evaluation_point", evaluation_point_ms);
+    row("mle_evaluate", mle_ms);
+    row("total", evaluation_point_ms + mle_ms);
+
+    println!("\nVERIFIER");
+    row("derive_folding_challenges", challenges_ms);
+    row("decode", decode_ms);
+    row("fold_row_evaluation", fold_row_ms);
+    row("verify_evaluation", verify_evaluation_ms);
+    row("verify_folded_opening", verify_opening_ms);
+    row(
+        "total",
+        challenges_ms + decode_ms + fold_row_ms + verify_evaluation_ms + verify_opening_ms,
+    );
+    row(
+        "total except decode",
+        challenges_ms + fold_row_ms + verify_evaluation_ms + verify_opening_ms,
+    );
+    println!(
+        "\nwire: commitment {:.1} KB, row evaluation {:.1} KB, folded witness {:.1} KB, TOTAL {:.1} KB",
+        commitment_wire.len() as f64 / 1024.0,
+        row_wire.len() as f64 / 1024.0,
+        fold_wire.len() as f64 / 1024.0,
+        (commitment_wire.len() + row_wire.len() + fold_wire.len()) as f64 / 1024.0
+    );
+    println!(
+        "verification: {}",
+        match (evaluation_ok, opening_ok) {
+            (Ok(()), Ok(())) => "accepted".to_string(),
+            (e, o) => format!("rejected ({e:?}, {o:?})"),
+        }
+    );
+    println!(
+        "tampered fold: {}",
+        match tampered_ok {
+            Ok(()) => "ACCEPTED".to_string(),
+            Err(e) => format!("rejected ({e})"),
         }
     );
 }

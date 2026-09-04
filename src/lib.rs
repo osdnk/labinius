@@ -27,6 +27,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod api;
+pub mod bd;
 pub mod challenge;
 pub mod competitors;
 pub mod eval;
@@ -47,6 +48,7 @@ pub mod wire;
 
 pub use api::Modulus;
 pub use api::PowerOfThreeRingElement as RingElement162;
+pub use bd::Dropped;
 pub use challenge::Transcript;
 pub use fields::scalar::F162;
 pub use scheme::{
