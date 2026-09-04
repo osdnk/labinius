@@ -249,6 +249,13 @@ impl Params {
         1usize << self.witness_log_len
     }
 
+    /// The cap on `‖v‖^2` at this shape. The fold has `witness_len / 4` ring elements' worth of
+    /// coefficients however the columns are split, so the cap does not depend on `column_log_len`
+    /// and the two modes share it.
+    pub fn fold_cap(&self) -> u64 {
+        (recursion::FOLD_CAP * (self.witness_len() / 4 * crate::params::N) as f64).ceil() as u64
+    }
+
     /// Number of columns the witness is split into — also the number of folding challenges.
     pub fn columns(&self) -> usize {
         1usize << self.column_log_len
@@ -1298,14 +1305,22 @@ impl Verifier {
         folded_row_value: &F162,
     ) -> Result<(), VerificationError> {
         let v = &folded_witness.elements;
-        let half = ((self.key.prime(0) - 1) / 2) as i16;
-        if v.len() != self.key.len_ring()
-            || folded_commitment.primes != self.params.primes()
-            || v.iter().any(|e| {
-                e.representation != Representation::Coefficients
-                    || e.v.iter().any(|x| x.abs() > half)
-            })
-        {
+        let half = ((self.key.prime(0) - 1) / 2) as i32;
+        if v.len() != self.key.len_ring() || folded_commitment.primes != self.params.primes() {
+            return Err(VerificationError::Rejected);
+        }
+        let mut normsq = 0u64;
+        let mut worst = 0i32;
+        for e in v {
+            if e.representation != Representation::Coefficients {
+                return Err(VerificationError::Rejected);
+            }
+            let (sq, top) = unsafe { crate::simd::norm::normsq_and_max(&e.v) }
+                .ok_or(VerificationError::Rejected)?;
+            normsq += sq;
+            worst = worst.max(top);
+        }
+        if worst > half || normsq > self.params.fold_cap() {
             return Err(VerificationError::Rejected);
         }
 

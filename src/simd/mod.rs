@@ -5,6 +5,7 @@
 //! `.cargo/config.toml`).
 
 pub mod commit;
+pub mod norm;
 pub mod transpose_f162;
 pub mod vertical_bin;
 pub mod vertical_bin_asm;
