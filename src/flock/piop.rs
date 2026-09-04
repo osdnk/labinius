@@ -21,8 +21,9 @@ pub struct Timing {
     pub lincheck: f64,
 }
 
-pub fn carrier(bytes: &[u8], params: &PcsParams) -> Commitment {
-    let cap = bytes
+pub fn carrier(commitment: &crate::scheme::Commitment, params: &PcsParams) -> Commitment {
+    let cap = commitment
+        .to_bytes()
         .chunks(32)
         .map(|c| {
             let mut node = Hash::default();
