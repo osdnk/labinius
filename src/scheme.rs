@@ -177,6 +177,13 @@ fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
     )
 }
 
+pub fn moduli_bd() -> (Modulus, Vec<Modulus>) {
+    (
+        Modulus::Q3889_FS_S,
+        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+    )
+}
+
 impl Params {
     /// The checked constructor over the default base modulus 3889.
     pub fn new(
