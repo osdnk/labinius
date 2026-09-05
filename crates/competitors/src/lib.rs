@@ -1,0 +1,37 @@
+pub mod basefold;
+pub mod ligerito_flock;
+pub mod whir;
+
+use bin_ntt_bench::Rng;
+use bin_ntt::scheme::{SIZE_STEP, WITNESS_LOG_LEN};
+pub use bin_ntt_bench::{median_of, ms as milliseconds, once, pin};
+
+pub const LOG_LEN: usize = (WITNESS_LOG_LEN + SIZE_STEP) as usize;
+
+pub const WITNESS_SEED: u64 = 0xC7;
+
+pub const CPU: usize = 3;
+
+pub const SECURITY_BITS: usize = binius_verifier::SECURITY_BITS;
+
+pub struct Row {
+    pub scheme: &'static str,
+    pub rate: String,
+    pub target: String,
+    pub security: String,
+    pub claim: &'static str,
+    pub commit_ms: f64,
+    pub open_ms: f64,
+    pub verify_ms: f64,
+    pub commitment: usize,
+    pub proof: usize,
+}
+
+pub fn random_u64s(log_len: usize, seed: u64) -> Vec<u64> {
+    let mut rng = Rng::new(seed);
+    (0..2 << log_len).map(|_| rng.next_u64()).collect()
+}
+
+pub fn rate_label(log_inv_rate: usize) -> String {
+    format!("1/{}", 1usize << log_inv_rate)
+}
