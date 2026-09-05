@@ -2,7 +2,8 @@ pub mod circuit;
 pub mod piop;
 pub mod switch;
 
-use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage, DROPPED_BITS};
+use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage};
+use bin_ntt::Suite;
 use bin_ntt::fields::scalar::{B128 as SB, F162};
 use bin_ntt::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
@@ -99,20 +100,20 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(recursion: bool, matrix_seed: [u8; 32]) -> Session {
+    pub fn new(suite: &Suite, recursion: bool, matrix_seed: [u8; 32]) -> Session {
         let opening = if recursion {
             OpeningMode::Recursive
         } else {
             OpeningMode::Clear
         };
-        Session::with_params(Params::sized(opening), matrix_seed)
+        Session::with_params(Params::sized(suite, opening), matrix_seed)
     }
 
-    pub fn bd(matrix_seed: [u8; 32]) -> Session {
+    pub fn bd(suite: &Suite, matrix_seed: [u8; 32]) -> Session {
         let opening = OpeningMode::BitDropped {
-            bits: DROPPED_BITS,
+            bits: suite.dropped_bits,
         };
-        Session::with_params(Params::sized(opening), matrix_seed)
+        Session::with_params(Params::sized(suite, opening), matrix_seed)
     }
 
     pub fn with_params(params: Params, matrix_seed: [u8; 32]) -> Session {

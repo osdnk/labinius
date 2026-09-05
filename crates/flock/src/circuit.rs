@@ -1,5 +1,5 @@
 use crate::switch::LOG_PACKING;
-use bin_ntt::scheme::{SIZE_STEP, WITNESS_LOG_LEN};
+use bin_ntt::Suite;
 use flock_core::lincheck::{LincheckCircuit, LincheckProof};
 use flock_core::pcs::ligerito::embedded_initial_k_or_default;
 use flock_core::pcs::{
@@ -55,12 +55,12 @@ impl Hash {
         }
     }
 
-    pub const fn compressions_log(self) -> usize {
-        (WITNESS_LOG_LEN + SIZE_STEP) as usize + LOG_PACKING - self.k_log()
+    pub fn compressions_log(self, suite: &Suite) -> usize {
+        suite.witness_log_len as usize + LOG_PACKING - self.k_log()
     }
 
-    pub const fn compressions(self) -> usize {
-        1 << self.compressions_log()
+    pub fn compressions(self, suite: &Suite) -> usize {
+        1 << self.compressions_log(suite)
     }
 }
 
@@ -70,8 +70,8 @@ pub enum Instance {
 }
 
 impl Instance {
-    pub fn new(hash: Hash) -> Instance {
-        let n = hash.compressions();
+    pub fn new(hash: Hash, suite: &Suite) -> Instance {
+        let n = hash.compressions(suite);
         let instance = match hash {
             Hash::Blake3 => Instance::Blake3(
                 Blake3Setup::with_log_inv_rate(n, LOG_INV_RATE),

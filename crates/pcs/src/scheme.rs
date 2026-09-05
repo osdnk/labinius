@@ -114,83 +114,79 @@ pub enum Opening {
     Recursive,
 }
 
-#[cfg(any(
-    all(feature = "sizes", feature = "sizem"),
-    all(feature = "sizes", feature = "sizel"),
-    all(feature = "sizes", feature = "sizexl"),
-    all(feature = "sizem", feature = "sizel"),
-    all(feature = "sizem", feature = "sizexl"),
-    all(feature = "sizel", feature = "sizexl")
-))]
-compile_error!(
-    "only one of the features `sizes`, `sizem`, `sizel`, or `sizexl` must be enabled at once"
-);
-
-#[cfg(feature = "sizexl")]
-pub const SIZE: &str = "sizexl";
-#[cfg(feature = "sizel")]
-pub const SIZE: &str = "sizel";
-#[cfg(feature = "sizem")]
-pub const SIZE: &str = "sizem";
-#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
-pub const SIZE: &str = "sizes";
-
-#[cfg(feature = "sizexl")]
-pub const SIZE_STEP: u32 = 6;
-#[cfg(feature = "sizel")]
-pub const SIZE_STEP: u32 = 4;
-#[cfg(feature = "sizem")]
-pub const SIZE_STEP: u32 = 2;
-#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
-pub const SIZE_STEP: u32 = 0;
-
-#[cfg(feature = "sizexl")]
-pub const DROPPED_BITS: u32 = 7;
-#[cfg(feature = "sizel")]
-pub const DROPPED_BITS: u32 = 8;
-#[cfg(feature = "sizem")]
-pub const DROPPED_BITS: u32 = 9;
-#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
-pub const DROPPED_BITS: u32 = 10;
-
-pub const WITNESS_LOG_LEN: u32 = 18;
-pub const COLUMN_LOG_LEN_CLEAR: u32 = 7;
-pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
-
-#[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
-fn moduli() -> (Modulus, Vec<Modulus>) {
-    (Modulus::Q9721_FS_S, vec![Modulus::Q12637_Q_S])
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Suite {
+    pub name: &'static str,
+    pub witness_log_len: u32,
+    pub column_log_len_clear: u32,
+    pub column_log_len_recursive: u32,
+    /// The base modulus first, then the extra ones.
+    pub moduli: &'static [Modulus],
+    pub moduli_bd: &'static [Modulus],
+    pub dropped_bits: u32,
 }
 
-#[cfg(feature = "sizem")]
-fn moduli() -> (Modulus, Vec<Modulus>) {
-    (
-        Modulus::Q3889_FS_S,
-        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
-    )
+pub const SUITES: [Suite; 4] = [
+    Suite {
+        name: "sizes",
+        witness_log_len: 18,
+        column_log_len_clear: 7,
+        column_log_len_recursive: 8,
+        moduli: &[Modulus::Q9721_FS_S, Modulus::Q12637_Q_S],
+        moduli_bd: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        dropped_bits: 10,
+    },
+    Suite {
+        name: "sizem",
+        witness_log_len: 20,
+        column_log_len_clear: 8,
+        column_log_len_recursive: 9,
+        moduli: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        moduli_bd: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        dropped_bits: 9,
+    },
+    Suite {
+        name: "sizel",
+        witness_log_len: 22,
+        column_log_len_clear: 9,
+        column_log_len_recursive: 10,
+        moduli: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        moduli_bd: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        dropped_bits: 8,
+    },
+    Suite {
+        name: "sizexl",
+        witness_log_len: 24,
+        column_log_len_clear: 10,
+        column_log_len_recursive: 11,
+        moduli: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q9721_FS_S],
+        moduli_bd: &[Modulus::Q3889_FS_S, Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
+        dropped_bits: 7,
+    },
+];
+
+impl Suite {
+    /// The suite `--suite s|m|l|xl` names, `None` for anything else.
+    pub fn from_flag(flag: &str) -> Option<&'static Suite> {
+        SUITES.iter().find(|r| r.name == format!("size{flag}"))
+    }
+
+    /// Position in [`SUITES`], for the tables a caller indexes by suite.
+    pub fn index(&self) -> usize {
+        ((self.witness_log_len - SUITES[0].witness_log_len) / 2) as usize
+    }
 }
 
-#[cfg(feature = "sizel")]
-fn moduli() -> (Modulus, Vec<Modulus>) {
-    (
-        Modulus::Q3889_FS_S,
-        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
-    )
-}
-
-#[cfg(feature = "sizexl")]
-fn moduli() -> (Modulus, Vec<Modulus>) {
-    (
-        Modulus::Q3889_FS_S,
-        vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S],
-    )
-}
-
-pub fn moduli_bd() -> (Modulus, Vec<Modulus>) {
-    (
-        Modulus::Q3889_FS_S,
-        vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
-    )
+/// The suite every binary takes `--suite` for, defaulting to the smallest.
+pub fn suite_from_args() -> &'static Suite {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--suite" {
+            let flag = args.next().expect("--suite takes s, m, l or xl");
+            return Suite::from_flag(&flag).expect("--suite takes s, m, l or xl");
+        }
+    }
+    &SUITES[0]
 }
 
 impl Params {
@@ -251,20 +247,20 @@ impl Params {
             .expect("the basic parameters are valid")
     }
 
-    pub fn sized(opening: Opening) -> Params {
-        let columns = match opening {
-            Opening::Recursive => COLUMN_LOG_LEN_RECURSIVE,
-            _ => COLUMN_LOG_LEN_CLEAR,
+    pub fn sized(suite: &Suite, opening: Opening) -> Params {
+        let column_log_len = match opening {
+            Opening::Recursive => suite.column_log_len_recursive,
+            _ => suite.column_log_len_clear,
         };
-        let (base, extra_moduli) = match opening {
-            Opening::BitDropped { .. } => moduli_bd(),
-            _ => moduli(),
+        let list = match opening {
+            Opening::BitDropped { .. } => suite.moduli_bd,
+            _ => suite.moduli,
         };
         Params::with_base(
-            WITNESS_LOG_LEN + SIZE_STEP,
-            columns + SIZE_STEP / 2,
-            base,
-            extra_moduli,
+            suite.witness_log_len,
+            column_log_len,
+            list[0],
+            list[1..].to_vec(),
             opening,
         )
         .expect("the sized parameters are valid")

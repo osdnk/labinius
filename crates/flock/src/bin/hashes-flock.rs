@@ -1,6 +1,7 @@
 use bin_ntt_flock::circuit::LOG_INV_RATE;
 use bin_ntt_flock::{Hash, Instance, ProverTiming, Session, Sizes};
-use bin_ntt::scheme::SIZE;
+use bin_ntt::scheme::suite_from_args;
+use bin_ntt::Suite;
 use bin_ntt_bench::{once, peak_rss, pin, table_row as row};
 use flock_transcript::challenger::FsChallenger;
 
@@ -14,15 +15,16 @@ fn encoded<T: serde::Serialize>(x: &T) -> usize {
 
 fn main() {
     std::env::set_var("RAYON_NUM_THREADS", "1");
+    let suite = suite_from_args();
     pin(CPU);
     for hash in Hash::ALL {
-        compare(hash);
+        compare(hash, suite);
         println!();
     }
 }
 
-fn compare(hash: Hash) {
-    let (setup_ms, instance) = once(|| Instance::new(hash));
+fn compare(hash: Hash, suite: &Suite) {
+    let (setup_ms, instance) = once(|| Instance::new(hash, suite));
     let (witness_ms, witness) = once(|| instance.witness());
 
     let (union_prove, (union_proof, union_commitment, _)) = once(|| {
@@ -58,9 +60,9 @@ fn compare(hash: Hash) {
     };
     drop(core_proof);
 
-    let (off_setup, mut off) = once(|| Session::new(false, MATRIX_SEED));
-    let (on_setup, mut on) = once(|| Session::new(true, MATRIX_SEED));
-    let (bd_setup, mut bd) = once(|| Session::bd(MATRIX_SEED));
+    let (off_setup, mut off) = once(|| Session::new(suite, false, MATRIX_SEED));
+    let (on_setup, mut on) = once(|| Session::new(suite, true, MATRIX_SEED));
+    let (bd_setup, mut bd) = once(|| Session::bd(suite, MATRIX_SEED));
     let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&instance, &witness));
     let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&instance, &witness));
     let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&instance, &witness));
@@ -76,12 +78,13 @@ fn compare(hash: Hash) {
 
     let r1cs = instance.r1cs();
     println!(
-        "bin-ntt over flock {}, core {CPU}, one thread, size {SIZE}",
-        hash.name()
+        "bin-ntt over flock {}, core {CPU}, one thread, size {}",
+        hash.name(),
+        suite.name
     );
     println!(
         "{} compressions of {}: m = {}, k_log = {}, {} useful bits per block, {} committed",
-        hash.compressions(),
+        hash.compressions(suite),
         hash.name(),
         r1cs.m,
         r1cs.k_log,

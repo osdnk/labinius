@@ -9,7 +9,7 @@ use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
 use binius_frontend::{Circuit as FrontendCircuit, CircuitBuilder, Wire};
 
-use bin_ntt::scheme::SIZE_STEP;
+use bin_ntt::Suite;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hash {
@@ -35,11 +35,11 @@ impl Hash {
         }
     }
 
-    pub const fn message_len(self) -> usize {
-        let len = MESSAGE_LEN[self as usize][(SIZE_STEP / 2) as usize];
+    pub fn message_len(self, suite: &Suite) -> usize {
+        let len = MESSAGE_LEN[self as usize][suite.index()];
         assert!(
             len != 0,
-            "no message length is measured for this hash at this rung"
+            "no message length is measured for this hash at this suite"
         );
         len
     }

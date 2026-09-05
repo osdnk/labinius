@@ -5,14 +5,16 @@ use bin_ntt::fields::crossfield::eval_pi1;
 use bin_ntt::fields::scalar::B128;
 use bin_ntt_binius::{Circuit, Error, Hash, Session};
 use bin_ntt::rng::Rng;
-use bin_ntt::{EvaluationPoint, Modulus, Params, Witness, F162};
+use bin_ntt::{EvaluationPoint, Modulus, Params, Witness, F162, SUITES};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const HASH: Hash = Hash::Keccak256;
-const MESSAGE_LEN: usize = HASH.message_len();
+fn message_len() -> usize {
+    HASH.message_len(&SUITES[0])
+}
 
 fn message() -> Vec<u8> {
-    (0..MESSAGE_LEN)
+    (0..message_len())
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect()
 }
@@ -51,10 +53,15 @@ fn the_switch_point_is_the_evaluation_point() {
 
 #[test]
 fn the_honest_proof_verifies_in_both_modes() {
-    let circuit = Circuit::new(HASH, MESSAGE_LEN);
+    let circuit = Circuit::new(HASH, message_len());
     let witness = circuit.witness(&message());
     for recursion in [false, true] {
-        let mut session = Session::new(circuit.constraint_system().clone(), recursion, MATRIX_SEED);
+        let mut session = Session::new(
+            circuit.constraint_system().clone(),
+            &SUITES[0],
+            recursion,
+            MATRIX_SEED,
+        );
         let (proof, _, sizes) = session.prove(&witness, None);
         assert!(sizes.total() > 0);
         session
@@ -67,9 +74,14 @@ fn the_honest_proof_verifies_in_both_modes() {
 /// longer open binius64's claim, so the proof dies before the opening is even read.
 #[test]
 fn a_flipped_trace_bit_is_rejected() {
-    let circuit = Circuit::new(HASH, MESSAGE_LEN);
+    let circuit = Circuit::new(HASH, message_len());
     let witness = circuit.witness(&message());
-    let mut session = Session::new(circuit.constraint_system().clone(), false, MATRIX_SEED);
+    let mut session = Session::new(
+        circuit.constraint_system().clone(),
+        &SUITES[0],
+        false,
+        MATRIX_SEED,
+    );
     let (proof, _, _) = session.prove(&witness, Some(12345));
     match session.verify(witness.inout(), &proof) {
         Err(Error::Switch(_)) => {}

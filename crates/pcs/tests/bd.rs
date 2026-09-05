@@ -1,5 +1,5 @@
 use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::scheme::DROPPED_BITS;
+use bin_ntt::SUITES;
 use bin_ntt::bd::{self, Dropped};
 use bin_ntt::params::N;
 use bin_ntt::wire;
@@ -141,7 +141,13 @@ fn dropped_commitment_round_trips_the_wire_and_rejects_an_oversized_digit() {
 
 #[test]
 fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
-    let params = Params::sized(Opening::BitDropped { bits: DROPPED_BITS });
+    let suite = &SUITES[0];
+    let params = Params::sized(
+        suite,
+        Opening::BitDropped {
+            bits: suite.dropped_bits,
+        },
+    );
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&pp);

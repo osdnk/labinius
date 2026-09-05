@@ -1,5 +1,6 @@
+use bin_ntt::scheme::suite_from_args;
 use pcs_competitors::{
-    basefold, ligerito_flock, pin, random_u64s, whir, Row, CPU, LOG_LEN, WITNESS_SEED,
+    basefold, ligerito_flock, pin, random_u64s, whir, Row, CPU, WITNESS_SEED,
 };
 
 fn print(rows: &[Row]) {
@@ -30,22 +31,25 @@ fn print(rows: &[Row]) {
 }
 
 fn main() {
+    let suite = suite_from_args();
+    let log_len = pcs_competitors::log_len(suite);
+    println!("=== size {} ===", suite.name);
     pin(CPU);
-    let u64s = random_u64s(LOG_LEN, WITNESS_SEED);
+    let u64s = random_u64s(log_len, WITNESS_SEED);
 
     let mut rows = Vec::new();
     for log_inv_rate in [1, 2] {
-        rows.push(basefold::run(LOG_LEN, log_inv_rate, &u64s));
+        rows.push(basefold::run(log_len, log_inv_rate, &u64s));
     }
     for log_inv_rate in [1, 2] {
-        rows.push(whir::run(LOG_LEN, log_inv_rate, &u64s));
+        rows.push(whir::run(log_len, log_inv_rate, &u64s));
     }
     for profile in ligerito_flock::PROFILES {
-        rows.push(ligerito_flock::run(LOG_LEN, profile, &u64s));
+        rows.push(ligerito_flock::run(log_len, profile, &u64s));
     }
 
     println!(
-        "three hash-based PCSs on 2^{LOG_LEN} B128, opened at one point of {LOG_LEN} \
+        "three hash-based PCSs on 2^{log_len} B128, opened at one point of {log_len} \
          coordinates, core {CPU}, one thread"
     );
     print(&rows);

@@ -49,11 +49,11 @@ impl Pcs {
 
     pub fn ladder(&self) -> String {
         let levels = self.verifier.params().levels();
-        let rungs: Vec<String> = levels
+        let suites: Vec<String> = levels
             .iter()
             .map(|level| format!("1/{}x{}", 1usize << level.log_inv_rate, level.n_queries))
             .collect();
-        rungs.join(" ")
+        suites.join(" ")
     }
 
     pub fn achieved(&self) -> f64 {

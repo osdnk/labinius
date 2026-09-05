@@ -20,7 +20,8 @@ pub mod phases;
 pub mod stock;
 pub mod switch;
 
-use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage, DROPPED_BITS};
+use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage};
+use bin_ntt::Suite;
 use bin_ntt::fields::scalar::{B128 as SB, F162};
 use bin_ntt::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
@@ -138,6 +139,7 @@ impl Session {
     /// `constraint_system` must pack to exactly [`Params::witness_len`] field elements.
     pub fn new(
         constraint_system: ConstraintSystem,
+        suite: &Suite,
         recursion: bool,
         matrix_seed: [u8; 32],
     ) -> Session {
@@ -146,14 +148,14 @@ impl Session {
         } else {
             OpeningMode::Clear
         };
-        Session::with_params(constraint_system, Params::sized(opening), matrix_seed)
+        Session::with_params(constraint_system, Params::sized(suite, opening), matrix_seed)
     }
 
-    pub fn bd(constraint_system: ConstraintSystem, matrix_seed: [u8; 32]) -> Session {
+    pub fn bd(constraint_system: ConstraintSystem, suite: &Suite, matrix_seed: [u8; 32]) -> Session {
         let opening = OpeningMode::BitDropped {
-            bits: DROPPED_BITS,
+            bits: suite.dropped_bits,
         };
-        Session::with_params(constraint_system, Params::sized(opening), matrix_seed)
+        Session::with_params(constraint_system, Params::sized(suite, opening), matrix_seed)
     }
 
     pub fn with_params(
