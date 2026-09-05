@@ -1095,7 +1095,6 @@ impl Prover {
             &challenges.challenges,
             self.key.len_ring() / 32,
             self.key.prime(0),
-            self.key.is_quadratic(0),
         );
         self.workspace = Some(opening.aux);
         FoldedWitness { elements }
@@ -1343,14 +1342,14 @@ impl Verifier {
             core::array::from_fn(|_| PowerOfThreeRingElementWithLimbs::zero(limbs));
         let mut cols: Vec<[*const i16; 4]> = vec![[core::ptr::null(); 4]; columns];
         for k in 0..limbs {
-            let (q, quad) = (self.key.prime(k), self.key.is_quadratic(k));
+            let q = self.key.prime(k);
             for (j, c) in cols.iter_mut().enumerate() {
                 for (t, p) in c.iter_mut().enumerate() {
                     *p = commitment.matrix().get(t, j).limbs[k].v.as_ptr();
                 }
             }
             let mut out = [[0i16; N162]; 4];
-            fold_columns_slots(q, quad, &challenges.challenges, &cols, &mut out);
+            fold_columns_slots(q, &challenges.challenges, &cols, &mut out);
             for (t, o) in out.iter().enumerate() {
                 rows[t].limbs[k].v = *o;
             }
@@ -1429,9 +1428,9 @@ impl Verifier {
             unsafe { tr::transpose_into(&src, &tr::IDENTITY, batch) };
         }
         for k in 0..self.key.limbs() {
-            let (q, quad) = (self.key.prime(k), self.key.is_quadratic(k));
-            let y = a_times_v_forward(q, quad, self.key.row(k), &batches);
-            let components: [PowerOfThreeRingElement; 4] = components_of(q, quad, &y);
+            let q = self.key.prime(k);
+            let y = a_times_v_forward(q, self.key.row(k), &batches);
+            let components: [PowerOfThreeRingElement; 4] = components_of(q, &y);
             for (row, c) in components.iter().enumerate() {
                 if *c != folded_commitment.rows[row].limbs[k] {
                     return Err(VerificationError::Rejected);

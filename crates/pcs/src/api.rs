@@ -59,6 +59,7 @@
 //! primitive 243-rd root of unity. Outputs are centered into `[-(q-1)/2, (q-1)/2]`; note the `4^-1`
 //! factor above, which is already applied.
 use crate::fields::scalar::F162;
+use crate::limb::dispatch_limb;
 use crate::params::{
     inv_mod, pow_mod, quadratic_slots, Params, ParamsQ, CONDUCTOR, CONDUCTOR_QUAD, N, QS, QS_LARGE,
     QS_QUAD, QUAD_CLASS_SLOT, QUAD_POW3_CLASS, SLOT_EXP,
@@ -425,17 +426,12 @@ pub(crate) fn decompose_components_quad<const Q: u16>(
 }
 
 /// The four components of a commitment for any limb, split or quadratic, dispatched on the prime.
-pub fn components_of(q: u16, quad: bool, y: &[u32; N]) -> [PowerOfThreeRingElement; 4] {
-    match (q, quad) {
-        (3889, false) => decompose_components::<3889>(y),
-        (9721, false) => decompose_components::<9721>(y),
-        (17497, false) => decompose_components::<17497>(y),
-        (19441, false) => decompose_components::<19441>(y),
-        (2917, true) => decompose_components_quad::<2917>(y),
-        (4861, true) => decompose_components_quad::<4861>(y),
-        (12637, true) => decompose_components_quad::<12637>(y),
-        _ => unreachable!("no limb with q = {q}"),
-    }
+pub fn components_of(q: u16, y: &[u32; N]) -> [PowerOfThreeRingElement; 4] {
+    dispatch_limb!(
+        q,
+        split |Q| decompose_components::<Q>(y),
+        quad |Q| decompose_components_quad::<Q>(y),
+    )
 }
 
 // =============================================================================================
@@ -700,7 +696,7 @@ impl CommitmentKey {
                 limbs: Vec::with_capacity(self.limbs()),
             });
         for k in 0..self.limbs() {
-            let d = components_of(self.prime(k), self.is_quadratic(k), &raw[k]);
+            let d = components_of(self.prime(k), &raw[k]);
             for (c, e) in d.into_iter().enumerate() {
                 out[c].limbs.push(e);
             }
