@@ -1,0 +1,24 @@
+[package]
+name = "bin-ntt-binius"
+version.workspace = true
+edition.workspace = true
+description = "binius64's hash proofs with this crate's commitment in place of its BaseFold oracle."
+
+[dependencies]
+bin-ntt.workspace = true
+bin-ntt-bench.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+binius-circuits.workspace = true
+binius-compute.workspace = true
+binius-core.workspace = true
+binius-field.workspace = true
+binius-frontend.workspace = true
+binius-hash.workspace = true
+binius-iop.workspace = true
+binius-ip.workspace = true
+binius-ip-prover.workspace = true
+binius-math.workspace = true
+binius-prover.workspace = true
+binius-transcript.workspace = true
+binius-verifier.workspace = true

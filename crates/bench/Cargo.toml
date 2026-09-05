@@ -1,0 +1,16 @@
+[package]
+name = "bin-ntt-bench"
+version.workspace = true
+edition.workspace = true
+description = "The reference round, the calibration runs and the shared timing helpers."
+default-run = "bin-ntt"
+
+[dependencies]
+bin-ntt.workspace = true
+
+[features]
+sizes = ["bin-ntt/sizes"]
+sizem = ["bin-ntt/sizem"]
+sizel = ["bin-ntt/sizel"]
+sizexl = ["bin-ntt/sizexl"]
+labrador = ["bin-ntt/labrador"]

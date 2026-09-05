@@ -38,7 +38,22 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "bin-ntt"
 version = "0.1.0"
 dependencies = [
- "bincode",
+ "blake3",
+]
+
+[[package]]
+name = "bin-ntt-bench"
+version = "0.1.0"
+dependencies = [
+ "bin-ntt",
+]
+
+[[package]]
+name = "bin-ntt-binius"
+version = "0.1.0"
+dependencies = [
+ "bin-ntt",
+ "bin-ntt-bench",
  "binius-circuits",
  "binius-compute",
  "binius-core",
@@ -46,7 +61,6 @@ dependencies = [
  "binius-frontend",
  "binius-hash",
  "binius-iop",
- "binius-iop-prover",
  "binius-ip",
  "binius-ip-prover",
  "binius-math",
@@ -54,12 +68,22 @@ dependencies = [
  "binius-transcript",
  "binius-verifier",
  "blake3",
+ "tracing",
+]
+
+[[package]]
+name = "bin-ntt-flock"
+version = "0.1.0"
+dependencies = [
+ "bin-ntt",
+ "bin-ntt-bench",
+ "bincode",
+ "blake3",
  "flock-core",
  "flock-field",
  "flock-prover",
  "flock-transcript",
  "serde",
- "tracing",
 ]
 
 [[package]]
@@ -914,6 +938,26 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pcs-competitors"
+version = "0.1.0"
+dependencies = [
+ "bin-ntt",
+ "bin-ntt-bench",
+ "binius-compute",
+ "binius-core",
+ "binius-hash",
+ "binius-iop",
+ "binius-iop-prover",
+ "binius-ip",
+ "binius-ip-prover",
+ "binius-math",
+ "binius-prover",
+ "binius-transcript",
+ "binius-verifier",
+ "flock-core",
+]
 
 [[package]]
 name = "petgraph"

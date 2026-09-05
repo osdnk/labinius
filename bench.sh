@@ -27,9 +27,16 @@ note() {
 build() {
     local feat=$1
     if [ "${SKIP_BUILD:-0}" = 1 ]; then return 0; fi
+    local flags=
+    for f in $feat; do
+        case $f in
+            labrador) flags="$flags,bin-ntt-bench/labrador" ;;
+            *) flags="$flags,bin-ntt/$f" ;;
+        esac
+    done
     echo "$BAR"
-    echo "  build --features \"$feat\""
-    cargo build --release --offline --features "$feat" --bins >> "$OUT/build.log" 2>&1
+    echo "  build --features \"${flags#,}\""
+    cargo build --release --offline --workspace --bins --features "${flags#,}" >> "$OUT/build.log" 2>&1
     echo "  done ($?)"
     echo "$BAR"
     echo

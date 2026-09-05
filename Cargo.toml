@@ -1,11 +1,20 @@
-[package]
-default-run = "bin-ntt"
-name = "bin-ntt"
+[workspace]
+resolver = "2"
+members = [
+    "crates/bench",
+    "crates/binius",
+    "crates/competitors",
+    "crates/flock",
+    "crates/pcs",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "AVX-512 Ajtai commitment, fold and verifier over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, over the limbs q in {2917, 3889, 4861, 9721, 12637, 17497, 19441}"
 
-[dependencies]
+[workspace.dependencies]
+bin-ntt = { path = "crates/pcs" }
+bin-ntt-bench = { path = "crates/bench" }
 # Fiat-Shamir transcript (challenge.rs): blake3 as the hash and the XOF.
 blake3 = "1.8"
 # binius64 instruments its phases with tracing spans; the baseline column reads them.
@@ -45,10 +54,3 @@ overflow-checks = false
 
 [profile.dev]
 opt-level = 1
-
-[features]
-sizes = []
-sizem = []
-sizel = []
-sizexl = []
-labrador = []
