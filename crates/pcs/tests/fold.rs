@@ -5,6 +5,9 @@ use bin_ntt::{
     Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
 };
 
+mod common;
+use common::*;
+
 use Modulus::*;
 
 const MATRIX_SEED: [u8; 32] = [21u8; 32];
@@ -66,19 +69,6 @@ impl Round {
                 },
             )
             .map(|_| ())
-    }
-}
-
-fn small() -> Params {
-    Params::new(11, 3, vec![Q9721_FS_S], Opening::Clear).unwrap()
-}
-
-/// A limb that is not `base`, so that every round below has two of them.
-fn second(base: Modulus) -> Modulus {
-    if base == Q9721_FS_S {
-        Q3889_FS_S
-    } else {
-        Q9721_FS_S
     }
 }
 

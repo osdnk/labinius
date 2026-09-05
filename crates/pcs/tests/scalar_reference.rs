@@ -3,19 +3,8 @@ use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 
-/// A random binary polynomial as its 648 coefficients (the form the kernels' inputs lift to).
-fn random_bin(rng: &mut Rng) -> [u32; N] {
-    let mut c = [0u32; N];
-    for w in 0..N.div_ceil(64) {
-        let x = rng.next_u64();
-        for b in 0..64 {
-            if 64 * w + b < N {
-                c[64 * w + b] = ((x >> b) & 1) as u32;
-            }
-        }
-    }
-    c
-}
+mod common;
+use common::random_bin;
 
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 {

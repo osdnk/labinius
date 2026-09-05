@@ -7,6 +7,9 @@ use bin_ntt::wire::{self, WireError};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
+mod common;
+use common::*;
+
 use Modulus::*;
 
 const MATRIX_SEED: [u8; 32] = [21u8; 32];
@@ -39,14 +42,6 @@ fn round(params: Params) -> Round {
 }
 
 /// A modulus that is not `base`, to be the second limb.
-fn second(base: Modulus) -> Modulus {
-    if base == Q9721_FS_S {
-        Q3889_FS_S
-    } else {
-        Q9721_FS_S
-    }
-}
-
 fn fold_of(values: Vec<Vec<i16>>) -> bin_ntt::FoldedWitness {
     bin_ntt::FoldedWitness::of(
         values
