@@ -23,7 +23,7 @@ pub const CONDUCTOR: u32 = 1944;
 pub const QS: [u16; 2] = [3889, 9721];
 /// The supported primes above `2^14`: `1 mod 1944` like [`QS`], so the same conductor-1944 tree
 /// and the same 648 linear slots, but `2^15/q` is only 1.87 and 1.69, so their kernels reduce at
-/// every level (`crate::simd::vertical_bin_large`).
+/// every level (`crate::simd::ntt::bin_large`).
 pub const QS_LARGE: [u16; 2] = [17497, 19441];
 /// Radix of the split that turns level `l` into level `l+1` (level 0 is the whole ring).
 pub const RADIX: [usize; 7] = [2, 2, 2, 3, 3, 3, 3];
@@ -348,7 +348,7 @@ const _: () = {
 ///
 /// The two roots of `X^2 - psi'^u` are `psi^u` and `psi^{u + 972}` (in the quadratic extension
 /// where psi = sqrt(psi') lives), and both have the same class `v = u mod 486` — the exponent
-/// that names an `R_162` slot ([`crate::api::POW3_SLOT_EXP`]), since `theta = psi^4 = psi'^2` and
+/// that names an `R_162` slot ([`crate::ring::POW3_SLOT_EXP`]), since `theta = psi^4 = psi'^2` and
 /// `theta^u` depends only on `u mod 486`. Each class therefore owns exactly two leaves,
 /// `u = v` (`c = +psi'^v`) and `u = v + 486` (`c = -psi'^v`, because `psi'^486 = -1`).
 ///
@@ -368,7 +368,7 @@ const fn quad_class_tables() -> ([u16; 162], [[u16; 162]; 2]) {
     // mod 486 — which the assertion below checks.
     let mut s = 0;
     while s < 162 {
-        let v = crate::api::POW3_SLOT_EXP[s] as usize;
+        let v = crate::ring::POW3_SLOT_EXP[s] as usize;
         let mut j = 0;
         while j < QUAD_SLOTS {
             let u = QUAD_SLOT_EXP[j] as usize;
@@ -385,7 +385,7 @@ const fn quad_class_tables() -> ([u16; 162], [[u16; 162]; 2]) {
     let mut cl = [0u16; 162];
     let mut s = 0;
     while s < 162 {
-        cl[s] = crate::api::POW3_SLOT_EXP[s];
+        cl[s] = crate::ring::POW3_SLOT_EXP[s];
         s += 1;
     }
     (cl, slot)
@@ -393,7 +393,7 @@ const fn quad_class_tables() -> ([u16; 162], [[u16; 162]; 2]) {
 
 const QUAD_CLASS: ([u16; 162], [[u16; 162]; 2]) = quad_class_tables();
 
-/// The 162 `R_162` classes in [`crate::api::POW3_SLOT_EXP`] order (a copy of it, kept here so the
+/// The 162 `R_162` classes in [`crate::ring::POW3_SLOT_EXP`] order (a copy of it, kept here so the
 /// quad tables read from one place).
 pub const QUAD_POW3_CLASS: [u16; 162] = QUAD_CLASS.0;
 /// `QUAD_CLASS_SLOT[sign][s]`: the leaf of class `QUAD_POW3_CLASS[s]` whose constant is

@@ -1,4 +1,4 @@
-use crate::api::N162;
+use crate::ring::N162;
 use crate::challenge::ShortChallenge;
 use crate::simd::commit as cm;
 use core::arch::x86_64::*;

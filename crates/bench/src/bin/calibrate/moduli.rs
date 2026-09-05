@@ -18,12 +18,13 @@
 //! `the_fold_per_base` is the wall clock of `Prover::fold` at the same shape with each modulus in
 //! turn as the base limb.
 use bin_ntt::Opening;
-use bin_ntt::api::{AuxData, CommitmentKey, BASE_PRIME};
+use bin_ntt::key::{AuxData, CommitmentKey};
+use bin_ntt::ring::BASE_PRIME;
 use bin_ntt::params::N;
 use bin_ntt::simd::commit as cm;
 use bin_ntt::simd::transpose_f162::{slice_f162_into, BinaryIndex32};
-use bin_ntt::simd::{vertical_bin_asm as vb, vertical_bin_large as vl, vertical_bin_quad as vq};
-use bin_ntt::types::{Batch32, Representation};
+use bin_ntt::simd::ntt::{bin_asm as vb, bin_large as vl, bin_quad as vq};
+use bin_ntt::ring::{Batch32, Representation};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness, F162};
 use std::time::Instant;
 

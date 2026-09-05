@@ -1,7 +1,7 @@
 //! Forward NTT for **binary** inputs in the vertical batch-of-32 layout, with levels 4, 5 and 6
 //! hand-scheduled in one `asm!` block per 27-block (27 zmm data registers resident).
 //! Generated; see the report for the schedule variants tried.
-//! For q = 3889 bit-identical to `vertical_bin` (same operation order per butterfly); for
+//! For q = 3889 bit-identical to `ntt::bin_small` (same operation order per butterfly); for
 //! q = 9721 it reduces at different levels and with a different Barrett (see Bounds below), so
 //! the two agree modulo q and this one's lanes are the smaller representatives.
 //!
@@ -78,7 +78,7 @@
 //! it is 2 uops (p0 + p5) and needs a p0 uop to build the index: 2 port-0 again.
 use crate::params::*;
 pub use crate::simd::transpose_f162::BinaryIndex32;
-use crate::types::*;
+use crate::ring::element::*;
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------

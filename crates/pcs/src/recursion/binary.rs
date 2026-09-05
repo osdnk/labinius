@@ -12,7 +12,7 @@
 //! quotients exist precisely when those hold.
 use super::chain::{padded, public_table, At, Carries, Chain, Prepared, Product, Run};
 use super::{Build, Gadget, Overflow, SElem, CHUNKS, U};
-use crate::api::N162;
+use crate::ring::N162;
 use crate::eval::eq_table;
 use crate::fields::scalar::F162;
 use crate::scheme::EvaluationPoint;

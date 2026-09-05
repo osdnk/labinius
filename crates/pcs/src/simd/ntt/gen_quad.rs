@@ -1,7 +1,7 @@
 //! Generic-input NTT on the *quadratic-slot* tree (q in `params::QS_QUAD`), vertical `Batch32`
 //! layout, in place: `Coefficients -> Ntt`, input lanes `|x| <= q`.
 //!
-//! The counterpart of [`crate::simd::vertical_gen`] for the tree that does not split completely
+//! The counterpart of [`crate::simd::ntt::gen_small`] for the tree that does not split completely
 //! (see the quadratic-slot section of `params`); it is what a challenge transform and a folded
 //! witness over these limbs need. Three passes, depth-first inside a 162-block after the first so
 //! the working set stays in L1:
@@ -13,7 +13,7 @@
 //! | C    | 4 + 5  | one 18-block, two passes                                | 6 + 6 x radix-3     |
 //!
 //! Pass A fuses the Phi_6 split with the one radix-2 level into a radix-4 pass, exactly as
-//! `vertical_gen` does. Pass B fuses levels 2 and 3 over groups of 9: the three level-2 triples
+//! `ntt::gen_small` does. Pass B fuses levels 2 and 3 over groups of 9: the three level-2 triples
 //! `(i, i+54, i+108)` at `i = i0, i0+18, i0+36` deliver exactly one level-3 butterfly to each of
 //! the three 54-blocks.
 //!
@@ -29,7 +29,7 @@
 //! ## Bounds and reduction schedule
 //!
 //! `|mont(a, w)| <= |a| q/2^17 + q/2` and the reduction is the shuffle-port **lookup Barrett** of
-//! [`crate::simd::vertical_bin_asm::barrett_lut_i16`] (`|r| <= q/2 + 2^10`, 2 port-5 + 3 flexible
+//! [`crate::simd::ntt::bin_asm::barrett_lut_i16`] (`|r| <= q/2 + 2^10`, 2 port-5 + 3 flexible
 //! uops and *no* multiply-port slot, which is what this kernel is short of). [`gen_flags`] is a
 //! `const` search over the flag set — reduce the loaded `a1`, `b1` of pass A, reduce its
 //! level-0 output `a0 + a1 - t`, reduce the untwiddled `a0` input of each of levels 2..5 — for
@@ -50,8 +50,8 @@
 //! reaches 2.60 q = 32811 and leaves i16 before anything can be done about it, so the two loaded
 //! `a1` values are reduced as they arrive (which also tightens everything downstream).
 use crate::params::*;
-use crate::simd::vertical_bin_quad::{barrett_lut_max, lut_byte};
-use crate::types::{Batch32, Representation};
+use crate::simd::ntt::bin_quad::{barrett_lut_max, lut_byte};
+use crate::ring::{Batch32, Representation};
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -563,7 +563,7 @@ pub unsafe fn ntt_quad_gen_batch32<const Q: u16>(b: &mut Batch32) {
 // The per-level `1/3` and `1/2` are *not* applied: every value reaching level 0 is the true one
 // times `2 * 3^4 = 162` — one factor 3 less than the splitting tree's 324, because the tree has
 // one radix-2 level fewer — and the whole `1/324` corrected by the Phi_6 determinant sits in the
-// three level-0 constants `TwQI::KA`, `KB`, `KC`, exactly as `crate::simd::vertical_gen` folds
+// three level-0 constants `TwQI::KA`, `KB`, `KC`, exactly as `crate::simd::ntt::gen_small` folds
 // `1/648` into its own. The output is fully reduced and centered in `[-(q-1)/2, (q-1)/2]`.
 //
 // The reduction is again the shuffle-port lookup Barrett — this kernel has no multiply-port slack
@@ -600,7 +600,7 @@ const fn red_bound(b: i32, q: u16) -> i32 {
 /// (7.94 q / 3.26 q / 1.94 q — the generic one, in all three cases). The fold's centered
 /// `(q-1)/2` is far inside it.
 pub const fn in_bound(q: u16) -> i32 {
-    let bin = crate::simd::vertical_bin_quad::output_bound(q);
+    let bin = crate::simd::ntt::bin_quad::output_bound(q);
     let gen = output_bound(q);
     if bin > gen {
         bin

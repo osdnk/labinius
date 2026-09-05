@@ -8,9 +8,9 @@ use bin_ntt::recursion::limbs;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar::{self, Coeffs};
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-use bin_ntt::simd::vertical_bin_quad as vq;
-use bin_ntt::simd::vertical_gen_quad as vgq;
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::bin_quad as vq;
+use bin_ntt::simd::ntt::gen_quad as vgq;
+use bin_ntt::ring::*;
 use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs
@@ -141,7 +141,7 @@ fn tree_shape() {
     // the R_162 classes of the two trees agree, and each class owns a + and a - leaf
     for s in 0..162 {
         let v = QUAD_POW3_CLASS[s] as usize;
-        assert_eq!(v, bin_ntt::api::POW3_SLOT_EXP[s] as usize);
+        assert_eq!(v, bin_ntt::ring::POW3_SLOT_EXP[s] as usize);
         let (jp, jm) = (
             QUAD_CLASS_SLOT[0][s] as usize,
             QUAD_CLASS_SLOT[1][s] as usize,
@@ -290,7 +290,7 @@ impl<const Q: u16> Shadow<Q> {
         self.see(r as i32)
     }
     fn bar(&mut self, a: i16) -> i16 {
-        self.see(bin_ntt::simd::vertical_bin_asm::barrett_lut_i16(a, Q) as i32)
+        self.see(bin_ntt::simd::ntt::bin_asm::barrett_lut_i16(a, Q) as i32)
     }
     fn r3(&mut self, a0: i16, a1: i16, a2: i16, zeta: u16, bar: bool) -> (i16, i16, i16) {
         let q = Q as u64;

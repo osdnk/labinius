@@ -1,5 +1,5 @@
 use crate::params::quadratic_slots;
-use crate::simd::vertical_bin_large::is_large;
+use crate::simd::ntt::bin_large::is_large;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {

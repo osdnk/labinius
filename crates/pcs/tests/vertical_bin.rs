@@ -1,5 +1,5 @@
-//! The pure-intrinsics reference kernel (`simd::vertical_bin`) against the generated one
-//! (`simd::vertical_bin_asm`) and against the scalar NTT.
+//! The pure-intrinsics reference kernel (`simd::ntt::bin_small`) against the generated one
+//! (`simd::ntt::bin_asm`) and against the scalar NTT.
 //!
 //! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
 //! element (`f162::pack4`) and sliced by the production front end, so both kernels are fed
@@ -14,9 +14,9 @@ use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-use bin_ntt::simd::vertical_bin as vb;
-use bin_ntt::simd::vertical_bin_asm as vba;
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::bin_small as vb;
+use bin_ntt::simd::ntt::bin_asm as vba;
+use bin_ntt::ring::*;
 use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs

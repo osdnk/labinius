@@ -1,9 +1,9 @@
-//! Correctness and bound tests for `simd::vertical_gen`.
+//! Correctness and bound tests for `simd::ntt::gen_small`.
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
-use bin_ntt::simd::vertical_gen::{intt_gen_batch32, ntt_gen_batch32, Tw, TwI};
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::gen_small::{intt_gen_batch32, ntt_gen_batch32, Tw, TwI};
+use bin_ntt::ring::*;
 
 /// Exact i32 mirror of the kernel: same operation order, same Barrett placement, but every value
 /// kept as i32 so that an i16 overflow is observable. Returns the output and the per-level maximum
@@ -181,7 +181,7 @@ fn ntt_9721() {
     run::<9721>();
 }
 
-/// Per-level bounds proven in the module comment of `vertical_gen`, as `ceil(bound * q)`.
+/// Per-level bounds proven in the module comment of `ntt::gen_small`, as `ceil(bound * q)`.
 fn level_bounds<const Q: u16>() -> [i32; 7] {
     if Q == 9721 {
         [25024, 21298, 27738, 21700, 20804, 20671, 20652]

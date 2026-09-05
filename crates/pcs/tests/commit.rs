@@ -8,12 +8,12 @@ use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::commit::{self as cm, Acc};
 use bin_ntt::simd::transpose_f162 as tf;
-use bin_ntt::simd::vertical_bin_asm as vb;
-use bin_ntt::simd::vertical_bin_large as vl;
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::bin_asm as vb;
+use bin_ntt::simd::ntt::bin_large as vl;
+use bin_ntt::ring::*;
 use bin_ntt::F162;
 
-/// The binary kernel of a splitting prime: `vertical_bin_asm` below `2^14`, `vertical_bin_large`
+/// The binary kernel of a splitting prime: `ntt::bin_asm` below `2^14`, `ntt::bin_large`
 /// above it.
 ///
 /// # Safety

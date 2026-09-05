@@ -55,7 +55,7 @@
 //! consecutive rows** — block `blk` is rows `18 blk .. 18 blk + 18`, i.e. the 9 quadratic leaves
 //! `9 blk .. 9 blk + 9` — each produced from 18 registers by one levels-4+5 tail. [`BlockSink`]
 //! hands each block to a consumer while it is still in L1, exactly as
-//! [`crate::simd::vertical_bin_asm::BlockSink`] does with its 27-row blocks.
+//! [`crate::simd::ntt::bin_asm::BlockSink`] does with its 27-row blocks.
 //!
 //! ## Bounds (|lane| as a multiple of q; the const recursions [`bin_model_f3`] and
 //! [`bin_model_split`] prove them and the i32 shadow model in `tests/quad.rs` replays the
@@ -73,7 +73,7 @@
 //!
 //! `2^15/q` is 11.23 (2917), 6.74 (4861) and 2.59 (12637). **2917 needs no reduction anywhere**;
 //! 4861 needs exactly one, and 12637, on the unfolded phase 1, needs three. All of them are the
-//! shuffle-port **lookup Barrett** of [`crate::simd::vertical_bin_asm::barrett_lut_i16`]
+//! shuffle-port **lookup Barrett** of [`crate::simd::ntt::bin_asm::barrett_lut_i16`]
 //! (`vpmultishiftqb` + `vpandd` + `vpord` + `vpermb` + `vpaddw`: 2 port-5 and 3 flexible uops,
 //! not one multiply-port slot, and `|r| <= q/2 + 2^10 = 0.569 q`) applied to the untwiddled `a0`
 //! input of a level: level 4 for 4861, all of levels 3, 4 and 5 for 12637.
@@ -83,8 +83,8 @@
 //! 2917 its Karatsuba (4.87 q -> 6.96 q) and buys 4861 one (5.13 q -> 3.17 q).
 use crate::params::*;
 pub use crate::simd::transpose_f162::BinaryIndex32;
-use crate::simd::vertical_bin_asm::barrett_lut_corr;
-use crate::types::*;
+use crate::simd::ntt::bin_asm::barrett_lut_corr;
+use crate::ring::element::*;
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -424,7 +424,7 @@ pub struct Tables {
     lut3: [[u8; 64]; 108],
     /// 512-bit constants of the lookup Barrett and the omega product, as memory operands:
     /// `[ms, corr, and, or]` — the `vpmultishiftqb` control, the byte-split `-k q` table and the
-    /// index fix-up masks (see `vertical_bin_asm::barrett_lut_i16`).
+    /// index fix-up masks (see `ntt::bin_asm::barrett_lut_i16`).
     cv: [[i16; 32]; 4],
     /// `[w, w', w2, w2']` (Montgomery twiddle and companion for zeta and zeta^2) per sub-ring,
     /// each i16 duplicated into a u32 so `vpbroadcastd` is a pure load.

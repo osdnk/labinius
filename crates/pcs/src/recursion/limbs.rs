@@ -11,22 +11,21 @@
 use super::chain::{padded, witness_table, At, Carries, Chain, Product, Run};
 use super::setup::Setup;
 use super::{centre, Build, Cap, Gadget, Kind, Overflow, Poly, SElem, CHUNK, CHUNKS, DEG, PAD};
-use crate::api::{
-    PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
-    POW3_SLOT_EXP, SLOT_648,
-};
 use crate::limb::dispatch_limb;
 use crate::params::{
     inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, DEGREE_Q, N, QUAD_CLASS_SLOT, QUAD_POW3_CLASS,
     RADIX_Q, SUBRINGS_Q,
 };
 use crate::scalar;
+use crate::ring::{
+    Batch32, PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, Representation,
+    RingElement, VerticallyAlignedMatrix, N162, POW3_SLOT_EXP, SLOT_648,
+};
 use crate::scheme::PublicParameters;
-use crate::simd::vertical_bin_large as vl;
-use crate::simd::vertical_gen::intt_gen_batch32;
-use crate::simd::vertical_gen_large as vgl;
-use crate::simd::vertical_gen_quad::intt_quad_gen_batch32;
-use crate::types::{Batch32, Representation, RingElement};
+use crate::simd::ntt::bin_large as vl;
+use crate::simd::ntt::gen_small::intt_gen_batch32;
+use crate::simd::ntt::gen_large as vgl;
+use crate::simd::ntt::gen_quad::intt_quad_gen_batch32;
 
 /// What one limb costs beyond its prime: the carry gadget of the plan's section 2b and the
 /// base-512 digits of the wraparound quotient, both sized from the shape.
@@ -264,7 +263,7 @@ impl<const Q: u16> Inv<Q> {
 
 /// The residues of one splitting limb, 32 columns at a time: the recombination above out of a
 /// table, then the crate's vectorised inverse transform on the whole batch — [`intt_gen_batch32`]
-/// below `2^14`, `vertical_gen_large`'s above it.
+/// below `2^14`, `ntt::gen_large`'s above it.
 fn columns_split<const Q: u16>(
     matrix: &VerticallyAlignedMatrix<PowerOfThreeRingElementWithLimbs>,
     limb: usize,

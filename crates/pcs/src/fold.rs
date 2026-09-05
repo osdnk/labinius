@@ -20,7 +20,7 @@
 //!
 //! # What it costs
 //!
-//! [`CommitmentKey::commit_into_aux`](crate::api::CommitmentKey::commit_into_aux) already left
+//! [`CommitmentKey::commit_into_aux`](crate::ring::CommitmentKey::commit_into_aux) already left
 //! `NTT_3889(W)` in memory, so the fold never transforms the witness again: it reads those 85 MB
 //! once, which is the DRAM floor of the step. The accumulator is `len_ring/32 x 648` 32-lane i32 groups
 //! (663 KB for `len_ring = 256`, L2-resident) and every chunk contributes one `vpmaddwd` per slot
@@ -30,8 +30,8 @@
 //!
 //! Only the base limb's transform is kept, and the prover stops there: `v` is inverted back to
 //! coefficients modulo the base prime, where it becomes a genuine small-integer vector. The
-//! verifier is the one that transforms it forward again modulo every limb (`vertical_gen`,
-//! `vertical_gen_large` above `2^14`, or `vertical_gen_quad` for a quadratic-slot one) and
+//! verifier is the one that transforms it forward again modulo every limb (`ntt::gen_small`,
+//! `ntt::gen_large` above `2^14`, or `ntt::gen_quad` for a quadratic-slot one) and
 //! recomputes `A v`.
 //!
 //! # The base limb is any of the seven
@@ -53,19 +53,19 @@
 //! declared output bound for that prime — 6.96 q for 2917, 7.50 for 3889, 3.17 for 4861, 2.29 for
 //! 9721, 1.94 for 12637, 1.79 and 1.58 for the two above `2^14` — and `|c|` is `(q-1)/2`, so
 //! [`fold_period`] is per prime and runs from 64 chunks down to 4. The inverse transform back to
-//! coefficients is that tree's ([`intt_gen_batch32`], `vertical_gen_large`'s, or
-//! `vertical_gen_quad`'s).
-use crate::api::{AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
+//! coefficients is that tree's ([`intt_gen_batch32`], `ntt::gen_large`'s, or
+//! `ntt::gen_quad`'s).
 use crate::challenge::ShortChallenge;
+use crate::key::AuxData;
 use crate::limb::{dispatch_limb, is_quad};
 use crate::params::{quadratic_slots, N, QS, QS_LARGE, QS_QUAD, QUAD_CLASS_SLOT, QUAD_SLOTS};
+use crate::ring::{Batch32, Representation, RingElement, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::simd::commit as cm;
 use crate::simd::slots as sl;
-use crate::simd::vertical_bin_large as vl;
-use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
-use crate::simd::vertical_gen_large as vgl;
-use crate::simd::vertical_gen_quad::{self as vgq, intt_quad_gen_batch32, ntt_quad_gen_batch32};
-use crate::types::{Batch32, Representation, RingElement};
+use crate::simd::ntt::bin_large as vl;
+use crate::simd::ntt::gen_small::{self as vg, intt_gen_batch32, ntt_gen_batch32};
+use crate::simd::ntt::gen_large as vgl;
+use crate::simd::ntt::gen_quad::{self as vgq, intt_quad_gen_batch32, ntt_quad_gen_batch32};
 use core::arch::x86_64::*;
 use std::sync::OnceLock;
 
@@ -205,8 +205,8 @@ unsafe fn barrett_u31<const Q: u16>(p: __m512i) -> __m512i {
     _mm512_min_epu32(r, _mm512_sub_epi32(r, q))
 }
 
-/// Declared output bound of the generic-input kernel of `q` — `vertical_gen` for a splitting
-/// prime, `vertical_gen_quad` for a quadratic-slot one.
+/// Declared output bound of the generic-input kernel of `q` — `ntt::gen_small` for a splitting
+/// prime, `ntt::gen_quad` for a quadratic-slot one.
 pub const fn gen_bound(q: u16) -> i32 {
     if q == 3889 {
         13231
@@ -305,8 +305,8 @@ impl<const Q: u16> Gen<Q> {
     const LARGE: bool = vl::is_large(Q);
 }
 
-/// `NTT(b)` for a splitting prime, fully reduced and centered: `vertical_gen` below `2^14`,
-/// `vertical_gen_large` above it.
+/// `NTT(b)` for a splitting prime, fully reduced and centered: `ntt::gen_small` below `2^14`,
+/// `ntt::gen_large` above it.
 ///
 /// # Safety
 /// AVX-512 F/BW/VL/VBMI; `b` holds coefficients with `|x| <= q`.
@@ -593,8 +593,8 @@ const _: () = assert!(av_period_quad(12637) >= 1);
 // the fold
 // =============================================================================================
 
-/// The inverse transform of a splitting base limb: `vertical_gen` below `2^14`,
-/// `vertical_gen_large` above it, chosen before the branches are emitted.
+/// The inverse transform of a splitting base limb: `ntt::gen_small` below `2^14`,
+/// `ntt::gen_large` above it, chosen before the branches are emitted.
 ///
 /// # Safety
 /// AVX-512 F/BW/VL/VBMI; `b` is a centered transform.

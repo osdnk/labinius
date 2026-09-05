@@ -2,7 +2,7 @@
 //! **reference** implementation of the split-tree kernel.
 //!
 //! The production path ([`crate::simd::commit`]) does not call this module; it uses
-//! [`crate::simd::vertical_bin_asm`], which is the same tree with levels 4, 5 and 6
+//! [`crate::simd::ntt::bin_asm`], which is the same tree with levels 4, 5 and 6
 //! hand-scheduled in one `asm!` block per 27-block and, for q = 9721, a different reduction
 //! schedule. This file keeps the schedule readable — one Rust expression per butterfly, the
 //! reduction written where the bound argument needs it — so that the generated kernel has
@@ -52,7 +52,7 @@
 //! not produce the same representatives here.
 use crate::params::*;
 pub use crate::simd::transpose_f162::BinaryIndex32;
-use crate::types::*;
+use crate::ring::element::*;
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------

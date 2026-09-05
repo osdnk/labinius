@@ -1,4 +1,4 @@
-//! `simd::vertical_bin_large` against the scalar NTT, against an i32 shadow of its own schedule,
+//! `simd::ntt::bin_large` against the scalar NTT, against an i32 shadow of its own schedule,
 //! and against the `const` bound recursion that chose that schedule.
 //!
 //! Inputs are built as 648 binary coefficients, packed back into the four `F162` of a ring
@@ -9,10 +9,10 @@ use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-use bin_ntt::simd::vertical_bin_asm::{barrett_lut_corr, barrett_lut_i16};
-use bin_ntt::simd::vertical_bin_large as vl;
-use bin_ntt::simd::vertical_bin_large::{RED_LUT, RED_MUL};
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::bin_asm::{barrett_lut_corr, barrett_lut_i16};
+use bin_ntt::simd::ntt::bin_large as vl;
+use bin_ntt::simd::ntt::bin_large::{RED_LUT, RED_MUL};
+use bin_ntt::ring::*;
 use bin_ntt::F162;
 
 type Bin = [u32; N];
@@ -597,7 +597,7 @@ unsafe fn sr3<const Q: u16>(
 }
 
 /// 216 butterflies — one level — in each form over the same L1-resident block, best of five.
-/// The ratio is what the module comment of `vertical_bin_large` quotes.
+/// The ratio is what the module comment of `ntt::bin_large` quotes.
 fn compare<const Q: u16>() {
     const REPS: usize = 40000;
     let c = U::new::<Q>();

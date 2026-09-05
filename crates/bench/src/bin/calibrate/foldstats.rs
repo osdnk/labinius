@@ -1,5 +1,5 @@
 use bin_ntt::Opening;
-use bin_ntt::api::Modulus;
+use bin_ntt::ring::Modulus;
 use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];

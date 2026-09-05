@@ -1,10 +1,10 @@
-//! `simd::vertical_gen_large` against `scalar::ntt` / `scalar::intt`, against its own declared
+//! `simd::ntt::gen_large` against `scalar::ntt` / `scalar::intt`, against its own declared
 //! bounds and against the `const` recursions that prove them.
 use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
-use bin_ntt::simd::vertical_gen_large as vgl;
-use bin_ntt::types::{Batch32, Representation};
+use bin_ntt::simd::ntt::gen_large as vgl;
+use bin_ntt::ring::{Batch32, Representation};
 
 /// Adversarial coefficient batches at the declared input bound `|x| <= q`, then random ones.
 fn inputs<const Q: u16>(count: usize, seed: u64) -> Vec<Batch32> {

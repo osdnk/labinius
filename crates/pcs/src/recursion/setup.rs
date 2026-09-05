@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::{binary, chain, chunk, limbs, Blocks, Instance, BLOCKS, CHUNKS, DEG, FOLD_CAP, Q, SUB};
-use crate::api::N162;
+use crate::ring::N162;
 use crate::challenge::ShortChallenge;
 use crate::fields::scalar::F162;
 use crate::labrador::{sis_rank, sizeof_polx, CommitmentKey, PolxBuf, ShortPhi};

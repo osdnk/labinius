@@ -43,7 +43,7 @@ use crate::fields::f162 as bf;
 use crate::fields::scalar::F162;
 use crate::fields::sumcheck::Poly;
 use crate::params::N;
-use crate::types::RingElement;
+use crate::ring::RingElement;
 use core::arch::x86_64::*;
 
 /// `eq(ps, b) = prod_k (ps_k if bit k of b is 1 else 1 + ps_k)`, all `2^ps.len()` of them, by

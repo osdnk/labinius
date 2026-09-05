@@ -7,13 +7,7 @@
 pub mod bd;
 pub mod commit;
 pub mod norm;
+pub mod ntt;
 pub mod slots;
 pub mod transpose32;
 pub mod transpose_f162;
-pub mod vertical_bin;
-pub mod vertical_bin_asm;
-pub mod vertical_bin_large;
-pub mod vertical_bin_quad;
-pub mod vertical_gen;
-pub mod vertical_gen_large;
-pub mod vertical_gen_quad;

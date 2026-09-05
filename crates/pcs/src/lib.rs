@@ -11,11 +11,13 @@
 //! Module map
 //! - `scheme`  : the public surface, re-exported here.
 //! - `params`  : all ring constants (roots, twiddles, Montgomery forms), computed at compile time.
-//! - `types`   : `RingElement` (`RingElement648` in the surface), `Batch32`.
+//! - `ring`    : the two rings — `R_648` (`RingElement648` in the surface, `Batch32`) and its
+//!   height-4 view over `R_162` (`RingElement162`) — and the decomposition between them.
+//! - `key`     : the commitment key and the auxiliary data a commitment leaves behind.
+//! - `limb`    : the limb list and the class dispatch every kernel call goes through.
 //! - `scalar`  : exact reference implementation (schoolbook product mod Phi_1944, NTT).
 //! - `rng`     : tiny deterministic RNG (no external crates).
-//! - `simd`    : the AVX-512 kernels.
-//! - `api`     : the commitment key, the commitment and its height-4 view over `R_162`.
+//! - `simd`    : the AVX-512 kernels; `simd::ntt` the seven forward and inverse transforms.
 //! - `challenge`: short (fixed-weight binary) challenges over `R_162` and the blake3 transcript.
 //! - `fields`  : the binary fields `B128` and `F162`, their AVX-512 kernels and the
 //!   cross-field switch, inlined from `bin-fields`.
@@ -25,26 +27,24 @@
 //!   a static rANS for the folded witness.
 #![allow(clippy::needless_range_loop)]
 
-pub mod api;
 pub mod bd;
 pub mod challenge;
 pub mod eval;
 pub mod f162;
 pub mod fields;
 pub mod fold;
+pub mod key;
 pub mod labrador;
 pub mod limb;
 pub mod params;
 pub mod recursion;
+pub mod ring;
 pub mod rng;
 pub mod scalar;
 pub mod scheme;
 pub mod simd;
-pub mod types;
 pub mod wire;
 
-pub use api::Modulus;
-pub use api::PowerOfThreeRingElement as RingElement162;
 pub use bd::Dropped;
 pub use challenge::Transcript;
 pub use fields::scalar::F162;
@@ -55,4 +55,6 @@ pub use scheme::{
     PublicParameters, RowEvaluation, Suite, VerificationError, Verifier, VerifyTimings,
     Witness, WitnessError, SUITES,
 };
-pub use types::RingElement as RingElement648;
+pub use ring::Modulus;
+pub use ring::PowerOfThreeRingElement as RingElement162;
+pub use ring::RingElement as RingElement648;
