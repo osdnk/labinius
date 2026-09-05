@@ -7,7 +7,8 @@ challenges of the subring `R_162` (weight 28, canonical bound 12), and the folde
 checked against the multilinear extension of the same witness over `F162`. Three opening modes:
 **clear**, the folded witness on the wire; **bit-dropped**, the commitment keeping only the top
 bits and the verifier bounding the residual; **recursive**, the opening replaced by a LaBRADOR
-proof. One AVX-512 thread throughout.
+proof. The mode is `Params::opening`, and one `Verifier::verify_opening` dispatches on it.
+One AVX-512 thread throughout.
 
 ## Layout
 
@@ -30,7 +31,7 @@ cargo test --release --workspace
 ## One round
 
 ```rust
-let pp = PublicParameters::from_seed(Params::basic(), MATRIX_SEED);
+let pp = PublicParameters::from_seed(Params::basic(), MATRIX_SEED);   // Opening::Clear
 let witness = Witness::random(pp.params(), WITNESS_SEED);
 let (mut prover, verifier) = (Prover::new(&pp), Verifier::new(&pp));
 let (commitment, opening) = prover.commit(&witness);
@@ -40,9 +41,11 @@ let (claimed, row) = (witness.mle_evaluate(&point), witness.row_evaluate(&point)
 let challenges = verifier.derive_folding_challenges(&mut t, &row);
 let folded = prover.fold(opening, &challenges);
 verifier.verify_evaluation(&point, &claimed, &row).unwrap();
-verifier.verify_folded_opening(
-    &verifier.fold_commitment(&commitment, &challenges), &folded, &point,
-    &verifier.fold_row_evaluation(&row, &challenges)).unwrap();
+verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear {
+    folded_commitment: &verifier.fold_commitment(&commitment, &challenges),
+    folded_witness: &folded,
+    folded_row_value: &verifier.fold_row_evaluation(&row, &challenges),
+}).unwrap();
 ```
 
 `crates/bench/src/bin/bin-ntt.rs` runs this in all three modes with the wall clock on every step.

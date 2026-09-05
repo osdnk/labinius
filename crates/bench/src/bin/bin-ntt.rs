@@ -1,6 +1,8 @@
 //! The reference usage: one round end to end in each mode, with the wall clock on every step.
 //!
 //! `cargo run --release --offline`, pinned with `taskset -c 2`.
+use bin_ntt::{Opening, OpeningMessage};
+use bin_ntt::scheme::DROPPED_BITS;
 use bin_ntt::scheme::SIZE;
 use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, row};
 use bin_ntt::wire;
@@ -56,7 +58,7 @@ fn main() {
 }
 
 fn plain() {
-    let params = Params::sized(false);
+    let params = Params::sized(Opening::Clear);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
@@ -111,11 +113,15 @@ fn plain() {
         verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
     });
     let (verify_opening_ms, opening_ok) = median_of(10, || {
-        verifier.verify_folded_opening(
-            &folded_commitment,
-            &folded_witness,
+        verifier.verify_opening(
+            &commitment,
+            &folding_challenges,
             &evaluation_point,
-            &folded_row_value,
+            OpeningMessage::Clear {
+                folded_commitment: &folded_commitment,
+                folded_witness: &folded_witness,
+                folded_row_value: &folded_row_value,
+            },
         )
     });
 
@@ -194,14 +200,14 @@ fn plain() {
     println!(
         "verification: {}",
         match (evaluation_ok, opening_ok) {
-            (Ok(()), Ok(())) => "accepted".to_string(),
+            (Ok(()), Ok(_)) => "accepted".to_string(),
             (e, o) => format!("rejected ({e:?}, {o:?})"),
         }
     );
 }
 
 fn plain_bd() {
-    let params = Params::sized_bd();
+    let params = Params::sized(Opening::BitDropped { bits: DROPPED_BITS });
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
@@ -251,23 +257,27 @@ fn plain_bd() {
         verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
     });
     let (verify_opening_ms, opening_ok) = median_of(10, || {
-        verifier.verify_folded_opening_bd(
+        verifier.verify_opening(
             &commitment,
             &folding_challenges,
-            &folded_witness,
             &evaluation_point,
-            &folded_row_value,
+            OpeningMessage::BitDropped {
+                folded_witness: &folded_witness,
+                folded_row_value: &folded_row_value,
+            },
         )
     });
 
     let mut tampered = folded_witness.clone();
     tampered.elements_mut()[0].v[0] = tampered.elements_mut()[0].v[0].wrapping_add(1000);
-    let tampered_ok = verifier.verify_folded_opening_bd(
+    let tampered_ok = verifier.verify_opening(
         &commitment,
         &folding_challenges,
-        &tampered,
         &evaluation_point,
-        &folded_row_value,
+        OpeningMessage::BitDropped {
+            folded_witness: &tampered,
+            folded_row_value: &folded_row_value,
+        },
     );
 
     println!("\n=== plain-bd ===");
@@ -280,9 +290,9 @@ fn plain_bd() {
     );
     println!(
         "dropped bits {}, residual cap {} over the expectation {:.3e}",
-        params.dropped_bits,
+        params.dropped_bits(),
         params.bd_cap(),
-        bin_ntt::bd::expected_normsq(params.columns(), params.dropped_bits)
+        bin_ntt::bd::expected_normsq(params.columns(), params.dropped_bits())
     );
     row("public parameters", setup_ms);
 
@@ -330,21 +340,21 @@ fn plain_bd() {
     println!(
         "verification: {}",
         match (evaluation_ok, opening_ok) {
-            (Ok(()), Ok(())) => "accepted".to_string(),
+            (Ok(()), Ok(_)) => "accepted".to_string(),
             (e, o) => format!("rejected ({e:?}, {o:?})"),
         }
     );
     println!(
         "tampered fold: {}",
         match tampered_ok {
-            Ok(()) => "ACCEPTED".to_string(),
+            Ok(_) => "ACCEPTED".to_string(),
             Err(e) => format!("rejected ({e})"),
         }
     );
 }
 
 fn recursive() {
-    let params = Params::sized(true);
+    let params = Params::sized(Opening::Recursive);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let setup = public_parameters
@@ -391,13 +401,15 @@ fn recursive() {
     let prove = *proof.timings();
     let (verify_ms, verified) = once(|| {
         verifier.verify_opening(
-            &mut check,
             &commitment,
-            &left,
-            &evaluation_point,
-            &claimed_value,
             &folding_challenges,
-            &proof,
+            &evaluation_point,
+            OpeningMessage::Recursive {
+                transcript: &mut check,
+                left: &left,
+                claimed_value: &claimed_value,
+                proof: &proof,
+            },
         )
     });
     let verify = verified.unwrap_or_default();

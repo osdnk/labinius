@@ -129,7 +129,7 @@ fn compare(hash: Hash) {
         bd.params().witness_log_len,
         bd.params().columns(),
         moduli(&bd),
-        bd.params().dropped_bits
+        bd.params().dropped_bits()
     );
     println!(
         "\n  {:<32}{:>13}{:>13}{:>13}{:>13}{:>13}",

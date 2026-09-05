@@ -1,3 +1,4 @@
+use bin_ntt::Opening;
 use bin_ntt::api::Modulus;
 use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
@@ -11,7 +12,7 @@ pub fn run() {
         .map(|s| s.parse().unwrap())
         .unwrap_or(1);
     let base = Modulus::from_prime(bp).unwrap();
-    let params = Params::with_base(wl, cl, base, vec![], false).unwrap();
+    let params = Params::with_base(wl, cl, base, vec![], Opening::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let n = params.witness_len() / params.columns() / 4;
     let r = params.columns();

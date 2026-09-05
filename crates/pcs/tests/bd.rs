@@ -1,3 +1,5 @@
+use bin_ntt::{Opening, OpeningMessage};
+use bin_ntt::scheme::DROPPED_BITS;
 use bin_ntt::bd::{self, Dropped};
 use bin_ntt::params::N;
 use bin_ntt::wire;
@@ -8,7 +10,7 @@ const MATRIX_SEED: [u8; 32] = [0x31; 32];
 const WITNESS_SEED: [u8; 32] = [0x77; 32];
 
 fn small(base: Modulus, extra: Vec<Modulus>, dropped_bits: u32) -> Params {
-    Params::with_base(9, 2, base, extra, false)
+    Params::with_base(9, 2, base, extra, Opening::Clear)
         .unwrap()
         .dropping(dropped_bits)
 }
@@ -20,7 +22,7 @@ fn plain_matrix_and_dropped(params: &Params) -> (Vec<Vec<i16>>, Dropped) {
     let (commitment, _) = Prover::new(&pp).commit(&witness);
     let primes = params.primes();
     let residues = bd::column_coefficients(commitment.matrix(), &primes);
-    let dropped = bd::drop_bits(commitment.matrix(), &primes, params.dropped_bits);
+    let dropped = bd::drop_bits(commitment.matrix(), &primes, params.dropped_bits());
     (residues, dropped)
 }
 
@@ -38,7 +40,7 @@ fn crt(residues: &[u64], primes: &[u64]) -> u128 {
 fn check_digits(params: &Params) {
     let (residues, dropped) = plain_matrix_and_dropped(params);
     let primes: Vec<u64> = params.primes().iter().map(|&q| q as u64).collect();
-    let d = params.dropped_bits;
+    let d = params.dropped_bits();
     let modulus: u128 = primes.iter().map(|&q| q as u128).product();
     let bound = bd::top_bound(primes[0] as u16, d);
     let count = params.columns() * N;
@@ -108,18 +110,18 @@ fn dropped_commitment_round_trips_the_wire_and_rejects_an_oversized_digit() {
     assert_eq!(bytes.len(), dropped.wire_bytes());
     assert_eq!(
         bytes.len(),
-        bd::bytes(&params.primes(), params.columns(), params.dropped_bits)
+        bd::bytes(&params.primes(), params.columns(), params.dropped_bits())
     );
     let back = wire::unpack_dropped(&params, &bytes).unwrap();
     assert_eq!(back, dropped);
     assert!(wire::unpack_dropped(&params, &bytes[..bytes.len() - 1]).is_err());
 
     let mut top = dropped.top().to_vec();
-    top[0] = (bd::top_bound(params.primes()[0], params.dropped_bits) + 1) as u16;
+    top[0] = (bd::top_bound(params.primes()[0], params.dropped_bits()) + 1) as u16;
     let oversized = Dropped::of(
         params.primes(),
         params.columns(),
-        params.dropped_bits,
+        params.dropped_bits(),
         top,
         dropped.digits().to_vec(),
     );
@@ -130,7 +132,7 @@ fn dropped_commitment_round_trips_the_wire_and_rejects_an_oversized_digit() {
     let oversized = Dropped::of(
         params.primes(),
         params.columns(),
-        params.dropped_bits,
+        params.dropped_bits(),
         dropped.top().to_vec(),
         digits,
     );
@@ -139,7 +141,7 @@ fn dropped_commitment_round_trips_the_wire_and_rejects_an_oversized_digit() {
 
 #[test]
 fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
-    let params = Params::sized_bd();
+    let params = Params::sized(Opening::BitDropped { bits: DROPPED_BITS });
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&pp);
@@ -163,16 +165,32 @@ fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
     )
     .unwrap();
     assert!(residual <= params.bd_cap() as u128);
-    assert!(residual as f64 >= 0.25 * bd::expected_normsq(params.columns(), params.dropped_bits));
+    assert!(residual as f64 >= 0.25 * bd::expected_normsq(params.columns(), params.dropped_bits()));
 
     assert!(verifier
-        .verify_folded_opening_bd(&commitment, &challenges, &folded, &point, &folded_row)
+        .verify_opening(
+            &commitment,
+            &challenges,
+            &point,
+            OpeningMessage::BitDropped {
+                folded_witness: &folded,
+                folded_row_value: &folded_row,
+            },
+        )
         .is_ok());
 
     let mut tampered = folded.clone();
     tampered.elements_mut()[0].v[0] = tampered.elements_mut()[0].v[0].wrapping_add(1000);
     assert!(verifier
-        .verify_folded_opening_bd(&commitment, &challenges, &tampered, &point, &folded_row)
+        .verify_opening(
+            &commitment,
+            &challenges,
+            &point,
+            OpeningMessage::BitDropped {
+                folded_witness: &tampered,
+                folded_row_value: &folded_row,
+            },
+        )
         .is_err());
 
     let mut top = dropped.top().to_vec();
@@ -189,12 +207,20 @@ fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
         bin_ntt::scheme::CommitmentValue::Dropped(std::sync::Arc::new(Dropped::of(
             params.primes(),
             params.columns(),
-            params.dropped_bits,
+            params.dropped_bits(),
             top,
             digits,
         ))),
     );
     assert!(verifier
-        .verify_folded_opening_bd(&swapped, &challenges, &folded, &point, &folded_row)
+        .verify_opening(
+            &swapped,
+            &challenges,
+            &point,
+            OpeningMessage::BitDropped {
+                folded_witness: &folded,
+                folded_row_value: &folded_row,
+            },
+        )
         .is_err());
 }

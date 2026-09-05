@@ -49,8 +49,9 @@ pub use challenge::Transcript;
 pub use fields::scalar::F162;
 pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
-    FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, OpeningError,
-    OpeningProof, OpeningTimings, ParamError, Params, Prover, PublicParameters, RowEvaluation,
-    VerificationError, Verifier, VerifyTimings, Witness, WitnessError,
+    FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, Opening,
+    OpeningError, OpeningMessage, OpeningProof, OpeningTimings, ParamError, Params, Prover,
+    PublicParameters, RowEvaluation, VerificationError, Verifier, VerifyTimings, Witness,
+    WitnessError,
 };
 pub use types::RingElement as RingElement648;

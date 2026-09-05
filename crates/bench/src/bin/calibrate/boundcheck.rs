@@ -1,3 +1,4 @@
+use bin_ntt::Opening;
 use bin_ntt::api::Modulus;
 use bin_ntt::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
 use bin_ntt::fields::scalar::F162;
@@ -24,7 +25,8 @@ pub fn run() {
         .map(|s| s.parse().unwrap())
         .unwrap_or(11);
     let params =
-        Params::with_base(wl, cl, Modulus::from_prime(bp).unwrap(), extras, true).unwrap();
+        Params::with_base(wl, cl, Modulus::from_prime(bp).unwrap(), extras, Opening::Recursive)
+            .unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let setup = pp.recursion().expect("recursion is on").clone();
     let mut t = Transcript::new(b"bin-ntt/boundcheck");

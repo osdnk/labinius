@@ -1,6 +1,7 @@
 //! The wire forms: exact round trips for the bit-packed uniform objects and for the entropy
 //! coder, on honest rounds at several shapes and bases and on adversarial folds, and the size
 //! and wall clock the README quotes (`--nocapture`, under `taskset -c 3`).
+use bin_ntt::{Opening, OpeningMessage};
 use bin_ntt::types::{Representation, RingElement};
 use bin_ntt::wire::{self, WireError};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
@@ -84,7 +85,7 @@ fn the_row_evaluation_packs_at_162_bits() {
 #[test]
 fn the_commitment_packs_at_the_residue_width() {
     for base in Modulus::ALL {
-        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let params = Params::with_base(11, 3, base, vec![second(base)], Opening::Clear).unwrap();
         let r = round(params.clone());
         let bytes = wire::pack_commitment(&r.commitment);
         let width: u32 = params.primes().iter().map(|&q| wire::residue_bits(q)).sum();
@@ -101,7 +102,7 @@ fn the_commitment_packs_at_the_residue_width() {
 /// Every slot at its two extremes, which is where a centred residue meets its packed range.
 #[test]
 fn the_commitment_packer_takes_the_extremes() {
-    let params = Params::with_base(11, 3, Q19441_FS_L, vec![Q2917_Q_S], false).unwrap();
+    let params = Params::with_base(11, 3, Q19441_FS_L, vec![Q2917_Q_S], Opening::Clear).unwrap();
     let primes = params.primes();
     for pick in [0usize, 1, 2] {
         let data = (0..4 * params.columns())
@@ -137,7 +138,7 @@ fn the_commitment_packer_takes_the_extremes() {
 /// of a limb's tail group, the last slot of the buffer.
 #[test]
 fn an_out_of_range_residue_is_refused() {
-    let params = Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], false).unwrap();
+    let params = Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], Opening::Clear).unwrap();
     let r = round(params.clone());
     let bytes = wire::pack_commitment(&r.commitment);
     let primes = params.primes();
@@ -183,7 +184,7 @@ fn an_honest_fold_round_trips() {
                 column_log_len,
                 base,
                 vec![second(base)],
-                false,
+                Opening::Clear,
             )
             .unwrap();
             let r = round(params.clone());
@@ -288,7 +289,7 @@ fn the_coder_takes_any_i16() {
 /// A truncated or corrupted stream is refused, never mis-decoded into a shorter object.
 #[test]
 fn a_broken_stream_is_refused() {
-    let r = round(Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], false).unwrap());
+    let r = round(Params::with_base(11, 3, Q3889_FS_S, vec![Q9721_FS_S], Opening::Clear).unwrap());
     let bytes = wire::encode(&r.folded_witness, 3889);
     for cut in [0usize, 1, 15, 16, 20, bytes.len() / 2, bytes.len() - 1] {
         assert!(
@@ -426,12 +427,18 @@ fn the_verifier_takes_the_decoded_objects() {
         Ok(())
     );
     assert_eq!(
-        verifier.verify_folded_opening(
-            &folded_commitment,
-            &folded_witness,
-            &point,
-            &folded_row_value
-        ),
+        verifier
+            .verify_opening(
+                &commitment,
+                &challenges,
+                &point,
+                OpeningMessage::Clear {
+                    folded_commitment: &folded_commitment,
+                    folded_witness: &folded_witness,
+                    folded_row_value: &folded_row_value,
+                },
+            )
+            .map(|_| ()),
         Ok(())
     );
 
@@ -525,6 +532,6 @@ fn the_wire_quantified() {
     report("basic", Params::basic());
     report(
         "large base 19441",
-        Params::with_base(18, 8, Q19441_FS_L, vec![Q17497_FS_L], false).unwrap(),
+        Params::with_base(18, 8, Q19441_FS_L, vec![Q17497_FS_L], Opening::Clear).unwrap(),
     );
 }

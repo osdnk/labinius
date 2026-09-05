@@ -1,5 +1,6 @@
 //! The recursion encoding: the ring conventions, the chain on synthetic identities, and the whole
 //! instance on the real pipeline.
+use bin_ntt::Opening;
 use bin_ntt::api::N162;
 use bin_ntt::params::N;
 use bin_ntt::recursion::{
@@ -40,7 +41,7 @@ fn round(params: &Params) -> Instance {
 }
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Modulus::Q9721_FS_S], true).unwrap()
+    Params::new(9, 2, vec![Modulus::Q9721_FS_S], Opening::Recursive).unwrap()
 }
 
 // =============================================================================================
@@ -142,8 +143,14 @@ fn inverse_transforms_round_trip() {
 #[test]
 fn residues_re_transform_to_the_commitment() {
     for params in [
-        Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap(),
-        Params::new(15, 6, vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S], false).unwrap(),
+        Params::new(9, 2, vec![Modulus::Q9721_FS_S], Opening::Clear).unwrap(),
+        Params::new(
+            15,
+            6,
+            vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S],
+            Opening::Clear,
+        )
+        .unwrap(),
     ] {
         let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
         let mut prover = Prover::new(&pp);
@@ -260,7 +267,7 @@ fn the_instance_holds_on_every_limb() {
         vec![Modulus::Q9721_FS_S, Modulus::Q19441_FS_L],
     ] {
         let n = extra.len() + 1;
-        let i = round(&Params::new(9, 2, extra.clone(), true).unwrap());
+        let i = round(&Params::new(9, 2, extra.clone(), Opening::Recursive).unwrap());
         assert!(i.holds(), "{extra:?}: {:?}", i.failure());
         assert!(i.clears(), "{extra:?}: the no-wrap bound");
         assert_eq!(i.chains.len(), 4 * n + 2);
@@ -391,7 +398,7 @@ fn lifts_reduce_to_f162() {
 #[test]
 fn public_blocks_stay_inside_their_limit() {
     for m in Modulus::ALL.into_iter().filter(|m| *m != Modulus::BASE) {
-        let params = Params::new(9, 2, vec![m], false).unwrap();
+        let params = Params::new(9, 2, vec![m], Opening::Clear).unwrap();
         let pp = PublicParameters::from_seed(params, [3u8; 32]);
         for limb in 0..2 {
             let q = pp.key().prime(limb) as i64;

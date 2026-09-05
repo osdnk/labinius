@@ -1,5 +1,6 @@
 //! Calibration: run one recursive round at `witness_log column_log base extra...` and let
 //! GADGET_STATS print the chain magnitudes.
+use bin_ntt::Opening;
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 fn modulus(s: &str) -> Modulus {
@@ -22,7 +23,8 @@ pub fn run() {
     let base = modulus(&args[2]);
     let seed: u8 = args[3].parse().unwrap();
     let extra: Vec<Modulus> = args[4..].iter().map(|s| modulus(s)).collect();
-    let params = Params::with_base(witness_log, column_log, base, extra, true).unwrap();
+    let params =
+        Params::with_base(witness_log, column_log, base, extra, Opening::Recursive).unwrap();
     eprintln!(
         "shape: n {} r {} primes {:?}",
         params.witness_len() / params.columns() / 4,

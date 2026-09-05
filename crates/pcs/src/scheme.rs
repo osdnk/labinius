@@ -102,10 +102,16 @@ pub struct Params {
     pub column_log_len: u32,
     pub base: Modulus,
     pub extra_moduli: Vec<Modulus>,
+    pub opening: Opening,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Opening {
+    Clear,
+    BitDropped { bits: u32 },
     /// Recurse the folded opening into LaBRADOR: the commitment becomes `T_Y`, the left expansion
     /// `T_u`, and the fold a proof of [`crate::recursion`]'s relation instead of `v` itself.
-    pub recursion: bool,
-    pub dropped_bits: u32,
+    Recursive,
 }
 
 #[cfg(any(
@@ -152,12 +158,12 @@ pub const COLUMN_LOG_LEN_CLEAR: u32 = 7;
 pub const COLUMN_LOG_LEN_RECURSIVE: u32 = 8;
 
 #[cfg(not(any(feature = "sizem", feature = "sizel", feature = "sizexl")))]
-fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+fn moduli() -> (Modulus, Vec<Modulus>) {
     (Modulus::Q9721_FS_S, vec![Modulus::Q12637_Q_S])
 }
 
 #[cfg(feature = "sizem")]
-fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+fn moduli() -> (Modulus, Vec<Modulus>) {
     (
         Modulus::Q3889_FS_S,
         vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
@@ -165,7 +171,7 @@ fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
 }
 
 #[cfg(feature = "sizel")]
-fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+fn moduli() -> (Modulus, Vec<Modulus>) {
     (
         Modulus::Q3889_FS_S,
         vec![Modulus::Q2917_Q_S, Modulus::Q4861_Q_S],
@@ -173,7 +179,7 @@ fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
 }
 
 #[cfg(feature = "sizexl")]
-fn moduli(_recursion: bool) -> (Modulus, Vec<Modulus>) {
+fn moduli() -> (Modulus, Vec<Modulus>) {
     (
         Modulus::Q3889_FS_S,
         vec![Modulus::Q2917_Q_S, Modulus::Q9721_FS_S],
@@ -193,14 +199,14 @@ impl Params {
         witness_log_len: u32,
         column_log_len: u32,
         extra_moduli: Vec<Modulus>,
-        recursion: bool,
+        opening: Opening,
     ) -> Result<Params, ParamError> {
         Params::with_base(
             witness_log_len,
             column_log_len,
             Modulus::BASE,
             extra_moduli,
-            recursion,
+            opening,
         )
     }
 
@@ -210,7 +216,7 @@ impl Params {
         column_log_len: u32,
         base: Modulus,
         extra_moduli: Vec<Modulus>,
-        recursion: bool,
+        opening: Opening,
     ) -> Result<Params, ParamError> {
         if column_log_len > witness_log_len {
             return Err(ParamError::ColumnsExceedWitness);
@@ -234,55 +240,57 @@ impl Params {
             column_log_len,
             base,
             extra_moduli,
-            recursion,
-            dropped_bits: 0,
+            opening,
         })
     }
 
     /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
     /// the folded opening in the clear.
     pub fn basic() -> Params {
-        Params::new(18, 7, vec![Modulus::Q9721_FS_S], false)
+        Params::new(18, 7, vec![Modulus::Q9721_FS_S], Opening::Clear)
             .expect("the basic parameters are valid")
     }
 
-    pub fn sized(recursion: bool) -> Params {
-        let columns = if recursion {
-            COLUMN_LOG_LEN_RECURSIVE
-        } else {
-            COLUMN_LOG_LEN_CLEAR
+    pub fn sized(opening: Opening) -> Params {
+        let columns = match opening {
+            Opening::Recursive => COLUMN_LOG_LEN_RECURSIVE,
+            _ => COLUMN_LOG_LEN_CLEAR,
         };
-        let (base, extra_moduli) = moduli(recursion);
+        let (base, extra_moduli) = match opening {
+            Opening::BitDropped { .. } => moduli_bd(),
+            _ => moduli(),
+        };
         Params::with_base(
             WITNESS_LOG_LEN + SIZE_STEP,
             columns + SIZE_STEP / 2,
             base,
             extra_moduli,
-            recursion,
+            opening,
         )
         .expect("the sized parameters are valid")
     }
 
-    pub fn sized_bd() -> Params {
-        let (base, extra_moduli) = moduli_bd();
-        Params::with_base(
-            WITNESS_LOG_LEN + SIZE_STEP,
-            COLUMN_LOG_LEN_CLEAR + SIZE_STEP / 2,
-            base,
-            extra_moduli,
-            false,
-        )
-        .expect("the sized bd parameters are valid")
-        .dropping(DROPPED_BITS)
-    }
-
     pub fn dropping(mut self, dropped_bits: u32) -> Params {
-        self.dropped_bits = dropped_bits;
+        self.opening = match dropped_bits {
+            0 => Opening::Clear,
+            bits => Opening::BitDropped { bits },
+        };
         self
     }
 
+    pub fn recursion(&self) -> bool {
+        self.opening == Opening::Recursive
+    }
+
+    pub fn dropped_bits(&self) -> u32 {
+        match self.opening {
+            Opening::BitDropped { bits } => bits,
+            _ => 0,
+        }
+    }
+
     pub fn bd_cap(&self) -> u64 {
-        crate::bd::cap(self.columns(), self.dropped_bits)
+        crate::bd::cap(self.columns(), self.dropped_bits())
     }
 
     /// Witness length in `F162` elements.
@@ -320,6 +328,25 @@ impl Params {
     }
 }
 
+/// What the prover sends in place of the folded opening, one shape per [`Opening`] mode.
+pub enum OpeningMessage<'a> {
+    Clear {
+        folded_commitment: &'a FoldedCommitment,
+        folded_witness: &'a FoldedWitness,
+        folded_row_value: &'a F162,
+    },
+    BitDropped {
+        folded_witness: &'a FoldedWitness,
+        folded_row_value: &'a F162,
+    },
+    Recursive {
+        transcript: &'a mut Transcript,
+        left: &'a LeftExpansionCommitment,
+        claimed_value: &'a F162,
+        proof: &'a OpeningProof,
+    },
+}
+
 /// [`Params`] together with the public matrix `A` expanded from a seed.
 pub struct PublicParameters {
     params: Params,
@@ -342,7 +369,7 @@ impl PublicParameters {
             key: Arc::new(key),
             recursion: None,
         };
-        if pp.params.recursion {
+        if pp.params.recursion() {
             let setup = recursion::setup::Setup::new(&pp, &pp.params.clone(), matrix_seed);
             let rank: usize = setup.ranks.iter().sum();
             let warm = labrador::warm_comkey(labrador::comkey_len_for_rank(rank));
@@ -579,8 +606,8 @@ impl Commitment {
         let primes = params.primes();
         let (&tag, rest) = bytes.split_first().ok_or(VerificationError::Rejected)?;
         if rest.len() < 4
-            || (tag == 1) != params.recursion
-            || (tag == 2) != (params.dropped_bits > 0)
+            || (tag == 1) != params.recursion()
+            || (tag == 2) != (params.dropped_bits() > 0)
         {
             return Err(VerificationError::Rejected);
         }
@@ -997,7 +1024,7 @@ impl Prover {
         let row_evaluation = witness.row_evaluate(&point);
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
         std::hint::black_box(prover.fold(opening, &challenges));
-        if !prover.params.recursion && prover.params.dropped_bits == 0 {
+        if !prover.params.recursion() && prover.params.dropped_bits() == 0 {
             std::hint::black_box(verifier.fold_commitment(&commitment, &challenges));
         }
         prover
@@ -1017,8 +1044,8 @@ impl Prover {
         let columns = matrix.cols();
         let primes = self.params.primes();
         let (value, residues) = match &self.setup {
-            None if self.params.dropped_bits > 0 => {
-                let dropped = crate::bd::drop_bits(&matrix, &primes, self.params.dropped_bits);
+            None if self.params.dropped_bits() > 0 => {
+                let dropped = crate::bd::drop_bits(&matrix, &primes, self.params.dropped_bits());
                 (CommitmentValue::Dropped(Arc::new(dropped)), None)
             }
             None => (CommitmentValue::Matrix(matrix), None),
@@ -1232,12 +1259,12 @@ impl Verifier {
         for q in self.params.primes() {
             transcript.absorb_u64(q as u64);
         }
-        transcript.absorb_u64(u64::from(self.params.recursion));
-        if self.params.dropped_bits > 0 {
+        transcript.absorb_u64(u64::from(self.params.recursion()));
+        if self.params.dropped_bits() > 0 {
             transcript.absorb_bytes(b"bin-ntt/dropped-bits");
-            transcript.absorb_u64(self.params.dropped_bits as u64);
+            transcript.absorb_u64(self.params.dropped_bits() as u64);
         }
-        if self.params.recursion {
+        if self.params.recursion() {
             transcript.absorb_u64(labrador::logq() as u64);
         }
         transcript.absorb_bytes(&self.matrix_seed);
@@ -1368,7 +1395,7 @@ impl Verifier {
 
     /// The opening check, recomputed from `v` alone: `v` is centered modulo the base modulus,
     /// `A v` equals the folded commitment on every modulus, and `eq(p0) . (v mod 2) == u'`.
-    pub fn verify_folded_opening(
+    fn verify_folded_opening(
         &self,
         folded_commitment: &FoldedCommitment,
         folded_witness: &FoldedWitness,
@@ -1423,7 +1450,7 @@ impl Verifier {
         }
     }
 
-    pub fn verify_folded_opening_bd(
+    fn verify_folded_opening_bd(
         &self,
         commitment: &Commitment,
         challenges: &FoldingChallenges,
@@ -1440,7 +1467,7 @@ impl Verifier {
             CommitmentValue::Dropped(d) => d,
             _ => return Err(VerificationError::Rejected),
         };
-        if dropped.dropped_bits() != self.params.dropped_bits {
+        if dropped.dropped_bits() != self.params.dropped_bits() {
             return Err(VerificationError::Rejected);
         }
         let mut normsq = 0u64;
@@ -1471,11 +1498,69 @@ impl Verifier {
         }
     }
 
+    /// The opening check in the mode [`Params::opening`] names, dispatching to the arm the
+    /// message carries. What comes back on acceptance is the wall clock of each stage of the
+    /// recursive arm, so that a caller reporting a breakdown does not have to verify twice; the
+    /// other two arms leave it zero.
+    pub fn verify_opening(
+        &self,
+        commitment: &Commitment,
+        challenges: &FoldingChallenges,
+        point: &EvaluationPoint,
+        message: OpeningMessage<'_>,
+    ) -> Result<VerifyTimings, VerificationError> {
+        match (self.params.opening, message) {
+            (
+                Opening::Clear,
+                OpeningMessage::Clear {
+                    folded_commitment,
+                    folded_witness,
+                    folded_row_value,
+                },
+            ) => self
+                .verify_folded_opening(folded_commitment, folded_witness, point, folded_row_value)
+                .map(|()| VerifyTimings::default()),
+            (
+                Opening::BitDropped { .. },
+                OpeningMessage::BitDropped {
+                    folded_witness,
+                    folded_row_value,
+                },
+            ) => self
+                .verify_folded_opening_bd(
+                    commitment,
+                    challenges,
+                    folded_witness,
+                    point,
+                    folded_row_value,
+                )
+                .map(|()| VerifyTimings::default()),
+            (
+                Opening::Recursive,
+                OpeningMessage::Recursive {
+                    transcript,
+                    left,
+                    claimed_value,
+                    proof,
+                },
+            ) => self.verify_recursive_opening(
+                transcript,
+                commitment,
+                left,
+                point,
+                claimed_value,
+                challenges,
+                proof,
+            ),
+            _ => Err(VerificationError::Rejected),
+        }
+    }
+
     /// The recursive opening check: the announced norms against their caps, the no-wraparound
     /// bound of [`recursion::bound`] against `Q / 2`, and one LaBRADOR verification of the
-    /// statement rebuilt from public data alone. What comes back on acceptance is the wall clock
-    /// of each stage, so that a caller reporting a breakdown does not have to verify twice.
-    pub fn verify_opening(
+    /// statement rebuilt from public data alone.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_recursive_opening(
         &self,
         transcript: &mut Transcript,
         commitment: &Commitment,
@@ -1504,8 +1589,9 @@ impl Verifier {
         Ok(timings)
     }
 
-    /// The statement [`verify_opening`](Self::verify_opening) hands to LaBRADOR: the same
-    /// function of public data that the prover ran, and what a test compares against.
+    /// The statement the recursive arm of [`verify_opening`](Self::verify_opening) hands to
+    /// LaBRADOR: the same function of public data that the prover ran, and what a test compares
+    /// against.
     pub fn opening_statement(
         &self,
         transcript: &mut Transcript,

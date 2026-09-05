@@ -1,4 +1,5 @@
 //! Wire sizes and the median of 11 runs of each code at the basic shape.
+use bin_ntt::Opening;
 use bin_ntt::wire;
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::hint::black_box;
@@ -29,7 +30,7 @@ fn line(name: &str, bytes: usize, ms: f64, items: usize, unit: &str) {
 }
 
 pub fn run() {
-    let params = Params::new(18, 7, vec![Modulus::Q9721_FS_S], false).unwrap();
+    let params = Params::new(18, 7, vec![Modulus::Q9721_FS_S], Opening::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);

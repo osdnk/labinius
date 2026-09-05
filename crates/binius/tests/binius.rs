@@ -1,5 +1,6 @@
 //! The keccak pipeline: the coordinate mapping the switch and the commitment agree on, and the
 //! real 482-permutation instance end to end in both PCS modes, honest and tampered.
+use bin_ntt::Opening;
 use bin_ntt::fields::crossfield::eval_pi1;
 use bin_ntt::fields::scalar::B128;
 use bin_ntt_binius::{Circuit, Error, Hash, Session};
@@ -30,7 +31,7 @@ fn f162(rng: &mut Rng) -> F162 {
 #[test]
 fn the_switch_point_is_the_evaluation_point() {
     for params in [
-        Params::new(11, 3, vec![Modulus::Q9721_FS_S], false).unwrap(),
+        Params::new(11, 3, vec![Modulus::Q9721_FS_S], Opening::Clear).unwrap(),
         Params::basic(),
     ] {
         let mut rng = Rng::new(0x5EED_1234);
