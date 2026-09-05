@@ -1,19 +1,15 @@
 //! The `F162` side: the multilinear extension and the row evaluation against naive scalar
 //! references, the claim check, and the two ways of getting it wrong.
-use bin_ntt::Opening;
 use bin_ntt::{
-    EvaluationPoint, Modulus, Params, Prover, PublicParameters, Transcript, VerificationError,
+    EvaluationPoint, Params, Prover, PublicParameters, Transcript, VerificationError,
     Verifier, Witness, F162,
 };
 
-use Modulus::*;
+mod common;
+use common::*;
 
 const MATRIX_SEED: [u8; 32] = [31u8; 32];
 const WITNESS_SEED: [u8; 32] = [37u8; 32];
-
-fn small() -> Params {
-    Params::new(11, 3, vec![Q9721_FS_S], Opening::Clear).unwrap()
-}
 
 /// `eq(ps, b)` straight from the definition.
 fn eq_naive(ps: &[F162], b: usize) -> F162 {
