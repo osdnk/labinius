@@ -15,6 +15,7 @@ use crate::api::{
     PowerOfThreeRingElement, PowerOfThreeRingElementWithLimbs, VerticallyAlignedMatrix, N162,
     POW3_SLOT_EXP, SLOT_648,
 };
+use crate::limb::dispatch_limb;
 use crate::params::{
     inv_mod, pow_mod, Params, ParamsQ, CONDUCTOR, DEGREE_Q, N, QUAD_CLASS_SLOT, QUAD_POW3_CLASS,
     RADIX_Q, SUBRINGS_Q,
@@ -48,19 +49,15 @@ pub const CARRY_PER_ROOT: f64 = 300.0;
 
 /// Whether `q` splits `X^648 + 1` into quadratic slots rather than linear ones.
 pub fn quad(q: u16) -> bool {
-    !matches!(q, 3889 | 9721 | 17497 | 19441)
+    crate::limb::is_quad(q)
 }
 
 impl Shape {
     /// The shape of limb `q` at `n` ring elements per column and `r` columns.
     pub fn of(q: u16, n: usize, r: usize) -> Shape {
-        // the carry base: 1024 below `2^13`, 256 above it, so that a carry level stays a
+        // the carry base: 1024 below `2^12`, 256 above it, so that a carry level stays a
         // per-coefficient cap of the size the keys' SIS rule is set for.
-        let base = match q {
-            2917 | 3889 => 1024,
-            4861 | 9721 | 12637 | 17497 | 19441 => 256,
-            _ => unreachable!("no limb with q = {q}"),
-        };
+        let base = dispatch_limb!(q, |Q| if Q < 1 << 12 { 1024 } else { 256 });
         let root = ((n * r) as f64).sqrt();
         Shape {
             q,
@@ -131,33 +128,23 @@ pub fn intt_quad<const Q: u16>(v: &[u32; N]) -> [u32; N] {
 }
 
 /// The coefficients of the `R_648` element a limb's transform holds, centred.
-pub fn coefficients(q: u16, quad: bool, slots: &[u32; N]) -> [i64; N] {
-    let c = match (q, quad) {
-        (3889, false) => scalar::intt::<3889>(slots),
-        (9721, false) => scalar::intt::<9721>(slots),
-        (17497, false) => scalar::intt::<17497>(slots),
-        (19441, false) => scalar::intt::<19441>(slots),
-        (2917, true) => intt_quad::<2917>(slots),
-        (4861, true) => intt_quad::<4861>(slots),
-        (12637, true) => intt_quad::<12637>(slots),
-        _ => unreachable!("no limb with q = {q}"),
-    };
+pub fn coefficients(q: u16, slots: &[u32; N]) -> [i64; N] {
+    let c = dispatch_limb!(
+        q,
+        split |Q| scalar::intt::<Q>(slots),
+        quad |Q| intt_quad::<Q>(slots),
+    );
     core::array::from_fn(|i| centre(c[i] as i64, q as i64))
 }
 
 /// The forward transform of the same limb, for checking [`coefficients`].
-pub fn transform(q: u16, quad: bool, coefficients: &[i64; N]) -> [u32; N] {
+pub fn transform(q: u16, coefficients: &[i64; N]) -> [u32; N] {
     let a: [u32; N] = core::array::from_fn(|i| coefficients[i].rem_euclid(q as i64) as u32);
-    match (q, quad) {
-        (3889, false) => scalar::ntt::<3889>(&a),
-        (9721, false) => scalar::ntt::<9721>(&a),
-        (17497, false) => scalar::ntt::<17497>(&a),
-        (19441, false) => scalar::ntt::<19441>(&a),
-        (2917, true) => scalar::ntt_quad::<2917>(&a),
-        (4861, true) => scalar::ntt_quad::<4861>(&a),
-        (12637, true) => scalar::ntt_quad::<12637>(&a),
-        _ => unreachable!("no limb with q = {q}"),
-    }
+    dispatch_limb!(
+        q,
+        split |Q| scalar::ntt::<Q>(&a),
+        quad |Q| scalar::ntt_quad::<Q>(&a),
+    )
 }
 
 // =============================================================================================
@@ -214,7 +201,7 @@ pub fn key_rows(pp: &PublicParameters, limb: usize) -> KeyRows {
     let key = pp.key();
     let (q, quad) = (key.prime(limb), key.is_quadratic(limb));
     let rows = (0..key.len_ring())
-        .map(|i| split(&coefficients(q, quad, &key_slots(pp, limb, i))))
+        .map(|i| split(&coefficients(q, &key_slots(pp, limb, i))))
         .collect();
     KeyRows { q, quad, rows }
 }
@@ -397,20 +384,15 @@ pub fn residues(
     let r = matrix.cols();
     let mut vectors = Vec::with_capacity(4 * primes.len());
     for (limb, &prime) in primes.iter().enumerate() {
-        let (q, quad) = (prime, quad(prime));
+        let q = prime;
         let mut out: Vec<Vec<Poly>> = (0..4)
             .map(|_| vec![[0i16; DEG]; (CHUNKS * r).next_multiple_of(PAD)])
             .collect();
-        match (q, quad) {
-            (3889, false) => columns_split::<3889>(matrix, limb, r, &mut out),
-            (9721, false) => columns_split::<9721>(matrix, limb, r, &mut out),
-            (17497, false) => columns_split::<17497>(matrix, limb, r, &mut out),
-            (19441, false) => columns_split::<19441>(matrix, limb, r, &mut out),
-            (2917, true) => columns_quad::<2917>(matrix, limb, r, &mut out),
-            (4861, true) => columns_quad::<4861>(matrix, limb, r, &mut out),
-            (12637, true) => columns_quad::<12637>(matrix, limb, r, &mut out),
-            _ => unreachable!("no limb with q = {q}"),
-        }
+        dispatch_limb!(
+            q,
+            split |Q| columns_split::<Q>(matrix, limb, r, &mut out),
+            quad |Q| columns_quad::<Q>(matrix, limb, r, &mut out),
+        );
         vectors.append(&mut out);
     }
     Residues { vectors }

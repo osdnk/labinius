@@ -4,8 +4,9 @@ use crate::api::{
 };
 use crate::challenge::{ShortChallenge, DEFAULT_WEIGHT};
 use crate::fold::{a_times_v_limb, challenge_batches, forward_limb};
+use crate::limb::dispatch_limb;
 use crate::params::{inv_mod, ParamsQ, N, QUAD_CLASS_SLOT, QUAD_POW3_CLASS};
-use crate::recursion::limbs::{quad, recombination};
+use crate::recursion::limbs::recombination;
 use crate::simd::bd as kernel;
 use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::intt_gen_batch32;
@@ -209,16 +210,11 @@ pub fn column_coefficients(
         .enumerate()
         .map(|(limb, &q)| {
             let mut out = vec![0i16; r * N];
-            match (q, quad(q)) {
-                (3889, false) => columns_split::<3889>(matrix, limb, &mut out),
-                (9721, false) => columns_split::<9721>(matrix, limb, &mut out),
-                (17497, false) => columns_split::<17497>(matrix, limb, &mut out),
-                (19441, false) => columns_split::<19441>(matrix, limb, &mut out),
-                (2917, true) => columns_quad::<2917>(matrix, limb, &mut out),
-                (4861, true) => columns_quad::<4861>(matrix, limb, &mut out),
-                (12637, true) => columns_quad::<12637>(matrix, limb, &mut out),
-                _ => unreachable!("no limb with q = {q}"),
-            }
+            dispatch_limb!(
+                q,
+                split |Q| columns_split::<Q>(matrix, limb, &mut out),
+                quad |Q| columns_quad::<Q>(matrix, limb, &mut out),
+            );
             out
         })
         .collect()
@@ -271,74 +267,25 @@ pub fn limb_residues(dropped: &Dropped, limb: usize, out: &mut [i16]) {
     let digits: Vec<&[u16]> = dropped.digits.iter().map(|d| d.as_slice()).collect();
     let q = dropped.primes[limb];
     unsafe {
-        match q {
-            2917 => kernel::residues::<2917>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            3889 => kernel::residues::<3889>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            4861 => kernel::residues::<4861>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            9721 => kernel::residues::<9721>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            12637 => kernel::residues::<12637>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            17497 => kernel::residues::<17497>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            19441 => kernel::residues::<19441>(
-                &dropped.top,
-                &digits,
-                dropped.dropped_bits,
-                &dropped.primes,
-                out,
-            ),
-            _ => unreachable!("no limb with q = {q}"),
-        }
+        dispatch_limb!(q, |Q| kernel::residues::<Q>(
+            &dropped.top,
+            &digits,
+            dropped.dropped_bits,
+            &dropped.primes,
+            out,
+        ))
     }
 }
 
-fn inverse_limb(q: u16, quad: bool, batch: &mut Batch32) {
+fn inverse_limb(q: u16, batch: &mut Batch32) {
     batch.representation = Representation::Ntt;
     unsafe {
-        match (q, quad) {
-            (3889, false) => intt_gen_batch32::<3889>(batch),
-            (9721, false) => intt_gen_batch32::<9721>(batch),
-            (17497, false) => vgl::intt_gen_batch32::<17497>(batch),
-            (19441, false) => vgl::intt_gen_batch32::<19441>(batch),
-            (2917, true) => intt_quad_gen_batch32::<2917>(batch),
-            (4861, true) => intt_quad_gen_batch32::<4861>(batch),
-            (12637, true) => intt_quad_gen_batch32::<12637>(batch),
-            _ => unreachable!("no limb with q = {q}"),
-        }
+        dispatch_limb!(
+            q,
+            small |Q| intt_gen_batch32::<Q>(batch),
+            large |Q| vgl::intt_gen_batch32::<Q>(batch),
+            quad |Q| intt_quad_gen_batch32::<Q>(batch),
+        )
     }
 }
 
@@ -346,22 +293,14 @@ fn quad_columns(dropped: &Dropped, limb: usize, at: [usize; 4], out: &mut [u64; 
     let digits: Vec<&[u16]> = dropped.digits.iter().map(|d| d.as_slice()).collect();
     let (t, d, p) = (&dropped.top, dropped.dropped_bits, &dropped.primes);
     unsafe {
-        match dropped.primes[limb] {
-            2917 => kernel::residue_quad::<2917>(t, &digits, d, p, at, out),
-            3889 => kernel::residue_quad::<3889>(t, &digits, d, p, at, out),
-            4861 => kernel::residue_quad::<4861>(t, &digits, d, p, at, out),
-            9721 => kernel::residue_quad::<9721>(t, &digits, d, p, at, out),
-            12637 => kernel::residue_quad::<12637>(t, &digits, d, p, at, out),
-            17497 => kernel::residue_quad::<17497>(t, &digits, d, p, at, out),
-            19441 => kernel::residue_quad::<19441>(t, &digits, d, p, at, out),
-            q => unreachable!("no limb with q = {q}"),
-        }
+        dispatch_limb!(dropped.primes[limb], |Q| kernel::residue_quad::<Q>(
+            t, &digits, d, p, at, out
+        ))
     }
 }
 
 fn fold_columns(
     q: u16,
-    quad: bool,
     dropped: &Dropped,
     limb: usize,
     challenges: &[Batch32],
@@ -387,8 +326,8 @@ fn fold_columns(
             }
         }
     }
-    forward_limb(q, quad, scratch);
-    a_times_v_limb(q, quad, challenges, scratch)
+    forward_limb(q, scratch);
+    a_times_v_limb(q, challenges, scratch)
 }
 
 pub fn residual(
@@ -424,9 +363,9 @@ pub fn residual(
     };
     let mut centred = vec![[0i16; N]; limbs];
     for k in 0..limbs {
-        let (q, is_quad) = (key.prime(k), key.is_quadratic(k));
-        let ch = challenge_batches(q, is_quad, challenges);
-        let folded_commitment = fold_columns(q, is_quad, dropped, k, &ch, &mut columns);
+        let q = key.prime(k);
+        let ch = challenge_batches(q, challenges);
+        let folded_commitment = fold_columns(q, dropped, k, &ch, &mut columns);
         let v = if k + 1 == limbs {
             &mut batches
         } else {
@@ -435,8 +374,8 @@ pub fn residual(
             }
             &mut work
         };
-        forward_limb(q, is_quad, v);
-        let y = a_times_v_limb(q, is_quad, key.row(k), v);
+        forward_limb(q, v);
+        let y = a_times_v_limb(q, key.row(k), v);
         let half = ((q - 1) / 2) as u32;
         let mut z = Batch32::zero(Representation::Ntt);
         for u in 0..N {
@@ -447,7 +386,7 @@ pub fn residual(
                 x as i16
             };
         }
-        inverse_limb(q, is_quad, &mut z);
+        inverse_limb(q, &mut z);
         for i in 0..N {
             centred[k][i] = z.v[i][0];
         }

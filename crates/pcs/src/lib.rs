@@ -33,6 +33,7 @@ pub mod f162;
 pub mod fields;
 pub mod fold;
 pub mod labrador;
+pub mod limb;
 pub mod params;
 pub mod recursion;
 pub mod rng;

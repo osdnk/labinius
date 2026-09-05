@@ -119,17 +119,11 @@ fn blocks_are_the_shifted_reductions() {
 #[test]
 fn inverse_transforms_round_trip() {
     let mut rng = Rng::new(13);
-    for (q, quad) in [
-        (3889u16, false),
-        (9721, false),
-        (2917, true),
-        (4861, true),
-        (12637, true),
-    ] {
+    for q in [3889u16, 9721, 2917, 4861, 12637] {
         for _ in 0..3 {
             let a: [u32; N] = core::array::from_fn(|_| rng.below(q as u32));
-            let slots = limbs::transform(q, quad, &core::array::from_fn(|i| a[i] as i64));
-            let back = limbs::coefficients(q, quad, &slots);
+            let slots = limbs::transform(q, &core::array::from_fn(|i| a[i] as i64));
+            let back = limbs::coefficients(q, &slots);
             for i in 0..N {
                 assert_eq!(back[i].rem_euclid(q as i64) as u32, a[i], "q = {q}");
             }
@@ -161,7 +155,6 @@ fn residues_re_transform_to_the_commitment() {
         let residues = limbs::residues(matrix, &primes);
         let r = params.columns();
         for (limb, &q) in primes.iter().enumerate() {
-            let quad = limbs::quad(q);
             for j in 0..r {
                 let mut a = [0i64; N];
                 for m in 0..4 {
@@ -172,7 +165,7 @@ fn residues_re_transform_to_the_commitment() {
                         a[4 * t + m] = if t % 2 == 0 { e[t] } else { -e[t] };
                     }
                 }
-                let back = bin_ntt::api::components_of(q, quad, &limbs::transform(q, quad, &a));
+                let back = bin_ntt::api::components_of(q, &limbs::transform(q, &a));
                 for m in 0..4 {
                     assert_eq!(
                         back[m],
@@ -196,7 +189,7 @@ fn key_rows_re_transform_to_the_key() {
     for limb in 0..commitment.moduli().len() {
         let rows = limbs::key_rows(&pp, limb);
         for i in 0..rows.rows.len() {
-            let back = limbs::transform(rows.q, rows.quad, &rows.coefficients(i));
+            let back = limbs::transform(rows.q, &rows.coefficients(i));
             assert_eq!(back, limbs::key_slots(&pp, limb, i), "limb {limb} row {i}");
         }
     }

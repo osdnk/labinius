@@ -93,6 +93,7 @@
 //! 247-533 cycles of transform, 58 (splitting) or 74 (quadratic) of base multiplication, 7, 9 or
 //! 16 of [`finish`], and the front end's 32 once for all of them.
 use crate::fields::scalar::F162;
+use crate::limb::dispatch_limb;
 use crate::params::*;
 use crate::simd::transpose_f162::slice_f162_into;
 use crate::simd::transpose_f162::BinaryIndex32;
@@ -1190,19 +1191,8 @@ unsafe fn commit_limbs_core(
     }
     for (li, l) in limbs.iter().enumerate() {
         out[li] = match &st.accs[li] {
-            LimbAcc::Split(a) => match l.q {
-                3889 => finish::<3889>(a),
-                9721 => finish::<9721>(a),
-                17497 => finish::<17497>(a),
-                19441 => finish::<19441>(a),
-                _ => unreachable!(),
-            },
-            LimbAcc::Quad(a) => match l.q {
-                2917 => finish_quad::<2917>(a),
-                4861 => finish_quad::<4861>(a),
-                12637 => finish_quad::<12637>(a),
-                _ => unreachable!(),
-            },
+            LimbAcc::Split(a) => dispatch_limb!(l.q, split |Q| finish::<Q>(a)),
+            LimbAcc::Quad(a) => dispatch_limb!(l.q, quad |Q| finish_quad::<Q>(a)),
         };
     }
 }
@@ -1239,55 +1229,21 @@ unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
                 (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
             };
             if r.quad {
-                match (r.q, o.is_null()) {
-                    (2917, true) => {
-                        quad_batch::<2917, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                dispatch_limb!(r.q, quad |Q| {
+                    if o.is_null() {
+                        quad_batch::<Q, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
+                    } else {
+                        quad_batch::<Q, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
                     }
-                    (2917, false) => {
-                        quad_batch::<2917, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                    (4861, true) => {
-                        quad_batch::<4861, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                    (4861, false) => {
-                        quad_batch::<4861, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                    (12637, true) => {
-                        quad_batch::<12637, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                    (12637, false) => {
-                        quad_batch::<12637, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                    _ => unreachable!("no quadratic kernel for q = {}", r.q),
-                }
+                })
             } else {
-                match (r.q, o.is_null()) {
-                    (3889, true) => {
-                        split_batch::<3889, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                dispatch_limb!(r.q, split |Q| {
+                    if o.is_null() {
+                        split_batch::<Q, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
+                    } else {
+                        split_batch::<Q, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
                     }
-                    (3889, false) => {
-                        split_batch::<3889, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (9721, true) => {
-                        split_batch::<9721, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (9721, false) => {
-                        split_batch::<9721, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (17497, true) => {
-                        split_batch::<17497, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (17497, false) => {
-                        split_batch::<17497, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (19441, true) => {
-                        split_batch::<19441, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    (19441, false) => {
-                        split_batch::<19441, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                    _ => unreachable!("no splitting kernel for q = {}", r.q),
-                }
+                })
             }
         }
     }
