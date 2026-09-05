@@ -112,6 +112,7 @@
 //! the same tree, block for block and sink for sink, which is also what
 //! [`crate::simd::ntt::bin_quad`] does at 247 to 291 cycles per ring element.
 use crate::params::*;
+use crate::simd::ntt::r3_twiddles;
 pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::ntt::bin_asm::barrett_lut_corr;
 pub use crate::simd::ntt::bin_asm::BlockSink;
@@ -544,24 +545,9 @@ const fn build_tables<const Q: u16>() -> Tables {
         k += 1;
     }
 
-    let mut tw4 = [[0u32; 4]; 24];
-    let mut i = 0;
-    while i < 24 {
-        tw4[i] = r3_pair::<Q>(Params::<Q>::ZETA_L4[i]);
-        i += 1;
-    }
-    let mut tw5 = [[0u32; 4]; 72];
-    let mut i = 0;
-    while i < 72 {
-        tw5[i] = r3_pair::<Q>(Params::<Q>::ZETA_L5[i]);
-        i += 1;
-    }
-    let mut tw6 = [[0u32; 4]; 216];
-    let mut i = 0;
-    while i < 216 {
-        tw6[i] = r3_pair::<Q>(Params::<Q>::ZETA_L6[i]);
-        i += 1;
-    }
+    let tw4 = r3_twiddles!(24, r3_pair::<Q>, Params::<Q>::ZETA_L4);
+    let tw5 = r3_twiddles!(72, r3_pair::<Q>, Params::<Q>::ZETA_L5);
+    let tw6 = r3_twiddles!(216, r3_pair::<Q>, Params::<Q>::ZETA_L6);
     let (oa, ob) = mont_pair::<Q>(Params::<Q>::OMEGA);
 
     let mut cv = [[0i16; 32]; 4];

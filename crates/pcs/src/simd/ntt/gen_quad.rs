@@ -50,6 +50,7 @@
 //! reaches 2.60 q = 32811 and leaves i16 before anything can be done about it, so the two loaded
 //! `a1` values are reduced as they arrive (which also tightens everything downstream).
 use crate::params::*;
+use crate::simd::ntt::bar_switch;
 use crate::simd::ntt::bin_quad::{barrett_lut_max, lut_byte};
 use crate::ring::{Batch32, Representation};
 use core::arch::x86_64::*;
@@ -460,22 +461,16 @@ unsafe fn pass_b<const Q: u16>(p: *mut __m512i, c: &C, blk: usize) {
         let mut y = [_mm512_setzero_si512(); 9];
         for a in 0..3 {
             let b = base + i0 + 18 * a;
-            let (u0, u1, u2) = if TwQ::<Q>::BAR_L[0] {
-                r3::<true>(c, ld(p, b), ld(p, b + 54), ld(p, b + 108), t2)
-            } else {
-                r3::<false>(c, ld(p, b), ld(p, b + 54), ld(p, b + 108), t2)
-            };
+            let (u0, u1, u2) =
+                bar_switch!(r3, TwQ::<Q>::BAR_L[0], c, ld(p, b), ld(p, b + 54), ld(p, b + 108), t2);
             y[a] = u0;
             y[3 + a] = u1;
             y[6 + a] = u2;
         }
         for s in 0..3 {
             let tw = TwQ::<Q>::L3.as_ptr().add(4 * (3 * blk + s));
-            let (v0, v1, v2) = if TwQ::<Q>::BAR_L[1] {
-                r3::<true>(c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw)
-            } else {
-                r3::<false>(c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw)
-            };
+            let (v0, v1, v2) =
+                bar_switch!(r3, TwQ::<Q>::BAR_L[1], c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw);
             let b = base + 54 * s + i0;
             st(p, b, v0);
             st(p, b + 18, v1);
@@ -491,11 +486,8 @@ unsafe fn pass_l4<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
     let base = 18 * k4;
     for i in 0..6 {
         let b = base + i;
-        let (y0, y1, y2) = if TwQ::<Q>::BAR_L[2] {
-            r3::<true>(c, ld(p, b), ld(p, b + 6), ld(p, b + 12), t4)
-        } else {
-            r3::<false>(c, ld(p, b), ld(p, b + 6), ld(p, b + 12), t4)
-        };
+        let (y0, y1, y2) =
+            bar_switch!(r3, TwQ::<Q>::BAR_L[2], c, ld(p, b), ld(p, b + 6), ld(p, b + 12), t4);
         st(p, b, y0);
         st(p, b + 6, y1);
         st(p, b + 12, y2);
@@ -510,11 +502,8 @@ unsafe fn pass_l5<const Q: u16>(p: *mut __m512i, c: &C, k4: usize) {
         let t5 = TwQ::<Q>::L5.as_ptr().add(4 * (3 * k4 + g));
         for i in 0..2 {
             let b = base + 6 * g + i;
-            let (y0, y1, y2) = if TwQ::<Q>::BAR_L[3] {
-                r3::<true>(c, ld(p, b), ld(p, b + 2), ld(p, b + 4), t5)
-            } else {
-                r3::<false>(c, ld(p, b), ld(p, b + 2), ld(p, b + 4), t5)
-            };
+            let (y0, y1, y2) =
+                bar_switch!(r3, TwQ::<Q>::BAR_L[3], c, ld(p, b), ld(p, b + 2), ld(p, b + 4), t5);
             st(p, b, y0);
             st(p, b + 2, y1);
             st(p, b + 4, y2);

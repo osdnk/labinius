@@ -82,6 +82,8 @@
 //! computed from ([`crate::simd::commit`]), so it moves with the schedule: folding level 3 costs
 //! 2917 its Karatsuba (4.87 q -> 6.96 q) and buys 4861 one (5.13 q -> 3.17 q).
 use crate::params::*;
+use crate::simd::ntt::bar_switch;
+use crate::simd::ntt::r3_twiddles;
 pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::simd::ntt::bin_asm::barrett_lut_corr;
 use crate::ring::element::*;
@@ -528,24 +530,9 @@ const fn build_tables<const Q: u16>() -> Tables {
         k += 1;
     }
 
-    let mut tw3 = [[0u32; 4]; 12];
-    let mut i = 0;
-    while i < 12 {
-        tw3[i] = r3_pair::<Q>(ParamsQ::<Q>::ZETA_L3[i]);
-        i += 1;
-    }
-    let mut tw4 = [[0u32; 4]; 36];
-    let mut i = 0;
-    while i < 36 {
-        tw4[i] = r3_pair::<Q>(ParamsQ::<Q>::ZETA_L4[i]);
-        i += 1;
-    }
-    let mut tw5 = [[0u32; 4]; 108];
-    let mut i = 0;
-    while i < 108 {
-        tw5[i] = r3_pair::<Q>(ParamsQ::<Q>::ZETA_L5[i]);
-        i += 1;
-    }
+    let tw3 = r3_twiddles!(12, r3_pair::<Q>, ParamsQ::<Q>::ZETA_L3);
+    let tw4 = r3_twiddles!(36, r3_pair::<Q>, ParamsQ::<Q>::ZETA_L4);
+    let tw5 = r3_twiddles!(108, r3_pair::<Q>, ParamsQ::<Q>::ZETA_L5);
     let (oa, ob) = mont_pair::<Q>(ParamsQ::<Q>::OMEGA);
 
     let mut cv = [[0i16; 32]; 4];
@@ -856,11 +843,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
                     r3_folded(&c, y[3 * s], y[3 * s + 1], y[3 * s + 2])
                 } else {
                     let tw = t.tw3[3 * k + s].as_ptr();
-                    if bar[0] {
-                        r3::<true>(&c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw)
-                    } else {
-                        r3::<false>(&c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw)
-                    }
+                    bar_switch!(r3, bar[0], &c, y[3 * s], y[3 * s + 1], y[3 * s + 2], tw)
                 };
                 let b = 54 * s + i0;
                 st(bp, b, v0);
@@ -881,11 +864,8 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
             let t4 = t.tw4[kk].as_ptr();
             for i in 0..6 {
                 let (b0, b1, b2) = (base + i, base + i + 6, base + i + 12);
-                let (o0, o1, o2) = if bar[1] {
-                    r3::<true>(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t4)
-                } else {
-                    r3::<false>(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t4)
-                };
+                let (o0, o1, o2) =
+                    bar_switch!(r3, bar[1], &c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t4);
                 st(bp, b0, o0);
                 st(bp, b1, o1);
                 st(bp, b2, o2);
@@ -895,11 +875,8 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
                 let b = 6 * g;
                 for i in 0..2 {
                     let (b0, b1, b2) = (base + b + i, base + b + i + 2, base + b + i + 4);
-                    let (o0, o1, o2) = if bar[2] {
-                        r3::<true>(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t5)
-                    } else {
-                        r3::<false>(&c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t5)
-                    };
+                    let (o0, o1, o2) =
+                        bar_switch!(r3, bar[2], &c, ld(bp, b0), ld(bp, b1), ld(bp, b2), t5);
                     st(op, b + i, o0);
                     st(op, b + i + 2, o1);
                     st(op, b + i + 4, o2);
