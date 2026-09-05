@@ -51,6 +51,8 @@
 //! differently (lookup Barrett at level 4, none at level 5, `vpmulhrsw` at level 6) and so does
 //! not produce the same representatives here.
 use crate::params::*;
+use crate::simd::ntt::bar_switch;
+use crate::simd::ntt::r3_twiddles;
 pub use crate::simd::transpose_f162::BinaryIndex32;
 use crate::ring::element::*;
 use core::arch::x86_64::*;
@@ -85,6 +87,13 @@ pub struct Tables {
 const fn mont_pair<const Q: u16>(x: u16) -> (u32, u32) {
     let w = Params::<Q>::to_mont(x);
     (dup(w), dup(Params::<Q>::mont_pre(w)))
+}
+
+const fn r3_pair<const Q: u16>(z: u16) -> [u32; 4] {
+    let z2 = (z as u64 * z as u64 % Q as u64) as u16;
+    let (a, b) = mont_pair::<Q>(z);
+    let (c, d) = mont_pair::<Q>(z2);
+    [a, b, c, d]
 }
 
 impl Tables {
@@ -135,36 +144,9 @@ impl Tables {
             k += 1;
         }
 
-        let mut tw4 = [[0u32; 4]; 24];
-        let mut i = 0;
-        while i < 24 {
-            let z = Params::<Q>::ZETA_L4[i];
-            let z2 = (z as u64 * z as u64 % q) as u16;
-            let (a, b) = mont_pair::<Q>(z);
-            let (c, d) = mont_pair::<Q>(z2);
-            tw4[i] = [a, b, c, d];
-            i += 1;
-        }
-        let mut tw5 = [[0u32; 4]; 72];
-        let mut i = 0;
-        while i < 72 {
-            let z = Params::<Q>::ZETA_L5[i];
-            let z2 = (z as u64 * z as u64 % q) as u16;
-            let (a, b) = mont_pair::<Q>(z);
-            let (c, d) = mont_pair::<Q>(z2);
-            tw5[i] = [a, b, c, d];
-            i += 1;
-        }
-        let mut tw6 = [[0u32; 4]; 216];
-        let mut i = 0;
-        while i < 216 {
-            let z = Params::<Q>::ZETA_L6[i];
-            let z2 = (z as u64 * z as u64 % q) as u16;
-            let (a, b) = mont_pair::<Q>(z);
-            let (c, d) = mont_pair::<Q>(z2);
-            tw6[i] = [a, b, c, d];
-            i += 1;
-        }
+        let tw4 = r3_twiddles!(24, r3_pair::<Q>, Params::<Q>::ZETA_L4);
+        let tw5 = r3_twiddles!(72, r3_pair::<Q>, Params::<Q>::ZETA_L5);
+        let tw6 = r3_twiddles!(216, r3_pair::<Q>, Params::<Q>::ZETA_L6);
         let (oa, ob) = mont_pair::<Q>(Params::<Q>::OMEGA);
         Tables {
             lut,
@@ -410,11 +392,7 @@ pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Bat
                     ld(bp, base + 9 + i),
                     ld(bp, base + 18 + i),
                 );
-                let (o0, o1, o2) = if bar {
-                    r3::<true>(&c, a0, a1, a2, tw)
-                } else {
-                    r3::<false>(&c, a0, a1, a2, tw)
-                };
+                let (o0, o1, o2) = bar_switch!(r3, bar, &c, a0, a1, a2, tw);
                 st(bp, base + i, o0);
                 st(bp, base + 9 + i, o1);
                 st(bp, base + 18 + i, o2);
@@ -432,22 +410,15 @@ pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Bat
                 v[i] = ld(bp, base + i);
             }
             for i in 0..3 {
-                let (o0, o1, o2) = if bar {
-                    r3::<true>(&c, v[i], v[3 + i], v[6 + i], tw)
-                } else {
-                    r3::<false>(&c, v[i], v[3 + i], v[6 + i], tw)
-                };
+                let (o0, o1, o2) = bar_switch!(r3, bar, &c, v[i], v[3 + i], v[6 + i], tw);
                 v[i] = o0;
                 v[3 + i] = o1;
                 v[6 + i] = o2;
             }
             for i in 0..3 {
                 let tw = t.tw6[54 * k + 3 * j + i].as_ptr();
-                let (o0, o1, o2) = if bar {
-                    r3::<true>(&c, v[3 * i], v[3 * i + 1], v[3 * i + 2], tw)
-                } else {
-                    r3::<false>(&c, v[3 * i], v[3 * i + 1], v[3 * i + 2], tw)
-                };
+                let (o0, o1, o2) =
+                    bar_switch!(r3, bar, &c, v[3 * i], v[3 * i + 1], v[3 * i + 2], tw);
                 let b = base + 3 * i;
                 st(op, b, o0);
                 st(op, b + 1, o1);
