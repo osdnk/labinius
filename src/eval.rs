@@ -42,6 +42,7 @@ use crate::challenge::ShortChallenge;
 use crate::fields::f162 as bf;
 use crate::fields::scalar::F162;
 use crate::fields::sumcheck::Poly;
+use crate::params::N;
 use crate::types::RingElement;
 use core::arch::x86_64::*;
 
@@ -204,13 +205,42 @@ pub(crate) fn fold_binary(u: &[F162], challenges: &[ShortChallenge]) -> F162 {
 pub(crate) fn components_mod_2(v: &[RingElement]) -> Vec<F162> {
     let mut out = vec![F162::ZERO; 4 * v.len()];
     for (m, e) in v.iter().enumerate() {
-        for p in 0..crate::api::N162 {
-            for k in 0..4 {
-                out[4 * m + k].0[p >> 6] |= ((e.v[4 * p + k] & 1) as u64) << (p & 63);
-            }
-        }
+        unsafe { element_mod_2(&e.v, &mut out[4 * m..4 * m + 4]) };
     }
     out
+}
+
+#[target_feature(enable = "avx512f,avx512bw,bmi2")]
+unsafe fn element_mod_2(e: &[i16; N], out: &mut [F162]) {
+    let ones = _mm512_set1_epi16(1);
+    let p = e.as_ptr();
+    let mut w = [[0u64; 3]; 4];
+    for t in 0..N / 64 {
+        let lo = _mm512_test_epi16_mask(
+            _mm512_loadu_si512(p.add(64 * t) as *const __m512i),
+            ones,
+        ) as u64;
+        let hi = _mm512_test_epi16_mask(
+            _mm512_loadu_si512(p.add(64 * t + 32) as *const __m512i),
+            ones,
+        ) as u64;
+        let bits = lo | (hi << 32);
+        for (k, wk) in w.iter_mut().enumerate() {
+            wk[t >> 2] |= _pext_u64(bits, 0x1111_1111_1111_1111u64 << k) << (16 * (t & 3));
+        }
+    }
+    let rest = N - 64 * (N / 64);
+    let bits = _mm512_test_epi16_mask(
+        _mm512_maskz_loadu_epi16((1u64 << rest) as u32 - 1, p.add(64 * (N / 64))),
+        ones,
+    ) as u64;
+    for (k, wk) in w.iter_mut().enumerate() {
+        let q = N / 64 * 16;
+        wk[q >> 6] |= _pext_u64(bits, 0x1111_1111_1111_1111u64 << k) << (q & 63);
+    }
+    for (k, wk) in w.iter().enumerate() {
+        out[k] = F162(*wk);
+    }
 }
 
 /// The binary check `B v == u^T c` over `F`: `sum_i eq(p0, i) (v_i mod 2) == u_folded`.

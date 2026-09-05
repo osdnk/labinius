@@ -750,6 +750,67 @@ pub(crate) fn a_times_v_limb(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -
     }
 }
 
+fn a_times_v_fwd<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    assert_eq!(a.len(), v.len());
+    let mut acc = cm::Acc::zero();
+    let ap = acc.v.as_mut_ptr() as *mut i32;
+    let mut w = Box::new(Batch32::zero(Representation::Coefficients));
+    unsafe {
+        for b in 0..a.len() {
+            w.v.copy_from_slice(&v[b].v);
+            forward_split::<Q>(&mut w);
+            let ar = a[b].v.as_ptr() as *const i16;
+            cm::mac_batch::<false>(w.v.as_ptr() as *const i16, ar, ar as *const i8, ap);
+            if (b + 1) % av_period(Q) == 0 {
+                cm::reduce_acc::<Q>(ap);
+            }
+        }
+    }
+    cm::finish::<Q>(&acc)
+}
+
+fn a_times_v_fwd_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    assert_eq!(a.len(), v.len());
+    let mut acc = cm::QuadAcc::zero();
+    let (p01, p2) = (
+        acc.p01.as_mut_ptr() as *mut i32,
+        acc.p2.as_mut_ptr() as *mut i32,
+    );
+    let mut w = Box::new(Batch32::zero(Representation::Coefficients));
+    unsafe {
+        for b in 0..a.len() {
+            w.v.copy_from_slice(&v[b].v);
+            ntt_quad_gen_batch32::<Q>(&mut w);
+            center_batch::<Q>(&mut w);
+            let ar = a[b].v.as_ptr() as *const i16;
+            cm::mac_quad_batch::<Q, false>(
+                w.v.as_ptr() as *const i16,
+                ar,
+                ar as *const i8,
+                p01,
+                p2,
+            );
+            if (b + 1) % av_period_quad(Q) == 0 {
+                cm::reduce_quad_acc::<Q>(&mut acc);
+            }
+        }
+    }
+    cm::finish_quad::<Q>(&acc)
+}
+
+pub(crate) fn a_times_v_forward(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    match (q, quad) {
+        (3889, false) => a_times_v_fwd::<3889>(a, v),
+        (9721, false) => a_times_v_fwd::<9721>(a, v),
+        (17497, false) => a_times_v_fwd::<17497>(a, v),
+        (19441, false) => a_times_v_fwd::<19441>(a, v),
+        (2917, true) => a_times_v_fwd_quad::<2917>(a, v),
+        (4861, true) => a_times_v_fwd_quad::<4861>(a, v),
+        (12637, true) => a_times_v_fwd_quad::<12637>(a, v),
+        _ => unreachable!("no limb with q = {q}"),
+    }
+}
+
 const SLOT_PRIMES: [u16; 7] = [
     QS[0],
     QS[1],

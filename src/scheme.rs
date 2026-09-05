@@ -37,7 +37,8 @@ use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
 use crate::fields::scalar::F162;
-use crate::fold::{a_times_v_limb, fold_columns_slots, fold_witness, forward_limb};
+use crate::fold::{a_times_v_forward, fold_columns_slots, fold_witness};
+use crate::simd::transpose32 as tr;
 use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
@@ -1397,14 +1398,16 @@ impl Verifier {
         let mut batches: Vec<Batch32> = (0..v.len() / 32)
             .map(|_| Batch32::zero(Representation::Coefficients))
             .collect();
-        for (i, e) in v.iter().enumerate() {
-            batches[i / 32].set(i % 32, e);
+        for (b, batch) in batches.iter_mut().enumerate() {
+            let mut src = [tr::ZERO_ROW.as_ptr(); 32];
+            for (p, s) in src.iter_mut().enumerate() {
+                *s = v[32 * b + p].v.as_ptr();
+            }
+            unsafe { tr::transpose_into(&src, &tr::IDENTITY, batch) };
         }
         for k in 0..self.key.limbs() {
             let (q, quad) = (self.key.prime(k), self.key.is_quadratic(k));
-            let mut b = batches.clone();
-            forward_limb(q, quad, &mut b);
-            let y = a_times_v_limb(q, quad, self.key.row(k), &b);
+            let y = a_times_v_forward(q, quad, self.key.row(k), &batches);
             let components: [PowerOfThreeRingElement; 4] = components_of(q, quad, &y);
             for (row, c) in components.iter().enumerate() {
                 if *c != folded_commitment.rows[row].limbs[k] {
