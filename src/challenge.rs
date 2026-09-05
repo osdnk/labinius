@@ -36,6 +36,7 @@
 use crate::api::{PowerOfThreeRingElementWithLimbs, N162};
 use crate::fields::scalar::F162;
 use blake3::Hasher;
+use core::arch::x86_64::*;
 use std::f64::consts::PI;
 use std::sync::LazyLock;
 
@@ -148,20 +149,38 @@ impl Xof {
     }
     #[inline]
     fn u16(&mut self) -> u16 {
+        if self.pos + 2 <= self.buf.len() {
+            let x = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]);
+            self.pos += 2;
+            return x;
+        }
         u16::from_le_bytes([self.byte(), self.byte()])
     }
-    /// Uniform in `[0, n)` for `n <= 2^16`, by rejection on 16-bit draws.
     #[inline]
     fn below(&mut self, n: u16) -> u16 {
-        let limit = (u16::MAX as u32 + 1) / n as u32 * n as u32;
+        let (limit, magic) = DIVIDE[n as usize];
         loop {
             let r = self.u16() as u32;
             if r < limit {
-                return (r % n as u32) as u16;
+                let q = ((r as u64 * magic) >> 32) as u32;
+                return (r - q * n as u32) as u16;
             }
         }
     }
 }
+
+const DIVIDE: [(u32, u64); N162 + 1] = {
+    let mut t = [(0u32, 0u64); N162 + 1];
+    let mut n = 1;
+    while n <= N162 {
+        t[n] = (
+            ((u16::MAX as u32 + 1) / n as u32) * n as u32,
+            (1u64 << 32) / n as u64 + 1,
+        );
+        n += 1;
+    }
+    t
+};
 
 // =============================================================================================
 // the challenge
@@ -176,6 +195,9 @@ pub struct ShortChallenge {
     pub signs: u32,
     pub weight: usize,
 }
+
+static SIGN_KEY: LazyLock<Hasher> =
+    LazyLock::new(|| Hasher::new_derive_key("bin-ntt 2026 challenge signs v1"));
 
 impl ShortChallenge {
     /// The zero element (weight 0).
@@ -197,7 +219,7 @@ impl ShortChallenge {
     }
 
     pub fn signed(&self) -> Self {
-        let mut h = Hasher::new_derive_key("bin-ntt 2026 challenge signs v1");
+        let mut h = SIGN_KEY.clone();
         h.update(&(self.weight as u64).to_le_bytes());
         h.update(&self.positions[..self.weight]);
         let bits = u32::from_le_bytes(h.finalize().as_bytes()[..4].try_into().unwrap());
@@ -262,9 +284,9 @@ const HALF: usize = N162 / 2;
 /// so they never win a maximum.
 const LANES: usize = 88;
 
-/// Lanes of one block of the blocked evaluation, tuned so that a rejected challenge usually stops
-/// after the first block.
-const BLOCK: usize = LANES / 2;
+const VECS: usize = 6;
+const VECS2: usize = LANES / 8 - VECS;
+const BLOCK: usize = 8 * VECS;
 
 /// The 162 units `u` mod 243 (`gcd(u, 3) = 1`) in increasing order: the primitive 243-rd roots of
 /// unity are `zeta^u`, `zeta = exp(2 pi i / 243)`. The first [`HALF`] of them are the ones the
@@ -299,23 +321,65 @@ static PHASE: LazyLock<(Vec<f64>, Vec<f64>)> = LazyLock::new(|| {
     (re, im)
 });
 
-/// Accumulate `sum_i s_i exp(2 pi i p_i u_k / 243)` over the challenge's nonzero terms and their
-/// signs, for the [`BLOCK`] lanes starting at `off`.
-#[inline]
-fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f64; BLOCK]) {
+#[inline(always)]
+unsafe fn accumulate<const V: usize>(
+    c: &ShortChallenge,
+    off: usize,
+) -> ([__m512d; V], [__m512d; V]) {
     let (re, im) = &*PHASE;
-    ar.fill(0.0);
-    ai.fill(0.0);
+    let (mut vr, mut vi) = ([_mm512_setzero_pd(); V], [_mm512_setzero_pd(); V]);
     for i in 0..c.weight {
-        let base = c.positions[i] as usize * LANES + off;
-        let pr = &re[base..base + BLOCK];
-        let pi = &im[base..base + BLOCK];
-        let s = 1.0 - 2.0 * ((c.signs >> i) & 1) as f64;
-        for k in 0..BLOCK {
-            ar[k] += s * pr[k];
-            ai[k] += s * pi[k];
+        let b = c.positions[i] as usize * LANES + off;
+        let s = _mm512_castsi512_pd(_mm512_set1_epi64(
+            ((c.signs >> i) & 1) as i64 * i64::MIN,
+        ));
+        for k in 0..V {
+            let pr = _mm512_loadu_pd(re.as_ptr().add(b + 8 * k));
+            let pi = _mm512_loadu_pd(im.as_ptr().add(b + 8 * k));
+            vr[k] = _mm512_add_pd(vr[k], _mm512_xor_pd(s, pr));
+            vi[k] = _mm512_add_pd(vi[k], _mm512_xor_pd(s, pi));
         }
     }
+    (vr, vi)
+}
+
+#[inline(always)]
+unsafe fn block_sq<const V: usize>(vr: [__m512d; V], vi: [__m512d; V]) -> [__m512d; V] {
+    core::array::from_fn(|k| {
+        _mm512_add_pd(_mm512_mul_pd(vr[k], vr[k]), _mm512_mul_pd(vi[k], vi[k]))
+    })
+}
+
+#[target_feature(enable = "avx512f")]
+unsafe fn norm_sq_blocks(c: &ShortChallenge) -> f64 {
+    let (vr, vi) = accumulate::<VECS>(c, 0);
+    let mut m = _mm512_setzero_pd();
+    for x in block_sq::<VECS>(vr, vi) {
+        m = _mm512_max_pd(m, x);
+    }
+    let (wr, wi) = accumulate::<VECS2>(c, BLOCK);
+    for x in block_sq::<VECS2>(wr, wi) {
+        m = _mm512_max_pd(m, x);
+    }
+    _mm512_reduce_max_pd(m)
+}
+
+#[target_feature(enable = "avx512f")]
+unsafe fn within_blocks(c: &ShortChallenge, bound_sq: f64) -> bool {
+    let b = _mm512_set1_pd(bound_sq);
+    let (vr, vi) = accumulate::<VECS>(c, 0);
+    let mut over = 0u8;
+    for x in block_sq::<VECS>(vr, vi) {
+        over |= _mm512_cmp_pd_mask::<_CMP_GT_OQ>(x, b);
+    }
+    if over != 0 {
+        return false;
+    }
+    let (wr, wi) = accumulate::<VECS2>(c, BLOCK);
+    for x in block_sq::<VECS2>(wr, wi) {
+        over |= _mm512_cmp_pd_mask::<_CMP_GT_OQ>(x, b);
+    }
+    over == 0
 }
 
 /// `max_u |c(zeta^u)|^2` over the 162 primitive 243-rd roots of unity — the squared sup norm of
@@ -328,36 +392,14 @@ fn accumulate(c: &ShortChallenge, off: usize, ar: &mut [f64; BLOCK], ai: &mut [f
 /// accumulator is one f64 vector of real and one of imaginary parts, and each term adds one row of
 /// the phase table to it — contiguous f64 loops, no gathers.
 pub fn canonical_inf_norm_sq(c: &ShortChallenge) -> f64 {
-    let mut ar = [0.0f64; BLOCK];
-    let mut ai = [0.0f64; BLOCK];
-    let mut best = 0.0f64;
-    for off in (0..LANES).step_by(BLOCK) {
-        accumulate(c, off, &mut ar, &mut ai);
-        for k in 0..BLOCK {
-            let m = ar[k] * ar[k] + ai[k] * ai[k];
-            if m > best {
-                best = m;
-            }
-        }
-    }
-    best
+    unsafe { norm_sq_blocks(c) }
 }
 
 /// `canonical_inf_norm_sq(c) <= bound_sq`, one block of roots at a time so that a rejection stops
 /// as soon as some root exceeds the bound. This is what the rejection loop calls: at the default
 /// bound the great majority of attempts die in the first block.
 fn within(c: &ShortChallenge, bound_sq: f64) -> bool {
-    let mut ar = [0.0f64; BLOCK];
-    let mut ai = [0.0f64; BLOCK];
-    for off in (0..LANES).step_by(BLOCK) {
-        accumulate(c, off, &mut ar, &mut ai);
-        for k in 0..BLOCK {
-            if ar[k] * ar[k] + ai[k] * ai[k] > bound_sq {
-                return false;
-            }
-        }
-    }
-    true
+    unsafe { within_blocks(c, bound_sq) }
 }
 
 /// The same quantity by Horner's rule in complex f64 over all 162 roots and all 162 coefficients —
@@ -410,13 +452,18 @@ fn attempt(x: &mut Xof, weight: usize, perm: &mut [u8; N162]) -> ShortChallenge 
     for i in 0..weight {
         let j = i + x.below((N162 - i) as u16) as usize;
         perm.swap(i, j);
-        out.positions[i] = perm[i];
     }
-    for i in 1..weight {
-        let mut j = i;
-        while j > 0 && out.positions[j - 1] > out.positions[j] {
-            out.positions.swap(j - 1, j);
-            j -= 1;
+    let out_positions = &perm[..weight];
+    let mut seen = [0u64; N162.div_ceil(64)];
+    for &p in out_positions {
+        seen[p as usize >> 6] |= 1u64 << (p & 63);
+    }
+    let mut n = 0;
+    for (w, mut b) in seen.into_iter().enumerate() {
+        while b != 0 {
+            out.positions[n] = (64 * w + b.trailing_zeros() as usize) as u8;
+            b &= b - 1;
+            n += 1;
         }
     }
     out
