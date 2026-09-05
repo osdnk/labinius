@@ -22,9 +22,9 @@ One AVX-512 thread throughout.
 
 ```
 git submodule update --init                 # crates/pcs/labrador, the C library
-cargo build --release --workspace --bins --features bin-ntt/sizem
-taskset -c 3 ./target/release/bin-ntt
-./bench.sh                                  # every binary at every rung
+cargo build --release --workspace --bins
+taskset -c 3 ./target/release/bin-ntt --suite m
+./bench.sh                                  # every binary at every suite
 cargo test --release --workspace
 ```
 

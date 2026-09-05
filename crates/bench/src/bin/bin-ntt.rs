@@ -1,9 +1,8 @@
 //! The reference usage: one round end to end in each mode, with the wall clock on every step.
 //!
 //! `cargo run --release --offline`, pinned with `taskset -c 2`.
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::scheme::DROPPED_BITS;
-use bin_ntt::scheme::SIZE;
+use bin_ntt::scheme::suite_from_args;
+use bin_ntt::{Opening, OpeningMessage, Suite};
 use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, row};
 use bin_ntt::wire;
 use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
@@ -41,24 +40,25 @@ fn stats() {
 }
 
 fn main() {
-    println!("=== size {SIZE} ===");
+    let suite = suite_from_args();
+    println!("=== size {} ===", suite.name);
 
     pin(CPU);
     stats();
     #[cfg(feature = "labrador")]
     {
-        recursive();
+        recursive(suite);
     }
     #[cfg(not(feature = "labrador"))]
     {
-        plain();
-        plain_bd();
+        plain(suite);
+        plain_bd(suite);
     }
     println!("\npeak resident set: {:.0} MB", peak_rss());
 }
 
-fn plain() {
-    let params = Params::sized(Opening::Clear);
+fn plain(suite: &Suite) {
+    let params = Params::sized(suite, Opening::Clear);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
@@ -206,8 +206,13 @@ fn plain() {
     );
 }
 
-fn plain_bd() {
-    let params = Params::sized(Opening::BitDropped { bits: DROPPED_BITS });
+fn plain_bd(suite: &Suite) {
+    let params = Params::sized(
+        suite,
+        Opening::BitDropped {
+            bits: suite.dropped_bits,
+        },
+    );
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
@@ -353,8 +358,8 @@ fn plain_bd() {
     );
 }
 
-fn recursive() {
-    let params = Params::sized(Opening::Recursive);
+fn recursive(suite: &Suite) {
+    let params = Params::sized(suite, Opening::Recursive);
     let (setup_ms, public_parameters) =
         once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let setup = public_parameters

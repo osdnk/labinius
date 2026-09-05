@@ -1,7 +1,8 @@
 //! `cargo run --release --offline --bin hashes-binius`, pinned with `taskset -c 3`.
 use bin_ntt_binius::stock::{Stock, LOG_INV_RATE};
 use bin_ntt_binius::{Circuit, Hash, Session, Sizes};
-use bin_ntt::scheme::SIZE;
+use bin_ntt::scheme::suite_from_args;
+use bin_ntt::Suite;
 use bin_ntt_bench::{once, peak_rss, pin, table_row as row};
 
 /// The seed the public matrix `A` is expanded from.
@@ -11,15 +12,16 @@ const CPU: usize = 3;
 
 
 fn main() {
+    let suite = suite_from_args();
     pin(CPU);
     for hash in Hash::ALL {
-        compare(hash);
+        compare(hash, suite);
         println!();
     }
 }
 
-fn compare(hash: Hash) {
-    let len = hash.message_len();
+fn compare(hash: Hash, suite: &Suite) {
+    let len = hash.message_len(suite);
     let message: Vec<u8> = (0..len)
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect();
@@ -44,9 +46,11 @@ fn compare(hash: Hash) {
     let stock_verify_reduce = stock_iop - stock_verify_pcs;
 
     // The same instance with our commitment, without and with the recursion.
-    let (off_setup, mut off) = once(|| Session::new(constraint_system.clone(), false, MATRIX_SEED));
-    let (on_setup, mut on) = once(|| Session::new(constraint_system.clone(), true, MATRIX_SEED));
-    let (bd_setup, mut bd) = once(|| Session::bd(constraint_system.clone(), MATRIX_SEED));
+    let (off_setup, mut off) =
+        once(|| Session::new(constraint_system.clone(), suite, false, MATRIX_SEED));
+    let (on_setup, mut on) =
+        once(|| Session::new(constraint_system.clone(), suite, true, MATRIX_SEED));
+    let (bd_setup, mut bd) = once(|| Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
     let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&witness, None));
     let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&witness, None));
     let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&witness, None));
@@ -61,8 +65,9 @@ fn compare(hash: Hash) {
         .expect("the honest proof verifies");
 
     println!(
-        "bin-ntt over binius64 {}, core {CPU}, one thread, size {SIZE}",
-        hash.name()
+        "bin-ntt over binius64 {}, core {CPU}, one thread, size {}",
+        hash.name(),
+        suite.name
     );
     println!(
         "{} of {len} bytes: {} {}, {} AND constraints, {} non-public words",

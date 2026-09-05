@@ -3,10 +3,12 @@ pub mod ligerito_flock;
 pub mod whir;
 
 use bin_ntt_bench::Rng;
-use bin_ntt::scheme::{SIZE_STEP, WITNESS_LOG_LEN};
+use bin_ntt::Suite;
 pub use bin_ntt_bench::{median_of, ms as milliseconds, once, pin};
 
-pub const LOG_LEN: usize = (WITNESS_LOG_LEN + SIZE_STEP) as usize;
+pub fn log_len(suite: &Suite) -> usize {
+    suite.witness_log_len as usize
+}
 
 pub const WITNESS_SEED: u64 = 0xC7;
 

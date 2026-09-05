@@ -27,16 +27,10 @@ note() {
 build() {
     local feat=$1
     if [ "${SKIP_BUILD:-0}" = 1 ]; then return 0; fi
-    local flags=
-    for f in $feat; do
-        case $f in
-            labrador) flags="$flags,bin-ntt-bench/labrador" ;;
-            *) flags="$flags,bin-ntt/$f" ;;
-        esac
-    done
     echo "$BAR"
-    echo "  build --features \"${flags#,}\""
-    cargo build --release --offline --workspace --bins --features "${flags#,}" >> "$OUT/build.log" 2>&1
+    echo "  build ${feat:+--features $feat}"
+    cargo build --release --offline --workspace --bins ${feat:+--features "$feat"} \
+        >> "$OUT/build.log" 2>&1
     echo "  done ($?)"
     echo "$BAR"
     echo
@@ -54,7 +48,7 @@ run() {
     echo "$BAR"
 
     local t0=$SECONDS
-    /usr/bin/time -v ./target/release/"$bin" > "$log" 2>&1
+    /usr/bin/time -v ./target/release/"$bin" --suite "${size#size}" > "$log" 2>&1
     local rc=$? secs=$((SECONDS - t0))
     local peak
     peak=$(awk '/Maximum resident set size/{printf "%.0f", $NF/1024}' "$log")
@@ -84,6 +78,8 @@ cd "$(dirname "$0")/../.." || exit 1
 
 total_gb=$(free -g | awk '/^Mem:/{print $2}')
 
+build ""
+
 for size in $SIZES; do
     echo
     echo "$RULE"
@@ -93,7 +89,6 @@ for size in $SIZES; do
     echo "$RULE"
     echo
 
-    build "$size"
     run bin-ntt "$size"
     run pcs-competitors "$size"
     run hashes-flock "$size"
@@ -103,8 +98,11 @@ for size in $SIZES; do
     else
         run hashes-binius "$size"
     fi
+done
 
-    build "$size labrador"
+build bin-ntt-bench/labrador
+
+for size in $SIZES; do
     run bin-ntt "$size" labrador
 done
 

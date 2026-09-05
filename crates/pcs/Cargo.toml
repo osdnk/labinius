@@ -8,8 +8,4 @@ description = "AVX-512 Ajtai commitment, fold and verifier over Z_q[X]/(X^648 - 
 blake3.workspace = true
 
 [features]
-sizes = []
-sizem = []
-sizel = []
-sizexl = []
 labrador = []

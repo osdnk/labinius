@@ -51,7 +51,7 @@ pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
     FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, Opening,
     OpeningError, OpeningMessage, OpeningProof, OpeningTimings, ParamError, Params, Prover,
-    PublicParameters, RowEvaluation, VerificationError, Verifier, VerifyTimings, Witness,
-    WitnessError,
+    PublicParameters, RowEvaluation, Suite, VerificationError, Verifier, VerifyTimings,
+    Witness, WitnessError, SUITES,
 };
 pub use types::RingElement as RingElement648;
