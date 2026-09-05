@@ -37,7 +37,7 @@ use crate::challenge::{
     sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
 };
 use crate::fields::scalar::F162;
-use crate::fold::{a_times_v_limb, challenge_batches, component_slots, fold_witness, forward_limb};
+use crate::fold::{a_times_v_limb, fold_columns_slots, fold_witness, forward_limb};
 use crate::labrador::{self, PolxBuf};
 use crate::recursion;
 use crate::types::{Batch32, Representation};
@@ -1317,35 +1317,18 @@ impl Verifier {
         let columns = commitment.columns();
         let mut rows: [PowerOfThreeRingElementWithLimbs; 4] =
             core::array::from_fn(|_| PowerOfThreeRingElementWithLimbs::zero(limbs));
-        let mut v: Vec<Batch32> = (0..columns.div_ceil(32))
-            .map(|_| Batch32::zero(Representation::Ntt))
-            .collect();
+        let mut cols: Vec<[*const i16; 4]> = vec![[core::ptr::null(); 4]; columns];
         for k in 0..limbs {
             let (q, quad) = (self.key.prime(k), self.key.is_quadratic(k));
-            let map = component_slots(quad);
-            for (b, batch) in v.iter_mut().enumerate() {
-                let first = 32 * b;
-                for p in 0..(columns - first).min(32) {
-                    for (t, m) in map.iter().enumerate() {
-                        let e = &commitment.matrix().get(t, first + p).limbs[k].v;
-                        for s in 0..N162 {
-                            batch.v[m[s] as usize][p] = e[s];
-                        }
-                    }
+            for (j, c) in cols.iter_mut().enumerate() {
+                for (t, p) in c.iter_mut().enumerate() {
+                    *p = commitment.matrix().get(t, j).limbs[k].v.as_ptr();
                 }
             }
-            let ch = challenge_batches(q, quad, &challenges.challenges);
-            let y = a_times_v_limb(q, quad, &ch, &v);
-            let half = ((q - 1) / 2) as u32;
-            for (t, m) in map.iter().enumerate() {
-                for s in 0..N162 {
-                    let x = y[m[s] as usize];
-                    rows[t].limbs[k].v[s] = if x > half {
-                        (x as i32 - q as i32) as i16
-                    } else {
-                        x as i16
-                    };
-                }
+            let mut out = [[0i16; N162]; 4];
+            fold_columns_slots(q, quad, &challenges.challenges, &cols, &mut out);
+            for (t, o) in out.iter().enumerate() {
+                rows[t].limbs[k].v = *o;
             }
         }
         FoldedCommitment {
