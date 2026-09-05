@@ -5,3 +5,5 @@ tools/ubench/ports
 tools/membw/membw
 *.o
 .claude/
+bench-*/
+*.out
