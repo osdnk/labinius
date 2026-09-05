@@ -1,7 +1,7 @@
 //! The recursion encoding: the ring conventions, the chain on synthetic identities, and the whole
 //! instance on the real pipeline.
 use bin_ntt::Opening;
-use bin_ntt::api::N162;
+use bin_ntt::ring::N162;
 use bin_ntt::params::N;
 use bin_ntt::recursion::{
     binary, chunk, limbs, Gadget, Instance, SElem, BLOCKS, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, Q, V,
@@ -165,7 +165,7 @@ fn residues_re_transform_to_the_commitment() {
                         a[4 * t + m] = if t % 2 == 0 { e[t] } else { -e[t] };
                     }
                 }
-                let back = bin_ntt::api::components_of(q, &limbs::transform(q, &a));
+                let back = bin_ntt::ring::components_of(q, &limbs::transform(q, &a));
                 for m in 0..4 {
                     assert_eq!(
                         back[m],

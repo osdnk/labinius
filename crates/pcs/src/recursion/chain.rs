@@ -16,7 +16,7 @@ use super::{
     Blocks, Gadget, Poly, SElem, Vector, BLOCKS, BLOCK_LIMIT, CARRY, CHUNK, CHUNKS, COEFF_LIMIT,
     DEG, SPAN, SUB,
 };
-use crate::api::N162;
+use crate::ring::N162;
 use core::arch::x86_64::*;
 use std::sync::Arc;
 

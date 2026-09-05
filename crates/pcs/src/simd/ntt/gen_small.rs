@@ -102,13 +102,13 @@
 //! the same search returns 220, worth ~8 %. That would need a second flag set and a second bound
 //! recursion for one caller, and the fold's inverse is 0.07 ms either way, so the kernel has one
 //! declared input bound. Port balance is 515 p0 against 464 p5 per polynomial (3889), so the
-//! shuffle-port lookup Barrett of `vertical_bin_asm` (5 uops, none of them p0, against 3 with 2
+//! shuffle-port lookup Barrett of `ntt::bin_asm` (5 uops, none of them p0, against 3 with 2
 //! on p0) would pay for about 270 of the 984 before p0 stops being the constraint — not taken,
 //! nor the level-0 form `a0 = KB (Y0+Y1) - a1/2`, which replaces one Montgomery product by a
 //! conditional-add-and-shift halving (2 port-0 uops per butterfly) at the price of a serial
 //! dependency and an output bound that then depends on level 1's.
 use crate::params::{barrett_v, inv_mod, Params};
-use crate::types::{Batch32, Representation};
+use crate::ring::{Batch32, Representation};
 use core::arch::x86_64::*;
 
 /// A 16-bit constant duplicated into a u32 so that `vpbroadcastd m32` fills a whole zmm with it.
@@ -488,7 +488,7 @@ impl<const Q: u16> TwI<Q> {
     pub const NHALF: u32 = dup(-(((Q - 1) / 2) as i16));
 
     /// Declared input bound: the largest lazily reduced transform this crate produces, i.e.
-    /// `vertical_bin_asm`'s 7.5 q (3889) / 2.3 q (9721). Everything smaller — the forward
+    /// `ntt::bin_asm`'s 7.5 q (3889) / 2.3 q (9721). Everything smaller — the forward
     /// kernels' 3.40 q / 2.13 q, the fold's centered `(q-1)/2` — is covered.
     pub const IN_BOUND: i32 = if Q == 9721 { 22359 } else { 29167 };
 

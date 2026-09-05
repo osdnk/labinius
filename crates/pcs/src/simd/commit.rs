@@ -59,9 +59,9 @@
 //!
 //! # Consuming the transform one block at a time
 //!
-//! [`vertical_bin_asm`](crate::simd::vertical_bin_asm) produces the 648 slots as 24 blocks of 27,
+//! [`ntt::bin_asm`](crate::simd::ntt::bin_asm) produces the 648 slots as 24 blocks of 27,
 //! each written out of registers by one `asm!` block, and
-//! [`vertical_bin_large`](crate::simd::vertical_bin_large) produces the same 24 blocks for the two
+//! [`ntt::bin_large`](crate::simd::ntt::bin_large) produces the same 24 blocks for the two
 //! primes above `2^14`, so both feed the same sink. `Mac` is a [`BlockSink`] that hands the
 //! kernel a single 1728-byte scratch for every block and multiplies the block into the
 //! accumulator the moment it is stored, while it is still in L1. The alternatives cost, per ring
@@ -97,9 +97,9 @@ use crate::limb::dispatch_limb;
 use crate::params::*;
 use crate::simd::transpose_f162::slice_f162_into;
 use crate::simd::transpose_f162::BinaryIndex32;
-use crate::simd::vertical_bin_asm::{self as vb, BlockSink};
-use crate::simd::vertical_bin_large as vl;
-use crate::types::*;
+use crate::simd::ntt::bin_asm::{self as vb, BlockSink};
+use crate::simd::ntt::bin_large as vl;
+use crate::ring::element::*;
 use core::arch::x86_64::*;
 
 // =============================================================================================
@@ -112,8 +112,8 @@ pub const fn r16(q: u16) -> i32 {
     (65536 % q as u32) as i32
 }
 
-/// Bound on one lane of the transform's output: `vertical_bin_asm`'s 7.5 q (3889) and 2.294 q
-/// (9721), `vertical_bin_large`'s 1.786 q (17497) and 1.580 q (19441).
+/// Bound on one lane of the transform's output: `ntt::bin_asm`'s 7.5 q (3889) and 2.294 q
+/// (9721), `ntt::bin_large`'s 1.786 q (17497) and 1.580 q (19441).
 pub const fn w_bound(q: u16) -> i64 {
     if vl::is_large(q) {
         vl::output_bound(q) as i64
@@ -597,7 +597,7 @@ pub const PF_DIST: usize = 1;
 // per leaf, which is 50 % more of the one stream that is DRAM-bound when a key has few columns.
 // Three accumulators it is.
 
-use crate::simd::vertical_bin_quad::{self as vq, BlockSink as QBlockSink};
+use crate::simd::ntt::bin_quad::{self as vq, BlockSink as QBlockSink};
 
 /// Bound on one lane of the quadratic kernel's output ([`vq::output_bound`]).
 pub const fn w_bound_quad(q: u16) -> i64 {

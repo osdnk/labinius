@@ -27,13 +27,13 @@
 //!
 //! ```no_run
 //! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-//! # use bin_ntt::api::PowerOfThreeRingElementWithLimbs;
+//! # use bin_ntt::ring::PowerOfThreeRingElementWithLimbs;
 //! # let commitment = [PowerOfThreeRingElementWithLimbs::zero(2)];
 //! let mut t = Transcript::new(b"bin-ntt/example");
 //! t.absorb_elements(&commitment);
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
-use crate::api::{PowerOfThreeRingElementWithLimbs, N162};
+use crate::ring::{PowerOfThreeRingElementWithLimbs, N162};
 use crate::fields::scalar::F162;
 use blake3::Hasher;
 use core::arch::x86_64::*;

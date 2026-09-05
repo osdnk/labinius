@@ -1,5 +1,5 @@
 use crate::params::N;
-use crate::types::Batch32;
+use crate::ring::Batch32;
 use core::arch::x86_64::*;
 
 pub const IDENTITY: [u16; N] = {

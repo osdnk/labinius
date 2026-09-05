@@ -1,4 +1,4 @@
-use crate::api::barrett31;
+use crate::ring::barrett31;
 use crate::params::N;
 use core::arch::x86_64::*;
 

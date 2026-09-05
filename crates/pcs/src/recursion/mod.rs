@@ -5,7 +5,7 @@
 //! `R_648 = Z[X]/(X^648 - X^324 + 1)` is a free module of rank 4 over `S = Z[Y]/(Y^162 - Y^81 + 1)`
 //! with `Y = X^4`, and `S = R_162 = Z[Z]/Phi_243(Z)` under `Z = -Y`. Everything here is in the
 //! `Z`-basis, `Phi_243(Z) = Z^162 + Z^81 + 1`, i.e. `Z^162 = -Z^81 - 1`: the basis
-//! [`crate::api::PowerOfThreeRingElement`] and the challenges of [`crate::challenge`] already use.
+//! [`crate::ring::PowerOfThreeRingElement`] and the challenges of [`crate::challenge`] already use.
 //! The `S`-components of `a in R_648` are `a_l = sum_m (-1)^m a_{4m+l} Z^m`, and
 //!
 //! ```text
@@ -33,7 +33,7 @@
 //! - [`export`] : the witness handed to the LaBRADOR front end.
 //! - [`setup`]  : everything that depends on the commitment key alone, built once.
 //! - [`statement`]: the LaBRADOR statement, built the same way by prover and verifier.
-use crate::api::N162;
+use crate::ring::N162;
 use crate::fields::scalar::F162;
 use crate::params::{QS, QS_LARGE, QS_QUAD};
 use crate::scheme::{EvaluationPoint, FoldedWitness, FoldingChallenges, RowEvaluation};

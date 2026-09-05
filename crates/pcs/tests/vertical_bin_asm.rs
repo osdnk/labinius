@@ -8,9 +8,9 @@ use bin_ntt::params::*;
 use bin_ntt::rng::Rng;
 use bin_ntt::scalar;
 use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-use bin_ntt::simd::vertical_bin_asm as vb;
-use bin_ntt::simd::vertical_bin_large as vl;
-use bin_ntt::types::*;
+use bin_ntt::simd::ntt::bin_asm as vb;
+use bin_ntt::simd::ntt::bin_large as vl;
+use bin_ntt::ring::*;
 use bin_ntt::F162;
 
 // ------------------------------------------------------------------ inputs
@@ -366,7 +366,7 @@ fn barrett_lut_exhaustive() {
         if q == 9721 {
             assert_eq!(worst, 5625);
         }
-        // what `vertical_bin_large` reduces to, and what its `barrett_lut_max` sweep returns
+        // what `ntt::bin_large` reduces to, and what its `barrett_lut_max` sweep returns
         if vl::is_large(q) {
             assert_eq!(worst, vl::barrett_lut_max(q));
             assert!(worst as f64 / q as f64 <= 0.532);

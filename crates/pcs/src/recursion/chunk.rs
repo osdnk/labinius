@@ -1,6 +1,6 @@
 //! `S = Z[Z]/(Z^162 + Z^81 + 1)` over the integers, and the chunk encoding of one element.
 use super::{Blocks, Poly, SElem, BLOCKS, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, SUB};
-use crate::api::N162;
+use crate::ring::N162;
 use std::sync::LazyLock;
 
 /// `p mod Phi_243`, using `Z^162 = -Z^81 - 1`.

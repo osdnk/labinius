@@ -2,7 +2,7 @@
 //! coder, on honest rounds at several shapes and bases and on adversarial folds, and the size
 //! and wall clock the README quotes (`--nocapture`, under `taskset -c 3`).
 use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::types::{Representation, RingElement};
+use bin_ntt::ring::{Representation, RingElement};
 use bin_ntt::wire::{self, WireError};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
@@ -106,13 +106,13 @@ fn the_commitment_packer_takes_the_extremes() {
     let primes = params.primes();
     for pick in [0usize, 1, 2] {
         let data = (0..4 * params.columns())
-            .map(|i| bin_ntt::api::PowerOfThreeRingElementWithLimbs {
+            .map(|i| bin_ntt::ring::PowerOfThreeRingElementWithLimbs {
                 limbs: primes
                     .iter()
                     .map(|&q| {
                         let half = ((q - 1) / 2) as i16;
                         let value = [0, half, -half][(pick + i) % 3];
-                        bin_ntt::api::PowerOfThreeRingElement { v: [value; 162] }
+                        bin_ntt::ring::PowerOfThreeRingElement { v: [value; 162] }
                     })
                     .collect(),
             })
@@ -120,7 +120,7 @@ fn the_commitment_packer_takes_the_extremes() {
         let commitment = bin_ntt::Commitment::of(
             primes.clone(),
             params.columns(),
-            bin_ntt::CommitmentValue::Matrix(bin_ntt::api::VerticallyAlignedMatrix::new(
+            bin_ntt::CommitmentValue::Matrix(bin_ntt::ring::VerticallyAlignedMatrix::new(
                 4,
                 params.columns(),
                 data,

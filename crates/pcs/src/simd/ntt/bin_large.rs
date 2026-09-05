@@ -2,7 +2,7 @@
 //! vertical batch-of-32 layout.
 //!
 //! The tree, the lookup tables and the block layout are
-//! [`crate::simd::vertical_bin`]'s — 648 linear slots, levels 0, 1, 2 and the level-3 twiddles
+//! [`crate::simd::ntt::bin_small`]'s — 648 linear slots, levels 0, 1, 2 and the level-3 twiddles
 //! folded into 96 byte-split 16-entry tables, then four radix-3 levels, handed out as 24 blocks
 //! of 27 rows through [`BlockSink`]. What differs is the arithmetic budget.
 //!
@@ -20,7 +20,7 @@
 //! which is the whole of the schedule below:
 //!
 //! * the shuffle-port **lookup Barrett** of
-//!   [`crate::simd::vertical_bin_asm::barrett_lut_i16`] — `vpmultishiftqb`, `vpandd`, `vpord`,
+//!   [`crate::simd::ntt::bin_asm::barrett_lut_i16`] — `vpmultishiftqb`, `vpandd`, `vpord`,
 //!   `vpermb`, `vpaddw`, of which LLVM makes the middle two one `vpternlogd`: **4 uops, two of
 //!   them port-5 only and none on the multiply port**, `|r| <= q/2 + 2^10` = 0.53 q;
 //! * the two-multiply **`vpmulhrsw` Barrett** of [`crate::params::barrett_i16`] — `vpmulhrsw`,
@@ -103,19 +103,19 @@
 //! 532.8 to 513.3 at 19441**, which leaves the whole kernel 6 % above the model. Holding all 27
 //! rows of a block instead spills — uops issued per element 986 to 1180 — and costs 455.7.
 //!
-//! There is no `asm!` tail here as there is in [`crate::simd::vertical_bin_asm`]. That kernel
+//! There is no `asm!` tail here as there is in [`crate::simd::ntt::bin_asm`]. That kernel
 //! hand-schedules levels 4, 5 and 6 into one block per 27-slot block because 27 resident data
 //! registers plus its three constants exactly fill the file; this one needs eight — `q`, omega
 //! and its companion, the lookup Barrett's four and the `vpmulhrsw` one's `round(2^15/q)` — and
 //! three or four reductions per butterfly, so the 27-row register-resident tail does not exist to
 //! be written. The pipelined 18 rows above is what fits. It is otherwise the intrinsics form of
 //! the same tree, block for block and sink for sink, which is also what
-//! [`crate::simd::vertical_bin_quad`] does at 247 to 291 cycles per ring element.
+//! [`crate::simd::ntt::bin_quad`] does at 247 to 291 cycles per ring element.
 use crate::params::*;
 pub use crate::simd::transpose_f162::BinaryIndex32;
-use crate::simd::vertical_bin_asm::barrett_lut_corr;
-pub use crate::simd::vertical_bin_asm::BlockSink;
-use crate::types::*;
+use crate::simd::ntt::bin_asm::barrett_lut_corr;
+pub use crate::simd::ntt::bin_asm::BlockSink;
+use crate::ring::element::*;
 use core::arch::x86_64::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -142,7 +142,7 @@ const fn qi(q: u16) -> usize {
     }
 }
 
-/// Does `q` run this kernel rather than [`crate::simd::vertical_bin_asm`]?
+/// Does `q` run this kernel rather than [`crate::simd::ntt::bin_asm`]?
 pub const fn is_large(q: u16) -> bool {
     q == QS_LARGE[0] || q == QS_LARGE[1]
 }
@@ -905,7 +905,7 @@ unsafe fn ntt_core<const Q: u16, S: BlockSink>(input: &BinaryIndex32, sink: &mut
 /// The host must have AVX-512 F/BW/VL/VBMI; `out` is 64-byte aligned (`Batch32` is).
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 pub unsafe fn ntt_bin_batch32<const Q: u16>(input: &BinaryIndex32, out: &mut Batch32) {
-    let mut sink = crate::simd::vertical_bin_asm::OutSink(out.v.as_mut_ptr() as *mut i16);
+    let mut sink = crate::simd::ntt::bin_asm::OutSink(out.v.as_mut_ptr() as *mut i16);
     ntt_core::<Q, _>(input, &mut sink);
     out.representation = Representation::Ntt;
 }

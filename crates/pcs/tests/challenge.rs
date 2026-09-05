@@ -1,7 +1,7 @@
 //! Short challenges: determinism of the transcript, the shape of a challenge, the sign map, the
 //! canonical embedding against a naive reference, the rejection bound, and the acceptance
 //! statistics.
-use bin_ntt::api::N162;
+use bin_ntt::ring::N162;
 use bin_ntt::challenge::{
     canonical_inf_norm_sq, canonical_inf_norm_sq_naive, sample_attempt, sample_short_challenge,
     ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT, MAX_WEIGHT,
@@ -61,7 +61,7 @@ fn absorbed_data_separates() {
 
 #[test]
 fn absorb_elements_binds() {
-    use bin_ntt::api::PowerOfThreeRingElementWithLimbs;
+    use bin_ntt::ring::PowerOfThreeRingElementWithLimbs;
     let mut x = PowerOfThreeRingElementWithLimbs::zero(2);
     let mut y = PowerOfThreeRingElementWithLimbs::zero(2);
     y.limbs[1].v[161] = -3;

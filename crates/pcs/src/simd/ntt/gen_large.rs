@@ -1,12 +1,12 @@
 //! Generic-input NTT and its inverse on the vertical `Batch32` layout for `q` in [`QS_LARGE`]:
 //! the same five passes, the same tree and the same twiddle tables as
-//! [`crate::simd::vertical_gen`], with the reduction schedule the 1.87 / 1.69 head-room of these
+//! [`crate::simd::ntt::gen_small`], with the reduction schedule the 1.87 / 1.69 head-room of these
 //! primes forces.
 //!
 //! # What changes
 //!
 //! Three things, all of them consequences of `2^15 / q` (see
-//! [`crate::simd::vertical_bin_large`], which makes the same argument for the binary kernel):
+//! [`crate::simd::ntt::bin_large`], which makes the same argument for the binary kernel):
 //!
 //! * **The reduction is the lookup Barrett.** `round(2^15/q)` is 2 here, so the two-multiply
 //!   `vpmulhrsw` estimate of [`crate::params::barrett_i16`] is worthless; the shuffle-port
@@ -47,9 +47,9 @@
 //! so the schedule is the uniform one above rather than the cheapest that fits, and the recursions
 //! prove it rather than search for it.
 use crate::params::*;
-use crate::simd::vertical_bin_large as vl;
-use crate::simd::vertical_gen::{Tw, TwI};
-use crate::types::{Batch32, Representation};
+use crate::simd::ntt::bin_large as vl;
+use crate::simd::ntt::gen_small::{Tw, TwI};
+use crate::ring::{Batch32, Representation};
 use core::arch::x86_64::*;
 
 // =============================================================================================

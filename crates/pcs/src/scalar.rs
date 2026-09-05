@@ -283,7 +283,7 @@ pub fn mul_quad_slots<const Q: u16>(a: &Coeffs, b: &Coeffs) -> Coeffs {
 /// ```
 ///
 /// `E^+` the plus leaf's two rows, `E^-` the minus leaf's. The output is in the `R_162` slot order
-/// of [`crate::api::POW3_SLOT_EXP`]: `out[k][s] = y_k(theta^{v_s})`, fully reduced in `[0, q)`.
+/// of [`crate::ring::POW3_SLOT_EXP`]: `out[k][s] = y_k(theta^{v_s})`, fully reduced in `[0, q)`.
 pub fn decompose_quad_648_to_4x162<const Q: u16>(y: &Coeffs) -> [[u32; 162]; 4] {
     let q = Q as u64;
     let inv2 = inv_mod(2, q);

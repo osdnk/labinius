@@ -1,5 +1,5 @@
 use bin_ntt::Opening;
-use bin_ntt::api::Modulus;
+use bin_ntt::ring::Modulus;
 use bin_ntt::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
 use bin_ntt::fields::scalar::F162;
 use bin_ntt::recursion::Instance;
