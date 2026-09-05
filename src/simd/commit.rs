@@ -424,7 +424,7 @@ unsafe fn mod_q_pd<const Q: u16>(v: __m512d) -> __m256i {
 
 /// `x mod q` in [0, q) for 16 i32 lanes, `|x| < 2^31`.
 #[inline(always)]
-unsafe fn mod_q<const Q: u16>(x: __m512i) -> __m512i {
+pub unsafe fn mod_q<const Q: u16>(x: __m512i) -> __m512i {
     let lo = mod_q_pd::<Q>(_mm512_cvtepi32_pd(_mm512_castsi512_si256(x)));
     let hi = mod_q_pd::<Q>(_mm512_cvtepi32_pd(_mm512_extracti64x4_epi64::<1>(x)));
     _mm512_inserti64x4::<1>(_mm512_castsi256_si512(lo), hi)

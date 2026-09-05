@@ -59,12 +59,14 @@ use crate::api::{AuxData, BASE_PRIME, N162, PRIMES, SLOT_648};
 use crate::challenge::ShortChallenge;
 use crate::params::{quadratic_slots, N, QS, QS_LARGE, QS_QUAD, QUAD_CLASS_SLOT, QUAD_SLOTS};
 use crate::simd::commit as cm;
+use crate::simd::slots as sl;
 use crate::simd::vertical_bin_large as vl;
 use crate::simd::vertical_gen::{self as vg, intt_gen_batch32, ntt_gen_batch32};
 use crate::simd::vertical_gen_large as vgl;
 use crate::simd::vertical_gen_quad::{self as vgq, intt_quad_gen_batch32, ntt_quad_gen_batch32};
 use crate::types::{Batch32, Representation, RingElement};
 use core::arch::x86_64::*;
+use std::sync::OnceLock;
 
 /// The default base limb, the prime the witness transform is kept in unless [`crate::Params`]
 /// names another.
@@ -285,10 +287,10 @@ fn embed(challenges: &[ShortChallenge]) -> Vec<Batch32> {
         .map(|_| Batch32::zero(Representation::Coefficients))
         .collect();
     for (j, c) in challenges.iter().enumerate() {
-        let co = c.coeffs();
-        for m in 0..N162 {
-            let s = if m % 2 == 0 { co[m] } else { -co[m] };
-            out[j / 32].v[4 * m][j % 32] = s as i16;
+        for i in 0..c.weight {
+            let m = c.positions[i] as usize;
+            let co = 1 - 2 * ((c.signs >> i) & 1) as i16;
+            out[j / 32].v[4 * m][j % 32] = if m % 2 == 0 { co } else { -co };
         }
     }
     out
@@ -744,6 +746,163 @@ pub(crate) fn a_times_v_limb(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -
         (2917, true) => a_times_v_quad::<2917>(a, v),
         (4861, true) => a_times_v_quad::<4861>(a, v),
         (12637, true) => a_times_v_quad::<12637>(a, v),
+        _ => unreachable!("no limb with q = {q}"),
+    }
+}
+
+fn a_times_v_fwd<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    assert_eq!(a.len(), v.len());
+    let mut acc = cm::Acc::zero();
+    let ap = acc.v.as_mut_ptr() as *mut i32;
+    let mut w = Box::new(Batch32::zero(Representation::Coefficients));
+    unsafe {
+        for b in 0..a.len() {
+            w.v.copy_from_slice(&v[b].v);
+            forward_split::<Q>(&mut w);
+            let ar = a[b].v.as_ptr() as *const i16;
+            cm::mac_batch::<false>(w.v.as_ptr() as *const i16, ar, ar as *const i8, ap);
+            if (b + 1) % av_period(Q) == 0 {
+                cm::reduce_acc::<Q>(ap);
+            }
+        }
+    }
+    cm::finish::<Q>(&acc)
+}
+
+fn a_times_v_fwd_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    assert_eq!(a.len(), v.len());
+    let mut acc = cm::QuadAcc::zero();
+    let (p01, p2) = (
+        acc.p01.as_mut_ptr() as *mut i32,
+        acc.p2.as_mut_ptr() as *mut i32,
+    );
+    let mut w = Box::new(Batch32::zero(Representation::Coefficients));
+    unsafe {
+        for b in 0..a.len() {
+            w.v.copy_from_slice(&v[b].v);
+            ntt_quad_gen_batch32::<Q>(&mut w);
+            center_batch::<Q>(&mut w);
+            let ar = a[b].v.as_ptr() as *const i16;
+            cm::mac_quad_batch::<Q, false>(
+                w.v.as_ptr() as *const i16,
+                ar,
+                ar as *const i8,
+                p01,
+                p2,
+            );
+            if (b + 1) % av_period_quad(Q) == 0 {
+                cm::reduce_quad_acc::<Q>(&mut acc);
+            }
+        }
+    }
+    cm::finish_quad::<Q>(&acc)
+}
+
+pub(crate) fn a_times_v_forward(q: u16, quad: bool, a: &[Batch32], v: &[Batch32]) -> [u32; N] {
+    match (q, quad) {
+        (3889, false) => a_times_v_fwd::<3889>(a, v),
+        (9721, false) => a_times_v_fwd::<9721>(a, v),
+        (17497, false) => a_times_v_fwd::<17497>(a, v),
+        (19441, false) => a_times_v_fwd::<19441>(a, v),
+        (2917, true) => a_times_v_fwd_quad::<2917>(a, v),
+        (4861, true) => a_times_v_fwd_quad::<4861>(a, v),
+        (12637, true) => a_times_v_fwd_quad::<12637>(a, v),
+        _ => unreachable!("no limb with q = {q}"),
+    }
+}
+
+const SLOT_PRIMES: [u16; 7] = [
+    QS[0],
+    QS[1],
+    QS_LARGE[0],
+    QS_LARGE[1],
+    QS_QUAD[0],
+    QS_QUAD[1],
+    QS_QUAD[2],
+];
+
+static SLOT_TABLES: [OnceLock<Box<sl::SlotTable>>; SLOT_PRIMES.len()] =
+    [const { OnceLock::new() }; SLOT_PRIMES.len()];
+
+fn slot_prime_index(q: u16) -> usize {
+    SLOT_PRIMES
+        .iter()
+        .position(|&p| p == q)
+        .unwrap_or_else(|| unreachable!("no limb with q = {q}"))
+}
+
+fn build_slot_table(q: u16, quad: bool) -> Box<sl::SlotTable> {
+    let units: Vec<ShortChallenge> = (0..N162)
+        .map(|p| {
+            let mut c = ShortChallenge::zero();
+            c.positions[0] = p as u8;
+            c.weight = 1;
+            c
+        })
+        .collect();
+    let mut bs = challenge_batches(q, quad, &units);
+    if quad {
+        bs.iter_mut().for_each(duplicate_leaf_scalars);
+    }
+    let map = component_slots(quad);
+    let mut t = sl::SlotTable::zero();
+    for p in 0..N162 {
+        for s in 0..N162 {
+            let x = bs[p / 32].v[map[0][s] as usize][p % 32];
+            t.rows[2 * p][s] = x;
+            t.rows[2 * p + 1][s] = -x;
+        }
+    }
+    t
+}
+
+fn slot_table(q: u16, quad: bool) -> &'static sl::SlotTable {
+    SLOT_TABLES[slot_prime_index(q)].get_or_init(|| build_slot_table(q, quad))
+}
+
+fn fold_columns_limb<const Q: u16>(
+    quad: bool,
+    challenges: &[ShortChallenge],
+    columns: &[[*const i16; 4]],
+    out: &mut [[i16; N162]; 4],
+) {
+    let table = slot_table(Q, quad);
+    let mut acc = [sl::SlotAcc::zero(); 4];
+    let mut ch = sl::Ch::zero();
+    let period = sl::slot_period(Q);
+    unsafe {
+        for (j, c) in challenges.iter().enumerate() {
+            sl::challenge_slots::<Q>(table, c, &mut ch);
+            for (t, a) in acc.iter_mut().enumerate() {
+                sl::mac_slots(a, &ch, columns[j][t]);
+            }
+            if (j + 1) % period == 0 {
+                for a in acc.iter_mut() {
+                    sl::reduce_slots::<Q>(a);
+                }
+            }
+        }
+        for (t, a) in acc.iter().enumerate() {
+            sl::finish_slots::<Q>(a, &mut out[t]);
+        }
+    }
+}
+
+pub(crate) fn fold_columns_slots(
+    q: u16,
+    quad: bool,
+    challenges: &[ShortChallenge],
+    columns: &[[*const i16; 4]],
+    out: &mut [[i16; N162]; 4],
+) {
+    match (q, quad) {
+        (3889, false) => fold_columns_limb::<3889>(quad, challenges, columns, out),
+        (9721, false) => fold_columns_limb::<9721>(quad, challenges, columns, out),
+        (17497, false) => fold_columns_limb::<17497>(quad, challenges, columns, out),
+        (19441, false) => fold_columns_limb::<19441>(quad, challenges, columns, out),
+        (2917, true) => fold_columns_limb::<2917>(quad, challenges, columns, out),
+        (4861, true) => fold_columns_limb::<4861>(quad, challenges, columns, out),
+        (12637, true) => fold_columns_limb::<12637>(quad, challenges, columns, out),
         _ => unreachable!("no limb with q = {q}"),
     }
 }
