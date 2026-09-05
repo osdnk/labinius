@@ -243,7 +243,7 @@ pub fn pack_commitment(commitment: &Commitment) -> Vec<u8> {
 pub fn unpack_commitment(params: &Params, bytes: &[u8]) -> Result<Commitment, WireError> {
     let primes = params.primes();
     let columns = params.columns();
-    if params.dropped_bits > 0 {
+    if params.dropped_bits() > 0 {
         return unpack_dropped(params, bytes).map(|d| {
             Commitment::of(
                 primes,
@@ -252,7 +252,7 @@ pub fn unpack_commitment(params: &Params, bytes: &[u8]) -> Result<Commitment, Wi
             )
         });
     }
-    if params.recursion || bytes.len() != commitment_bytes(&primes, columns) {
+    if params.recursion() || bytes.len() != commitment_bytes(&primes, columns) {
         return Err(WireError::Malformed);
     }
     let mut data: Vec<PowerOfThreeRingElementWithLimbs> = (0..4 * columns)
@@ -319,8 +319,8 @@ pub fn pack_dropped(dropped: &Dropped) -> Vec<u8> {
 pub fn unpack_dropped(params: &Params, bytes: &[u8]) -> Result<Dropped, WireError> {
     let primes = params.primes();
     let columns = params.columns();
-    let dropped_bits = params.dropped_bits;
-    if params.recursion
+    let dropped_bits = params.dropped_bits();
+    if params.recursion()
         || dropped_bits == 0
         || bytes.len() != bd::bytes(&primes, columns, dropped_bits)
     {

@@ -1,5 +1,6 @@
 //! The fold: the shape and the size of the amortised witness, determinism, the opening check
 //! `A v = sum_j c_j C_j` on every modulus, and what the verifier does with a corrupted opening.
+use bin_ntt::{Opening, OpeningMessage};
 use bin_ntt::{
     Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
 };
@@ -12,6 +13,7 @@ const WITNESS_SEED: [u8; 32] = [23u8; 32];
 /// Everything one round produces, so that a test can corrupt any of it.
 struct Round {
     verifier: Verifier,
+    commitment: bin_ntt::Commitment,
     point: bin_ntt::EvaluationPoint,
     claimed_value: bin_ntt::F162,
     row_evaluation: bin_ntt::RowEvaluation,
@@ -37,6 +39,7 @@ fn round(params: Params) -> Round {
     let folded_row_value = verifier.fold_row_evaluation(&row_evaluation, &challenges);
     Round {
         verifier,
+        commitment,
         point,
         claimed_value,
         row_evaluation,
@@ -51,17 +54,23 @@ impl Round {
     fn verify(&self) -> Result<(), VerificationError> {
         self.verifier
             .verify_evaluation(&self.point, &self.claimed_value, &self.row_evaluation)?;
-        self.verifier.verify_folded_opening(
-            &self.folded_commitment,
-            &self.folded_witness,
-            &self.point,
-            &self.folded_row_value,
-        )
+        self.verifier
+            .verify_opening(
+                &self.commitment,
+                &self.challenges,
+                &self.point,
+                OpeningMessage::Clear {
+                    folded_commitment: &self.folded_commitment,
+                    folded_witness: &self.folded_witness,
+                    folded_row_value: &self.folded_row_value,
+                },
+            )
+            .map(|_| ())
     }
 }
 
 fn small() -> Params {
-    Params::new(11, 3, vec![Q9721_FS_S], false).unwrap()
+    Params::new(11, 3, vec![Q9721_FS_S], Opening::Clear).unwrap()
 }
 
 /// A limb that is not `base`, so that every round below has two of them.
@@ -148,12 +157,18 @@ fn the_folded_commitment_is_bound_to_the_challenges() {
     let folded_commitment = verifier.fold_commitment(&commitment, &other_challenges);
     let folded_row_value = verifier.fold_row_evaluation(&row_evaluation, &challenges);
     assert_eq!(
-        verifier.verify_folded_opening(
-            &folded_commitment,
-            &folded_witness,
-            &point,
-            &folded_row_value
-        ),
+        verifier
+            .verify_opening(
+                &commitment,
+                &challenges,
+                &point,
+                OpeningMessage::Clear {
+                    folded_commitment: &folded_commitment,
+                    folded_witness: &folded_witness,
+                    folded_row_value: &folded_row_value,
+                },
+            )
+            .map(|_| ()),
         Err(VerificationError::Rejected)
     );
 }
@@ -168,7 +183,7 @@ fn the_folded_commitment_is_bound_to_the_challenges() {
 #[test]
 fn any_modulus_can_be_the_base() {
     for base in Modulus::ALL {
-        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let params = Params::with_base(11, 3, base, vec![second(base)], Opening::Clear).unwrap();
         assert_eq!(params.primes(), vec![base.prime(), second(base).prime()]);
         let r = round(params);
         assert_eq!(r.verify(), Ok(()), "base {base:?}");
@@ -190,7 +205,7 @@ fn any_modulus_can_be_the_base() {
             "base {base:?}: the fold is unexpectedly large: {max}"
         );
 
-        let alone = Params::with_base(11, 3, base, vec![], false).unwrap();
+        let alone = Params::with_base(11, 3, base, vec![], Opening::Clear).unwrap();
         assert_eq!(round(alone).verify(), Ok(()), "base {base:?} alone");
     }
 }
@@ -200,7 +215,7 @@ fn any_modulus_can_be_the_base() {
 fn the_centred_range_is_the_base_modulus() {
     for base in [Q2917_Q_S, Q17497_FS_L] {
         let half = ((base.prime() - 1) / 2) as i16;
-        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let params = Params::with_base(11, 3, base, vec![second(base)], Opening::Clear).unwrap();
         let mut r = round(params);
         r.folded_witness.elements_mut()[0].v[0] = half + 1;
         assert_eq!(
@@ -215,7 +230,7 @@ fn the_centred_range_is_the_base_modulus() {
 #[test]
 fn a_corrupted_fold_is_rejected_whatever_the_base() {
     for base in Modulus::ALL {
-        let params = Params::with_base(11, 3, base, vec![second(base)], false).unwrap();
+        let params = Params::with_base(11, 3, base, vec![second(base)], Opening::Clear).unwrap();
         let mut r = round(params);
         r.folded_witness.elements_mut()[2].v[7] += 1;
         assert_eq!(
@@ -231,7 +246,7 @@ fn a_corrupted_fold_is_rejected_whatever_the_base() {
 #[test]
 fn the_fold_back_period_fires_for_every_base() {
     for base in Modulus::ALL {
-        let params = Params::with_base(14, 6, base, vec![second(base)], false).unwrap();
+        let params = Params::with_base(14, 6, base, vec![second(base)], Opening::Clear).unwrap();
         assert_eq!(round(params).verify(), Ok(()), "base {base:?}");
     }
 }

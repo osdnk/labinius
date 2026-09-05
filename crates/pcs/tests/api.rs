@@ -1,5 +1,6 @@
 //! The surface: parameter validation, witness construction, the commitment's accessors,
 //! determinism, and the workspace a prover reuses between two rounds.
+use bin_ntt::{Opening, OpeningMessage};
 use bin_ntt::{
     Modulus, ParamError, Params, Prover, PublicParameters, Transcript, Verifier, Witness,
     WitnessError, F162,
@@ -11,7 +12,7 @@ const MATRIX_SEED: [u8; 32] = [7u8; 32];
 const WITNESS_SEED: [u8; 32] = [11u8; 32];
 
 fn small() -> Params {
-    Params::new(9, 2, vec![Q9721_FS_S], false).unwrap()
+    Params::new(9, 2, vec![Q9721_FS_S], Opening::Clear).unwrap()
 }
 
 /// One round, returning whether both checks passed.
@@ -29,11 +30,15 @@ fn round(prover: &mut Prover, verifier: &Verifier, witness: &Witness) -> bool {
         .verify_evaluation(&point, &claimed_value, &row_evaluation)
         .is_ok()
         && verifier
-            .verify_folded_opening(
-                &folded_commitment,
-                &folded_witness,
+            .verify_opening(
+                &commitment,
+                &challenges,
                 &point,
-                &folded_row_value,
+                OpeningMessage::Clear {
+                    folded_commitment: &folded_commitment,
+                    folded_witness: &folded_witness,
+                    folded_row_value: &folded_row_value,
+                },
             )
             .is_ok()
 }
@@ -52,7 +57,7 @@ fn params_shape() {
 #[test]
 fn params_rejects_more_columns_than_elements() {
     assert_eq!(
-        Params::new(4, 6, vec![], false),
+        Params::new(4, 6, vec![], Opening::Clear),
         Err(ParamError::ColumnsExceedWitness)
     );
 }
@@ -60,17 +65,17 @@ fn params_rejects_more_columns_than_elements() {
 #[test]
 fn params_rejects_duplicate_moduli() {
     assert_eq!(
-        Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S, Q4861_Q_S], false),
+        Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S, Q4861_Q_S], Opening::Clear),
         Err(ParamError::DuplicateModulus(Q4861_Q_S))
     );
-    assert!(Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S], false).is_ok());
+    assert!(Params::new(12, 2, vec![Q4861_Q_S, Q9721_FS_S], Opening::Clear).is_ok());
 }
 
 #[test]
 fn params_default_to_the_base_modulus_3889() {
     assert_eq!(Params::basic().primes(), vec![3889, 9721]);
     assert_eq!(
-        Params::new(12, 2, vec![Q2917_Q_S], false).unwrap().base,
+        Params::new(12, 2, vec![Q2917_Q_S], Opening::Clear).unwrap().base,
         Q3889_FS_S
     );
 }
@@ -84,7 +89,7 @@ fn params_take_any_base() {
         } else {
             Q9721_FS_S
         };
-        let params = Params::with_base(12, 2, base, vec![extra], false).unwrap();
+        let params = Params::with_base(12, 2, base, vec![extra], Opening::Clear).unwrap();
         assert_eq!(params.base, base);
         assert_eq!(params.primes(), vec![base.prime(), extra.prime()]);
     }
@@ -93,27 +98,30 @@ fn params_take_any_base() {
 #[test]
 fn params_reject_the_base_among_the_extra_moduli() {
     assert_eq!(
-        Params::new(12, 2, vec![Q9721_FS_S, Q3889_FS_S], false),
+        Params::new(12, 2, vec![Q9721_FS_S, Q3889_FS_S], Opening::Clear),
         Err(ParamError::BaseIsAlsoExtra(Q3889_FS_S))
     );
     assert_eq!(
-        Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q2917_Q_S], false),
+        Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q2917_Q_S], Opening::Clear),
         Err(ParamError::BaseIsAlsoExtra(Q2917_Q_S))
     );
-    assert!(Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q3889_FS_S], false).is_ok());
+    assert!(
+        Params::with_base(12, 2, Q2917_Q_S, vec![Q9721_FS_S, Q3889_FS_S], Opening::Clear)
+            .is_ok()
+    );
 }
 
 #[test]
 fn params_rejects_a_column_below_one_batch() {
     assert_eq!(
-        Params::new(9, 3, vec![], false),
+        Params::new(9, 3, vec![], Opening::Clear),
         Err(ParamError::ColumnTooShort)
     );
     assert_eq!(
-        Params::new(9, 0, vec![], false),
+        Params::new(9, 0, vec![], Opening::Clear),
         Err(ParamError::TooFewColumns)
     );
-    assert!(Params::new(9, 2, vec![], false).is_ok());
+    assert!(Params::new(9, 2, vec![], Opening::Clear).is_ok());
 }
 
 #[test]

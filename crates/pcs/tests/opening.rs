@@ -1,5 +1,7 @@
 //! The recursive opening: an honest round, the two sides agreeing on the statement, the tampers
 //! the relation has to catch, and the retry the fold's norm cap makes necessary.
+use bin_ntt::Opening as OpeningMode;
+use bin_ntt::OpeningMessage;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,11 +19,11 @@ const MATRIX_SEED: [u8; 32] = [17u8; 32];
 const WITNESS_SEED: [u8; 32] = [29u8; 32];
 
 fn small(extra: Vec<Modulus>) -> Params {
-    Params::new(9, 2, extra, true).unwrap()
+    Params::new(9, 2, extra, OpeningMode::Recursive).unwrap()
 }
 
 fn small_based(base: Modulus, extra: Vec<Modulus>) -> Params {
-    Params::with_base(9, 2, base, extra, true).unwrap()
+    Params::with_base(9, 2, base, extra, OpeningMode::Recursive).unwrap()
 }
 
 /// A round driven up to the point where the opening is due.
@@ -102,13 +104,15 @@ impl Round {
         let mut transcript = self.transcript.clone();
         self.verifier
             .verify_opening(
-                &mut transcript,
                 commitment,
-                left,
-                &self.point,
-                &self.claim,
                 challenges,
-                proof,
+                &self.point,
+                OpeningMessage::Recursive {
+                    transcript: &mut transcript,
+                    left,
+                    claimed_value: &self.claim,
+                    proof,
+                },
             )
             .is_ok()
     }
@@ -164,13 +168,15 @@ fn the_stage_timings_account_for_the_run() {
     let v = round
         .verifier
         .verify_opening(
-            &mut transcript,
             &round.commitment,
-            &round.left,
-            &round.point,
-            &round.claim,
             &round.challenges,
-            &proof,
+            &round.point,
+            OpeningMessage::Recursive {
+                transcript: &mut transcript,
+                left: &round.left,
+                claimed_value: &round.claim,
+                proof: &proof,
+            },
         )
         .expect("the honest proof verifies");
     let verify = whole.elapsed();
@@ -217,7 +223,7 @@ fn a_recursive_round_takes_any_base() {
 /// The non-recursive round is untouched by the flag.
 #[test]
 fn an_honest_plain_round_is_accepted() {
-    let params = Params::new(9, 2, vec![Modulus::Q9721_FS_S], false).unwrap();
+    let params = Params::new(9, 2, vec![Modulus::Q9721_FS_S], OpeningMode::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
@@ -235,7 +241,16 @@ fn an_honest_plain_round_is_accepted() {
         .verify_evaluation(&point, &claim, &row)
         .expect("the claim");
     verifier
-        .verify_folded_opening(&folded_commitment, &folded, &point, &folded_row)
+        .verify_opening(
+            &commitment,
+            &challenges,
+            &point,
+            OpeningMessage::Clear {
+                folded_commitment: &folded_commitment,
+                folded_witness: &folded,
+                folded_row_value: &folded_row,
+            },
+        )
         .expect("the opening");
 }
 
@@ -462,7 +477,7 @@ fn a_long_fold_is_refused_and_a_short_one_is_proven() {
         0x5555_5555_5555_5555,
         0x5555_5555_5555_5555 & ((1u64 << 34) - 1),
     ]);
-    let wide = Params::new(11, 4, vec![Modulus::Q9721_FS_S], true).unwrap();
+    let wide = Params::new(11, 4, vec![Modulus::Q9721_FS_S], OpeningMode::Recursive).unwrap();
     let aligned = Witness::from_elements(&wide, vec![even; wide.witness_len()]).unwrap();
     let mut long = Round::with_witness(&wide, b"cap/long", aligned);
     let over = long.challenges_reaching_the_cap(true, 256);

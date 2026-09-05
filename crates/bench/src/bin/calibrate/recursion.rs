@@ -1,5 +1,6 @@
 //! The shape of the encoded relation at `Params::basic()`: sizes, norms, carries and the
 //! no-wraparound margins.
+use bin_ntt::Opening;
 use bin_ntt::recursion::{Cap, Instance, BLOCKS, DEG, Q};
 use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
@@ -23,7 +24,7 @@ pub fn the_encoding_at_the_basic_parameters() {
                 .collect()
         })
         .unwrap_or_else(|_| vec![Modulus::Q9721_FS_S]);
-    let params = Params::new(18, 8, extra, true).unwrap();
+    let params = Params::new(18, 8, extra, Opening::Recursive).unwrap();
     let t = Instant::now();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let setup_ms = ms(t);

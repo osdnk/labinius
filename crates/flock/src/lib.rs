@@ -2,6 +2,7 @@ pub mod circuit;
 pub mod piop;
 pub mod switch;
 
+use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage, DROPPED_BITS};
 use bin_ntt::fields::scalar::{B128 as SB, F162};
 use bin_ntt::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
@@ -99,11 +100,19 @@ pub struct Session {
 
 impl Session {
     pub fn new(recursion: bool, matrix_seed: [u8; 32]) -> Session {
-        Session::with_params(Params::sized(recursion), matrix_seed)
+        let opening = if recursion {
+            OpeningMode::Recursive
+        } else {
+            OpeningMode::Clear
+        };
+        Session::with_params(Params::sized(opening), matrix_seed)
     }
 
     pub fn bd(matrix_seed: [u8; 32]) -> Session {
-        Session::with_params(Params::sized_bd(), matrix_seed)
+        let opening = OpeningMode::BitDropped {
+            bits: DROPPED_BITS,
+        };
+        Session::with_params(Params::sized(opening), matrix_seed)
     }
 
     pub fn with_params(params: Params, matrix_seed: [u8; 32]) -> Session {
@@ -184,7 +193,7 @@ impl Session {
 
         let start = Instant::now();
         let row = lifted.row_evaluate(&point);
-        let opened = if self.params.recursion {
+        let opened = if self.params.recursion() {
             let left = self.prover.commit_left_expansion(&row);
             let challenges = self
                 .verifier
@@ -293,13 +302,15 @@ impl Session {
                     .derive_folding_challenges(&mut opening_transcript, left);
                 self.verifier
                     .verify_opening(
-                        &mut opening_transcript,
                         &commitment,
-                        left,
-                        &point,
-                        &proof.claimed_value,
                         &challenges,
-                        opening,
+                        &point,
+                        OpeningMessage::Recursive {
+                            transcript: &mut opening_transcript,
+                            left,
+                            claimed_value: &proof.claimed_value,
+                            proof: opening,
+                        },
                     )
                     .map_err(Error::Opening)?;
             }
@@ -326,18 +337,24 @@ impl Session {
         point: &EvaluationPoint,
     ) -> Result<(), VerificationError> {
         let folded_row = self.verifier.fold_row_evaluation(row, challenges);
-        if self.params.dropped_bits > 0 {
-            return self.verifier.verify_folded_opening_bd(
-                commitment,
-                challenges,
-                folded,
-                point,
-                &folded_row,
-            );
-        }
-        let folded_commitment = self.verifier.fold_commitment(commitment, challenges);
+        let folded_commitment = match self.params.opening {
+            OpeningMode::Clear => Some(self.verifier.fold_commitment(commitment, challenges)),
+            _ => None,
+        };
+        let message = match &folded_commitment {
+            Some(folded_commitment) => OpeningMessage::Clear {
+                folded_commitment,
+                folded_witness: folded,
+                folded_row_value: &folded_row,
+            },
+            None => OpeningMessage::BitDropped {
+                folded_witness: folded,
+                folded_row_value: &folded_row,
+            },
+        };
         self.verifier
-            .verify_folded_opening(&folded_commitment, folded, point, &folded_row)
+            .verify_opening(commitment, challenges, point, message)
+            .map(|_| ())
     }
 }
 

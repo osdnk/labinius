@@ -17,6 +17,7 @@
 //!
 //! `the_fold_per_base` is the wall clock of `Prover::fold` at the same shape with each modulus in
 //! turn as the base limb.
+use bin_ntt::Opening;
 use bin_ntt::api::{AuxData, CommitmentKey, BASE_PRIME};
 use bin_ntt::params::N;
 use bin_ntt::simd::commit as cm;
@@ -201,7 +202,7 @@ pub fn kernel_fingerprints() {
 
 /// One fold at the `Params::basic()` shape over `base`, the median of `reps`, in milliseconds.
 fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
-    let params = Params::with_base(18, 8, base, extra, false).unwrap();
+    let params = Params::with_base(18, 8, base, extra, Opening::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), [0x5A; 32]);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);

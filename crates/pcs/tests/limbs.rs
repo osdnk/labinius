@@ -1,5 +1,6 @@
 //! The moduli lists: the whole round over the base modulus alone and over every combination of
 //! extra moduli the API offers, splitting and quadratic-slot alike.
+use bin_ntt::{Opening, OpeningMessage};
 use bin_ntt::{
     Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
 };
@@ -31,7 +32,7 @@ fn round(
     Result<(), VerificationError>,
     Result<(), VerificationError>,
 ) {
-    let params = Params::new(10, 2, extra_moduli.to_vec(), false).unwrap();
+    let params = Params::new(10, 2, extra_moduli.to_vec(), Opening::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
@@ -67,12 +68,18 @@ fn round(
     (
         commitment.moduli().to_vec(),
         verifier.verify_evaluation(&point, &claimed_value, &row_evaluation),
-        verifier.verify_folded_opening(
-            &folded_commitment,
-            &folded_witness,
-            &point,
-            &folded_row_value,
-        ),
+        verifier
+            .verify_opening(
+                &commitment,
+                &challenges,
+                &point,
+                OpeningMessage::Clear {
+                    folded_commitment: &folded_commitment,
+                    folded_witness: &folded_witness,
+                    folded_row_value: &folded_row_value,
+                },
+            )
+            .map(|_| ()),
     )
 }
 

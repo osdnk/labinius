@@ -1,3 +1,5 @@
+use bin_ntt::{Opening, OpeningMessage};
+use bin_ntt::scheme::DROPPED_BITS;
 use bin_ntt::bd;
 use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
@@ -7,18 +9,18 @@ pub fn run() {
     let rounds: u64 = std::env::var("ROUNDS")
         .map(|s| s.parse().unwrap())
         .unwrap_or(200);
-    let params = Params::sized_bd();
+    let params = Params::sized(Opening::BitDropped { bits: DROPPED_BITS });
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
-    let expected = bd::expected_normsq(params.columns(), params.dropped_bits);
+    let expected = bd::expected_normsq(params.columns(), params.dropped_bits());
     println!(
         "size {} witness 2^{} columns {} moduli {:?} dropped {} expected normsq {:.4e} cap {}",
         bin_ntt::scheme::SIZE,
         params.witness_log_len,
         params.columns(),
         params.primes(),
-        params.dropped_bits,
+        params.dropped_bits(),
         expected,
         params.bd_cap()
     );
@@ -46,7 +48,15 @@ pub fn run() {
         .expect("the residual of an honest round");
         let value = verifier.fold_row_evaluation(&row, &challenges);
         let ok = verifier
-            .verify_folded_opening_bd(&commitment, &challenges, &folded, &point, &value)
+            .verify_opening(
+                &commitment,
+                &challenges,
+                &point,
+                OpeningMessage::BitDropped {
+                    folded_witness: &folded,
+                    folded_row_value: &value,
+                },
+            )
             .is_ok()
             && verifier.verify_evaluation(&point, &claim, &row).is_ok();
         if !ok {
