@@ -3,7 +3,7 @@
 //! `cargo run --release --offline`, pinned with `taskset -c 2`.
 use bin_ntt::scheme::suite_from_args;
 use bin_ntt::{Opening, OpeningMessage, Suite};
-use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, row};
+use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, pinned, row};
 use bin_ntt::wire;
 use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
@@ -127,7 +127,8 @@ fn plain(suite: &Suite) {
 
     let moduli: Vec<String> = commitment.moduli().iter().map(|q| q.to_string()).collect();
     println!(
-        "bin-ntt, core {CPU}, one thread, moduli {}",
+        "bin-ntt, core {}, one thread, moduli {}",
+        pinned(),
         moduli.join(", ")
     );
     println!("\n=== recursion off ===");

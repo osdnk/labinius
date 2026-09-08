@@ -30,6 +30,7 @@ fn main() {
     }
 
     let status = Command::new("make")
+        .env("CC", std::env::var("CC").unwrap_or_else(|_| "cc".into()))
         .args([
             "-C",
             &labrador_dir,
@@ -56,14 +57,16 @@ fn main() {
     sources.sort();
     assert!(!sources.is_empty(), "no C sources in {csrc_dir}");
 
+    let cc = std::env::var("CC").unwrap_or_else(|_| "gcc".into());
     let mut objects = Vec::new();
     for src in &sources {
         let obj = out_dir.join(src.file_stem().unwrap()).with_extension("o");
-        let status = Command::new("gcc")
+        let status = Command::new(&cc)
             .args([
                 "-std=c2x",
                 "-O3",
                 "-march=native",
+                "-fPIE",
                 "-mtune=native",
                 "-fwrapv",
                 "-Wall",

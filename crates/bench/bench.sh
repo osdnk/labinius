@@ -74,6 +74,7 @@ run() {
 }
 
 export RAYON_NUM_THREADS=1
+export BENCH_CPU=$CPU
 cd "$(dirname "$0")/../.." || exit 1
 
 total_gb=$(free -g | awk '/^Mem:/{print $2}')

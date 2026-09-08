@@ -1,6 +1,6 @@
 use bin_ntt::scheme::suite_from_args;
 use pcs_competitors::{
-    basefold, ligerito_flock, pin, random_u64s, whir, Row, CPU, WITNESS_SEED,
+    basefold, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, WITNESS_SEED,
 };
 
 fn print(rows: &[Row]) {
@@ -50,7 +50,8 @@ fn main() {
 
     println!(
         "three hash-based PCSs on 2^{log_len} B128, opened at one point of {log_len} \
-         coordinates, core {CPU}, one thread"
+         coordinates, core {}, one thread",
+        pinned()
     );
     print(&rows);
 }

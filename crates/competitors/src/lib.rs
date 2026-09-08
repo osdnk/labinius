@@ -4,7 +4,7 @@ pub mod whir;
 
 use bin_ntt_bench::Rng;
 use bin_ntt::Suite;
-pub use bin_ntt_bench::{median_of, ms as milliseconds, once, pin};
+pub use bin_ntt_bench::{median_of, ms as milliseconds, once, pin, pinned};
 
 pub fn log_len(suite: &Suite) -> usize {
     suite.witness_log_len as usize
