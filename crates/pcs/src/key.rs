@@ -177,11 +177,12 @@ impl CommitmentKey {
     /// `r` must be a power of two and `witness.len()` must be `r * self.len_f162()`. Chunk `c` is
     /// `witness[c * len .. (c + 1) * len]`; it is read as `len / 4` binary ring elements of
     /// `R_648` (`crate::f162`), sliced once, and transformed and multiplied into the inner product
-    /// `y = sum_i A_i * NTT(w_i)` once per limb. Each limb's `y` is then split into its four
-    /// `R_162` components, which become column `c` of the returned 4 x `r` matrix. The transform
-    /// of every ring element modulo the base limb is written out as it goes, by the same block
-    /// sink that feeds the base multiplication and with non-temporal stores, so keeping it costs
-    /// a memory stream rather than a second transform.
+    /// `y = sum_i A_i * NTT(w_i)` once per limb. The chunks are taken [`cm::GROUP`] at a time
+    /// against one pass over `A` (`crate::simd::commit`). Each limb's `y` is then
+    /// split into its four `R_162` components, which become column `c` of the returned 4 x `r`
+    /// matrix. The transform of every ring element modulo the base limb is written out as it
+    /// goes, by the same block sink that feeds the base multiplication and with non-temporal
+    /// stores, so keeping it costs a memory stream rather than a second transform.
     ///
     /// The 85 MB an [`AuxData`] holds for a 2^16-element witness is one `mmap` and 20 736 first
     /// touches, ~20 ms of page faults the kernel charges to whoever writes the pages first — more
@@ -204,21 +205,29 @@ impl CommitmentKey {
             v.clear();
         }
         let limbs = self.limb_list();
-        let mut st = cm::Scratch::new(&limbs);
-        let mut raw = vec![[0u32; N]; limbs.len()];
+        let nl = limbs.len();
+        let g = cm::GROUP.min(r);
+        let mut st = cm::Scratch::with_group(&limbs, g);
+        let mut raw = vec![[0u32; N]; g * nl];
         let mut data = Vec::with_capacity(4 * r);
-        for c in 0..r {
-            let chunk = &witness[c * self.len_f162..(c + 1) * self.len_f162];
-            cm::commit_limbs_into(
-                chunk,
+        let mut chunks: [&[F162]; cm::GROUP] = [&[]; cm::GROUP];
+        for c0 in (0..r).step_by(g) {
+            for (i, chunk) in chunks[..g].iter_mut().enumerate() {
+                let c = c0 + i;
+                *chunk = &witness[c * self.len_f162..(c + 1) * self.len_f162];
+            }
+            cm::commit_limbs_group(
+                &chunks[..g],
                 &limbs,
-                Some(&mut aux.batches[c * bpc..(c + 1) * bpc]),
+                Some(&mut aux.batches[c0 * bpc..(c0 + g) * bpc]),
                 &mut st,
                 &mut raw,
             );
-            data.extend(self.components(&raw));
-            for (k, y) in raw.iter().enumerate() {
-                aux.raw[k].push(*y);
+            for y in raw.chunks_exact(nl) {
+                data.extend(self.components(y));
+                for (k, v) in y.iter().enumerate() {
+                    aux.raw[k].push(*v);
+                }
             }
         }
         VerticallyAlignedMatrix::new(4, r, data)

@@ -86,6 +86,16 @@
 //! [`batch_loop`] is compiled both ways around it (measured, 2^18 `F162`, base limb: 16 columns
 //! 7.8 ms with the prefetch against 8.3 without, 256 columns 7.1 against 7.3).
 //!
+//! # Blocking the columns
+//!
+//! [`GROUP`] columns share one pass over A: the batch is the outer loop and the group the inner
+//! one, so each 41472-byte batch of each limb is loaded once and multiplied into `G`
+//! accumulators before the next is touched, and A is read `r / G` times per commitment instead
+//! of `r` (suite l: 4 GB out of L3 becomes 0.5 GB). What it costs is `G` sets of accumulators
+//! resident in L2 instead of one in L1, 87 KB per column for suite l's three limbs. Measured
+//! commit at suite l: 314.7 ms at `G = 1`, 302.2 at 2, 297.0 at 4, 295.9 at 8, 301.6 at 16
+//! (1.4 MB of accumulators, past this core's L2).
+//!
 //! # Measured (i7-11850H, one core, 2^18 F162 = 2^16 ring elements in 256 columns)
 //!
 //! `commit` runs at 7.2 ms for the base limb alone and adds 6.0 (2917), 6.3 (4861), 6.5 (9721),
@@ -486,7 +496,7 @@ impl<const PF: bool> BlockSink for Mac<PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac27::<true>(
+        mac27::<PF>(
             w,
             self.a.add(32 * 27 * blk),
             self.apf.add(64 * 27 * blk),
@@ -517,7 +527,7 @@ impl<const PF: bool> BlockSink for MacKeep<PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac27::<true>(
+        mac27::<PF>(
             w,
             self.a.add(32 * 27 * blk),
             self.apf.add(64 * 27 * blk),
@@ -867,7 +877,7 @@ impl<const Q: u16, const PF: bool> QBlockSink for MacQ<Q, PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac_quad18::<Q, true>(
+        mac_quad18::<Q, PF>(
             w,
             self.a.add(32 * 18 * blk),
             self.apf.add(64 * 18 * blk),
@@ -897,7 +907,7 @@ impl<const Q: u16, const PF: bool> QBlockSink for MacKeepQ<Q, PF> {
 
     #[target_feature(enable = "avx512f,avx512bw")]
     unsafe fn block(&mut self, blk: usize, w: *const i16) {
-        mac_quad18::<Q, true>(
+        mac_quad18::<Q, PF>(
             w,
             self.a.add(32 * 18 * blk),
             self.apf.add(64 * 18 * blk),
@@ -1008,16 +1018,24 @@ impl LimbAcc {
     }
 }
 
-/// The accumulators of one limb list, allocated once and reused for every chunk a key commits to
-/// (21.5 KB per splitting limb, 32.3 KB per quadratic one; they are cleared, not reallocated).
+/// The accumulators of one limb list for `g` columns at a time, allocated once and reused for
+/// every group a key commits to (21.5 KB per splitting limb, 32.3 KB per quadratic one, so 87 KB
+/// per column for the three limbs of suite l; they are cleared, not reallocated).
+/// `accs[c * limbs + k]` is column `c` of the group, limb `k`.
 pub struct Scratch {
     accs: Vec<LimbAcc>,
+    limbs: usize,
 }
 
 impl Scratch {
     pub fn new(limbs: &[Limb]) -> Scratch {
+        Scratch::with_group(limbs, 1)
+    }
+    pub fn with_group(limbs: &[Limb], g: usize) -> Scratch {
+        assert!(g >= 1 && g <= GROUP, "at most {GROUP} columns per pass");
         Scratch {
-            accs: limbs.iter().map(LimbAcc::new).collect(),
+            accs: (0..g).flat_map(|_| limbs.iter().map(LimbAcc::new)).collect(),
+            limbs: limbs.len(),
         }
     }
 }
@@ -1075,24 +1093,31 @@ unsafe fn split_batch<const Q: u16, const KEEP: bool, const PF: bool>(
     }
 }
 
-/// The commitment over a list of limbs: one front end (the index rows depend neither on q nor on
-/// the tree) and one kernel pass per limb per batch, each with its own accumulator, fold-back
-/// period and A prefetch.
+/// The commitment of a group of columns against the same key: one front end per column per batch
+/// (the index rows depend neither on q nor on the tree) and one kernel pass per limb, each with
+/// its own accumulator, fold-back period and A prefetch.
+///
+/// The batch is the outer loop and the group the inner one, so each of `A`'s `nb * limbs` batches
+/// is loaded once per group and used `chunks.len()` times out of L1/L2.
 ///
 /// `limbs[0]` is the base limb; `w`, when given, receives the transform of every ring element
 /// modulo `limbs[0].q` (non-temporal stores out of that limb's block sink), which is what
-/// [`crate::fold`] consumes — 648 rows whichever tree that limb runs. `out` receives one 648-row
-/// commitment per limb, in `[0, q)`.
-pub fn commit_limbs_into(
-    elems: &[F162],
+/// [`crate::fold`] consumes — 648 rows whichever tree that limb runs, `nb` batches per column in
+/// column order. `out` receives one 648-row commitment per limb per column, in `[0, q)`, at
+/// `out[c * limbs.len() + k]`.
+pub fn commit_limbs_group(
+    chunks: &[&[F162]],
     limbs: &[Limb],
     w: Option<&mut [Batch32]>,
     st: &mut Scratch,
     out: &mut [[u32; N]],
 ) {
     assert!(!limbs.is_empty(), "at least the base limb");
+    let g = chunks.len();
     let nb = limbs[0].a.len();
-    check(elems, limbs[0].a);
+    for c in chunks {
+        check(c, limbs[0].a);
+    }
     for l in limbs {
         assert_eq!(
             l.a.len(),
@@ -1101,22 +1126,41 @@ pub fn commit_limbs_into(
         );
     }
     assert!(
-        st.accs.len() == limbs.len() && out.len() == limbs.len(),
-        "the scratch and the output do not match this limb list"
+        st.limbs == limbs.len() && g >= 1 && g * limbs.len() <= st.accs.len(),
+        "the scratch does not match this limb list and group"
+    );
+    assert_eq!(
+        out.len(),
+        g * limbs.len(),
+        "one output per limb per column of the group"
     );
     assert!(limbs.len() <= MAX_LIMBS, "at most {MAX_LIMBS} limbs");
     let keep = w.map(|w| {
-        assert_eq!(w.len(), nb, "one output batch per A batch");
+        assert_eq!(w.len(), g * nb, "one output batch per A batch per column");
         w.as_mut_ptr()
     });
-    for a in st.accs.iter_mut() {
+    for a in st.accs[..g * limbs.len()].iter_mut() {
         a.clear();
     }
-    unsafe { commit_limbs_core(elems, limbs, keep, st, out) };
+    unsafe { commit_limbs_core(chunks, limbs, keep, st, out) };
+}
+
+/// [`commit_limbs_group`] for a single column.
+pub fn commit_limbs_into(
+    elems: &[F162],
+    limbs: &[Limb],
+    w: Option<&mut [Batch32]>,
+    st: &mut Scratch,
+    out: &mut [[u32; N]],
+) {
+    commit_limbs_group(&[elems], limbs, w, st, out);
 }
 
 /// The base limb and the six [`crate::Modulus`]s: the widest limb list there is.
 pub const MAX_LIMBS: usize = 7;
+
+/// Columns per pass over `A`: 696 KB of accumulators for three limbs (see the module header).
+pub const GROUP: usize = 8;
 
 /// One limb, resolved: everything the batch loop needs as plain words, so that the loop does not
 /// walk a `Vec` of boxed accumulators per batch.
@@ -1126,80 +1170,98 @@ struct Run {
     quad: bool,
     a: *const Batch32,
     nb: usize,
-    acc: *mut i32,
-    acc2: *mut i32,
+}
+
+/// One column of the group, resolved: where each limb accumulates it and where its base limb's
+/// transform is kept.
+#[derive(Clone, Copy)]
+struct Col<'a> {
+    elems: &'a [F162],
+    acc: [*mut i32; MAX_LIMBS],
+    acc2: [*mut i32; MAX_LIMBS],
     keep: *mut Batch32,
 }
 
-/// The batch loop of [`commit_limbs_into`], with the whole feature set enabled so that the
+/// The batch loop of [`commit_limbs_group`], with the whole feature set enabled so that the
 /// per-limb entry points inline into it exactly as the two-prime loop they replace did.
 ///
 /// # Safety
-/// The arguments are [`commit_limbs_into`]'s, already checked; `keep` is `nb` writable batches.
+/// The arguments are [`commit_limbs_group`]'s, already checked; `keep` is `g * nb` writable
+/// batches.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
 unsafe fn commit_limbs_core(
-    elems: &[F162],
+    chunks: &[&[F162]],
     limbs: &[Limb],
     keep: Option<*mut Batch32>,
     st: &mut Scratch,
     out: &mut [[u32; N]],
 ) {
     let nb = limbs[0].a.len();
+    let nl = limbs.len();
+    let g = chunks.len();
     let mut plan = [Run {
         q: 0,
         quad: false,
         a: core::ptr::null(),
         nb,
-        acc: core::ptr::null_mut(),
-        acc2: core::ptr::null_mut(),
-        keep: core::ptr::null_mut(),
     }; MAX_LIMBS];
-    for (li, (l, acc)) in limbs.iter().zip(st.accs.iter_mut()).enumerate() {
-        let (p, p2) = match acc {
-            LimbAcc::Split(a) => (a.v.as_mut_ptr() as *mut i32, core::ptr::null_mut()),
-            LimbAcc::Quad(a) => (
-                a.p01.as_mut_ptr() as *mut i32,
-                a.p2.as_mut_ptr() as *mut i32,
-            ),
-        };
+    for (li, l) in limbs.iter().enumerate() {
         plan[li] = Run {
             q: l.q,
             quad: l.quad,
             a: l.a.as_ptr(),
             nb,
-            acc: p,
-            acc2: p2,
-            keep: if li == 0 {
-                keep.unwrap_or(core::ptr::null_mut())
-            } else {
-                core::ptr::null_mut()
-            },
         };
     }
-    let runs = &plan[..limbs.len()];
+    let runs = &plan[..nl];
 
-    if nb * limbs.len() * BATCH_BYTES > A_PREFETCH_BYTES {
-        batch_loop::<true>(elems, runs, nb);
-    } else {
-        batch_loop::<false>(elems, runs, nb);
-    }
-    if keep.is_some() {
-        _mm_sfence();
-        for b in 0..nb {
-            (*keep.unwrap().add(b)).representation = Representation::Ntt;
+    let mut group = [Col {
+        elems: &[],
+        acc: [core::ptr::null_mut(); MAX_LIMBS],
+        acc2: [core::ptr::null_mut(); MAX_LIMBS],
+        keep: core::ptr::null_mut(),
+    }; GROUP];
+    for (c, col) in group[..g].iter_mut().enumerate() {
+        col.elems = chunks[c];
+        col.keep = keep.map_or(core::ptr::null_mut(), |k| k.add(c * nb));
+        for li in 0..nl {
+            let (p, p2) = match &mut st.accs[c * nl + li] {
+                LimbAcc::Split(a) => (a.v.as_mut_ptr() as *mut i32, core::ptr::null_mut()),
+                LimbAcc::Quad(a) => (
+                    a.p01.as_mut_ptr() as *mut i32,
+                    a.p2.as_mut_ptr() as *mut i32,
+                ),
+            };
+            col.acc[li] = p;
+            col.acc2[li] = p2;
         }
     }
-    for (li, l) in limbs.iter().enumerate() {
-        out[li] = match &st.accs[li] {
-            LimbAcc::Split(a) => dispatch_limb!(l.q, split |Q| finish::<Q>(a)),
-            LimbAcc::Quad(a) => dispatch_limb!(l.q, quad |Q| finish_quad::<Q>(a)),
-        };
+    let cols = &group[..g];
+
+    if nb * nl * BATCH_BYTES > A_PREFETCH_BYTES {
+        batch_loop::<true>(cols, runs, nb);
+    } else {
+        batch_loop::<false>(cols, runs, nb);
+    }
+    if let Some(k) = keep {
+        _mm_sfence();
+        for b in 0..g * nb {
+            (*k.add(b)).representation = Representation::Ntt;
+        }
+    }
+    for c in 0..g {
+        for (li, l) in limbs.iter().enumerate() {
+            out[c * nl + li] = match &st.accs[c * nl + li] {
+                LimbAcc::Split(a) => dispatch_limb!(l.q, split |Q| finish::<Q>(a)),
+                LimbAcc::Quad(a) => dispatch_limb!(l.q, quad |Q| finish_quad::<Q>(a)),
+            };
+        }
     }
 }
 
 /// Bytes of `A` one batch of one limb holds, and the footprint above which the matrix no longer
 /// survives in cache from one column to the next, so that the [`mac27`] prefetch is worth its
-/// uops. `A` is `nb * limbs * BATCH_BYTES` per column and is re-read by every column; at
+/// uops. `A` is `nb * limbs * BATCH_BYTES` and is re-read by every group of [`GROUP`] columns; at
 /// 2^18 `F162` in 256 columns that is 331 KB per limb, and issuing the 648 `prefetcht1` per batch
 /// then costs 0.2 ms per limb instead of saving anything (measured, both trees), while at 16
 /// columns — 5 MB per limb — dropping them costs 0.5 ms. The crossover on this core is a few MB;
@@ -1207,44 +1269,69 @@ unsafe fn commit_limbs_core(
 pub const BATCH_BYTES: usize = 32 * N * 2;
 pub const A_PREFETCH_BYTES: usize = 4 << 20;
 
-/// The batch loop: one slicing pass per batch, then one kernel pass per limb, each into its own
-/// accumulator.
+/// The batch loop: for every batch, one slicing pass and one kernel pass per limb per column of
+/// the group, each into that column's own accumulator.
+///
+/// The prefetch of batch `b + PF_DIST` is issued from the last column of the group only.
 ///
 /// # Safety
-/// `runs` describes limbs whose `A`, accumulators and `keep` buffers all cover `nb` batches, and
-/// `elems` is `128 * nb` `F162`.
+/// `runs` describes limbs whose `A` covers `nb` batches, `cols` accumulators and `keep` buffers
+/// matching them, and every column's `elems` is `128 * nb` `F162`.
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
-unsafe fn batch_loop<const PF: bool>(elems: &[F162], runs: &[Run], nb: usize) {
+unsafe fn batch_loop<const PF: bool>(cols: &[Col], runs: &[Run], nb: usize) {
     let mut idx = BinaryIndex32::zero();
     let mut buf: core::mem::MaybeUninit<Blk27> = core::mem::MaybeUninit::uninit();
     let bp = buf.as_mut_ptr() as *mut i16;
     for b in 0..nb {
-        slice_f162_into(chunk128(elems, b), &mut idx);
-        for r in runs.iter() {
-            let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
-            let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
-            let o = if r.keep.is_null() {
-                core::ptr::null_mut()
+        for (c, col) in cols.iter().enumerate() {
+            slice_f162_into(chunk128(col.elems, b), &mut idx);
+            if PF && c + 1 == cols.len() {
+                column_batch::<true>(&idx, col, runs, bp, b);
             } else {
-                (*r.keep.add(b)).v.as_mut_ptr() as *mut i16
-            };
-            if r.quad {
-                dispatch_limb!(r.q, quad |Q| {
-                    if o.is_null() {
-                        quad_batch::<Q, false, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    } else {
-                        quad_batch::<Q, true, PF>(&idx, cur, nxt, bp, r.acc, r.acc2, o, b + 1)
-                    }
-                })
-            } else {
-                dispatch_limb!(r.q, split |Q| {
-                    if o.is_null() {
-                        split_batch::<Q, false, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    } else {
-                        split_batch::<Q, true, PF>(&idx, cur, nxt, bp, r.acc, o, b + 1)
-                    }
-                })
+                column_batch::<false>(&idx, col, runs, bp, b);
             }
+        }
+    }
+}
+
+/// One column's batch `b`, already sliced into `idx`: one kernel pass per limb into that
+/// column's accumulators, keeping the base limb's transform when the column asks for it.
+///
+/// # Safety
+/// As [`batch_loop`]; `b < nb`.
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi,avx512vbmi2,avx512vnni,gfni")]
+unsafe fn column_batch<const PF: bool>(
+    idx: &BinaryIndex32,
+    col: &Col,
+    runs: &[Run],
+    bp: *mut i16,
+    b: usize,
+) {
+    for (li, r) in runs.iter().enumerate() {
+        let cur = (*r.a.add(b)).v.as_ptr() as *const i16;
+        let nxt = (*r.a.add((b + PF_DIST).min(r.nb - 1))).v.as_ptr() as *const i8;
+        let o = if li > 0 || col.keep.is_null() {
+            core::ptr::null_mut()
+        } else {
+            (*col.keep.add(b)).v.as_mut_ptr() as *mut i16
+        };
+        let (acc, acc2) = (col.acc[li], col.acc2[li]);
+        if r.quad {
+            dispatch_limb!(r.q, quad |Q| {
+                if o.is_null() {
+                    quad_batch::<Q, false, PF>(idx, cur, nxt, bp, acc, acc2, o, b + 1)
+                } else {
+                    quad_batch::<Q, true, PF>(idx, cur, nxt, bp, acc, acc2, o, b + 1)
+                }
+            })
+        } else {
+            dispatch_limb!(r.q, split |Q| {
+                if o.is_null() {
+                    split_batch::<Q, false, PF>(idx, cur, nxt, bp, acc, o, b + 1)
+                } else {
+                    split_batch::<Q, true, PF>(idx, cur, nxt, bp, acc, o, b + 1)
+                }
+            })
         }
     }
 }
