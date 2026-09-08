@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 pub use bin_ntt::rng::Rng;
@@ -6,10 +7,25 @@ extern "C" {
     fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;
 }
 
+static PINNED: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Pin the thread to `cpu`, or to `$BENCH_CPU` when set; a pin that fails aborts the bench
+/// rather than let it run wherever the scheduler puts it.
 pub fn pin(cpu: usize) {
+    let cpu = std::env::var("BENCH_CPU")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(cpu);
     let mut mask = [0u64; 16];
     mask[cpu / 64] |= 1 << (cpu % 64);
-    unsafe { sched_setaffinity(0, 128, mask.as_ptr()) };
+    let rc = unsafe { sched_setaffinity(0, 128, mask.as_ptr()) };
+    assert!(rc == 0, "cannot pin to cpu {cpu}; set BENCH_CPU to a cpu of this allocation");
+    PINNED.store(cpu, Ordering::Relaxed);
+}
+
+/// The cpu [`pin`] pinned to.
+pub fn pinned() -> usize {
+    PINNED.load(Ordering::Relaxed)
 }
 
 pub fn ms(t: Instant) -> f64 {

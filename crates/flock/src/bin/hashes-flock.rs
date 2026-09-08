@@ -2,7 +2,7 @@ use bin_ntt_flock::circuit::LOG_INV_RATE;
 use bin_ntt_flock::{Hash, Instance, ProverTiming, Session, Sizes};
 use bin_ntt::scheme::suite_from_args;
 use bin_ntt::Suite;
-use bin_ntt_bench::{once, peak_rss, pin, table_row as row};
+use bin_ntt_bench::{once, peak_rss, pin, pinned, table_row as row};
 use flock_transcript::challenger::FsChallenger;
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -78,8 +78,9 @@ fn compare(hash: Hash, suite: &Suite) {
 
     let r1cs = instance.r1cs();
     println!(
-        "bin-ntt over flock {}, core {CPU}, one thread, size {}",
+        "bin-ntt over flock {}, core {}, one thread, size {}",
         hash.name(),
+        pinned(),
         suite.name
     );
     println!(

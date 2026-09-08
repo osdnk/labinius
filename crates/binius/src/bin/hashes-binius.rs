@@ -3,7 +3,7 @@ use bin_ntt_binius::stock::{Stock, LOG_INV_RATE};
 use bin_ntt_binius::{Circuit, Hash, Session, Sizes};
 use bin_ntt::scheme::suite_from_args;
 use bin_ntt::Suite;
-use bin_ntt_bench::{once, peak_rss, pin, table_row as row};
+use bin_ntt_bench::{once, peak_rss, pin, pinned, table_row as row};
 
 /// The seed the public matrix `A` is expanded from.
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -65,8 +65,9 @@ fn compare(hash: Hash, suite: &Suite) {
         .expect("the honest proof verifies");
 
     println!(
-        "bin-ntt over binius64 {}, core {CPU}, one thread, size {}",
+        "bin-ntt over binius64 {}, core {}, one thread, size {}",
         hash.name(),
+        pinned(),
         suite.name
     );
     println!(
