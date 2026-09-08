@@ -21,12 +21,14 @@
 //! # What it costs
 //!
 //! [`CommitmentKey::commit_into_aux`](crate::ring::CommitmentKey::commit_into_aux) already left
-//! `NTT_3889(W)` in memory, so the fold never transforms the witness again: it reads those 85 MB
-//! once, which is the DRAM floor of the step. The accumulator is `len_ring/32 x 648` 32-lane i32 groups
-//! (663 KB for `len_ring = 256`, L2-resident) and every chunk contributes one `vpmaddwd` per slot
-//! vector; the small transform's own lazy reduction (`|W| <= 7.5 q`) survives untouched into the
-//! products, and the accumulator is folded back exactly, `x = l + (h + c) R mod q`, every
-//! [`FOLD_PERIOD`] chunks.
+//! `NTT_3889(W)` in memory, so the fold never transforms the witness again: it reads that
+//! transform once, which is the DRAM floor of the step. Every chunk contributes one `vpmaddwd`
+//! per slot vector into an accumulator of 82 944 B per batch position, and [`G`] positions at a
+//! time take all the chunks, so the accumulator stays in L2 whatever `len_ring` is (5.3 MB for
+//! all 64 positions of `len_ring = 2048`, swept once per chunk pair, was the L3 traffic of the
+//! step: 100.8 -> 68.1 ms on the i7-11850H, at the DRAM floor). The small transform's own lazy
+//! reduction (`|W| <= 7.5 q`) survives untouched into the products, and each group's
+//! accumulator is folded back exactly, `x = l + (h + c) R mod q`, every [`FOLD_PERIOD`] chunks.
 //!
 //! Only the base limb's transform is kept, and the prover stops there: `v` is inverted back to
 //! coefficients modulo the base prime, where it becomes a genuine small-integer vector. The
@@ -492,35 +494,42 @@ unsafe fn drain<const Q: u16>(acc: *const i32, out: &mut Batch32) {
     }
 }
 
+/// Batch positions accumulated together: 324 KB of accumulator, and `2 G` witness streams.
+const G: usize = 4;
+
 /// `v_ntt = sum_j c_j o W_j` modulo the base prime `Q`, centered, one `Batch32` per batch
 /// position.
 fn accumulate<const Q: u16>(w: &AuxData, ch: &ChallengeNtt, bpc: usize) -> Vec<Batch32> {
     let pairs = ch.pair.len();
-    let mut acc = vec![AccVec([0i32; 16]); bpc * N * 2];
+    let g = G.min(bpc);
+    let mut acc = vec![AccVec([0i32; 16]); g * N * 2];
     let base = acc.as_mut_ptr() as *mut i32;
     let row = |j: usize, b: usize| w.batch(j * bpc + b).v.as_ptr() as *const i16;
+    let mut out: Vec<Batch32> = (0..bpc)
+        .map(|_| Batch32::zero(Representation::Ntt))
+        .collect();
     unsafe {
-        for i in 0..pairs {
-            for b in 0..bpc {
-                accumulate_pair(
-                    row(2 * i, b),
-                    row(2 * i + 1, b),
-                    ch.pair[i].as_ptr(),
-                    base.add(32 * N * b),
-                );
+        for b0 in (0..bpc).step_by(g) {
+            acc.fill(AccVec([0i32; 16]));
+            for i in 0..pairs {
+                for b in 0..g {
+                    accumulate_pair(
+                        row(2 * i, b0 + b),
+                        row(2 * i + 1, b0 + b),
+                        ch.pair[i].as_ptr(),
+                        base.add(32 * N * b),
+                    );
+                }
+                if (2 * (i + 1)) % fold_period(Q) == 0 {
+                    fold_back::<Q>(base, g * N * 2);
+                }
             }
-            if (2 * (i + 1)) % fold_period(Q) == 0 {
-                fold_back::<Q>(base, bpc * N * 2);
+            for b in 0..g {
+                drain::<Q>(base.add(32 * N * b), &mut out[b0 + b]);
             }
         }
-        let mut out: Vec<Batch32> = (0..bpc)
-            .map(|_| Batch32::zero(Representation::Ntt))
-            .collect();
-        for b in 0..bpc {
-            drain::<Q>(base.add(32 * N * b), &mut out[b]);
-        }
-        out
     }
+    out
 }
 
 // =============================================================================================
