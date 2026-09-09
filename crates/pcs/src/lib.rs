@@ -2,9 +2,9 @@
 //! 1944-th cyclotomic ring (1944 = 2^3 * 3^5), for binary witnesses held as elements of
 //! `F162 = GF(2)[x]/(x^162 + x^81 + 1)`.
 //!
-//! The witness is committed modulo the base modulus 3889 and any of
-//! `2917, 4861, 9721, 12637, 17497, 19441`,
-//! folded against short binary challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the
+//! The witness is committed modulo a base modulus (3889 by default) and any further moduli from
+//! `2917, 3889, 4861, 9721, 12637, 17497, 19441`,
+//! folded against short signed challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the
 //! folded opening is checked against the multilinear extension of the same witness over `F162`.
 //! Everything is one AVX-512 thread; see [`scheme`] for the round.
 //!

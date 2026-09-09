@@ -229,7 +229,7 @@ impl FoldingChallenges {
 
 /// The amortised witness `v = sum_j c_j W_j`: one column's worth of `R_648` elements in
 /// coefficient form, centered, and genuinely small — a coefficient is a sum of `r w` signed 0/1
-/// terms, two orders of magnitude below `q1 / 2 = 1944.5`.
+/// terms with a standard deviation of a few dozen, far below `q1 / 2 = 1944.5`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FoldedWitness {
     pub(super) elements: Vec<RingElement648>,

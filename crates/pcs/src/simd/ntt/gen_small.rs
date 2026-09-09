@@ -48,7 +48,7 @@
 //! ```
 //!
 //! Output bound: `|v| <= 3.4022 q = 13231` for q = 3889 and `|v| <= 2.1244 q = 20652` for q = 9721
-//! (`OUTPUT_BOUND`), verified against an exact i32 shadow model in `tests/vertical_gen.rs`.
+//! (`OUTPUT_BOUND`), verified against an exact i32 shadow model in `tests/ntt.rs::gen_small`.
 //!
 //! # The inverse (`intt_gen_batch32`, 541 / 601)
 //!
@@ -80,7 +80,7 @@
 //! Placement (`BAR_IN`, `BAR_S6 .. BAR_S1`, each indexed by exactly the loop variable that names
 //! the position class) is the cheapest member of that flag set that keeps every intermediate
 //! inside i16, found by exhaustive search and replayed by the `const` recursion `inv_bounds`,
-//! which also produces `TwI::BOUND` and `TwI::PEAK`; `tests/vertical_gen.rs` replays the same
+//! which also produces `TwI::BOUND` and `TwI::PEAK`; `tests/ntt.rs::gen_small` replays the same
 //! schedule in i32 against the kernel. Declared input bound: the binary kernel's 7.5 q / 2.3 q,
 //! i.e. every lazily reduced transform this crate produces. Per level, max |lane| afterwards:
 //!

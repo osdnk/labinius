@@ -202,8 +202,8 @@ impl Params {
         })
     }
 
-    /// The configuration the crate is tuned for: 2^18 `F162` in 256 columns, moduli 3889 and 9721,
-    /// the folded opening in the clear.
+    /// The default configuration: 2^18 `F162` in 128 columns, moduli 3889 and 9721, the folded
+    /// opening in the clear. (The kernels' tuning shape is the 256-column `Params::new(18, 8, ..)`.)
     pub fn basic() -> Params {
         Params::new(18, 7, vec![Modulus::Q9721_FS_S], Opening::Clear)
             .expect("the basic parameters are valid")
@@ -256,9 +256,10 @@ impl Params {
         1usize << self.witness_log_len
     }
 
-    /// The cap on `‖v‖^2` at this shape. The fold has `witness_len / 4` ring elements' worth of
-    /// coefficients however the columns are split, so the cap does not depend on `column_log_len`
-    /// and the two modes share it.
+    /// The cap on `‖v‖^2` at this shape, `FOLD_CAP * (witness_len / 4) * N`. The fold has
+    /// `witness_len / (4 * columns)` ring elements and each coefficient is a sum of `28 * columns`
+    /// signed terms, so the product is the same however the columns are split: the cap does not
+    /// depend on `column_log_len` and the two modes share it.
     pub fn fold_cap(&self) -> u64 {
         (recursion::FOLD_CAP * (self.witness_len() / 4 * crate::params::N) as f64).ceil() as u64
     }

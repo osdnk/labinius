@@ -30,7 +30,7 @@ impl ChainBound {
 impl Instance {
     /// `‖row‖^2` of a whole public group at one `(chunk, diagonal, position)`, which is what every
     /// run of a chain contributes: a run always covers its group, and the challenge group is
-    /// covered by nine of the ten chains, so summing the squares once per group rather than once
+    /// covered by every chain but the binary evaluation chain, so summing the squares once per group rather than once
     /// per product is the difference between `2.7M` and `6.2M` accumulations per proof.
     fn group_squares(&self) -> Vec<Vec<[f64; SUB]>> {
         self.groups

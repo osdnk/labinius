@@ -559,7 +559,7 @@ pub unsafe fn ntt_quad_gen_batch32<const Q: u16>(b: &mut Batch32) {
 // either — and its placement is a `const` search over one flag per level, `inv_flags`, for the
 // cheapest schedule that keeps every intermediate inside i16 and leaves level 0 inside `3q/2`,
 // which is what the two-conditional centering needs. `inv_model` replays it, and `inv_bound` is
-// the per-level table it produces; `tests/quad.rs` replays the same schedule on data.
+// the per-level table it produces; `tests/ntt.rs::quad` replays the same schedule on data.
 //
 //     q         input     reduced levels               reductions   cycles/poly (forward)
 //     2917      7.94 q    the level-5 inputs, 5, 3           1080     540 (393)

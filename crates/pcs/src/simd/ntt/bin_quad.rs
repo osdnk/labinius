@@ -58,7 +58,7 @@
 //! [`crate::simd::ntt::bin_asm::BlockSink`] does with its 27-row blocks.
 //!
 //! ## Bounds (|lane| as a multiple of q; the const recursions [`bin_model_f3`] and
-//! [`bin_model_split`] prove them and the i32 shadow model in `tests/quad.rs` replays the
+//! [`bin_model_split`] prove them and the i32 shadow model in `tests/ntt.rs::quad` replays the
 //! schedule)
 //!
 //! Table entries are centered, |T| <= q/2, and `|mont(a, w)| <= |a| q/2^17 + q/2`, so a radix-3

@@ -1,7 +1,8 @@
-//! The per-modulus table of the README.
+//! Per-modulus costs of the commitment and the fold.
 //!
 //! `the_moduli_quantified` is the wall clock one extra modulus adds to `commit` at the
-//! `Params::basic()` shape (2^18 `F162` in 256 columns), median of 15.
+//! tuning shape (2^18 `F162` in 256 columns, `Params::with_base(18, 8, ..)`; `Params::basic()`
+//! itself is 128 columns), median of 15.
 //!
 //! `cycles_probe` is the cycle columns. It runs one phase of one modulus `REPS` times and does
 //! nothing else, so `perf stat -e cycles` counts that phase plus a fixed startup that a second
@@ -201,7 +202,7 @@ pub fn kernel_fingerprints() {
     }
 }
 
-/// One fold at the `Params::basic()` shape over `base`, the median of `reps`, in milliseconds.
+/// One fold at the 256-column tuning shape over `base`, the median of `reps`, in milliseconds.
 fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
     let params = Params::with_base(18, 8, base, extra, Opening::Clear).unwrap();
     let pp = PublicParameters::from_seed(params.clone(), [0x5A; 32]);

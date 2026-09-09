@@ -6,8 +6,8 @@
 //! * **Uniform data is bit-packed.** A commitment slot is a residue modulo its limb, so it
 //!   carries `ceil(log2 q)` bits and no more — 12 for 3889, 14 for 9721, 15 for 19441 — and the
 //!   slots are written back to back with no per-slot padding. An `F162` is a uniform 162-bit
-//!   field element, so the row evaluation is 162 bits per element, contiguously: 5184 bytes for
-//!   256 elements rather than 6144. Neither carries a header; both shapes come from the
+//!   field element, so the row evaluation is 162 bits per element, contiguously: 2592 bytes for
+//!   128 elements rather than 3072. Neither carries a header; both shapes come from the
 //!   parameters the verifier already holds. No code can beat those floors on honest data — if
 //!   one measures below them, it is a bug, not a win. The unpacker reads sixteen residues at a
 //!   time with AVX-512 — a byte permute into dword lanes, a variable shift, a mask — and
@@ -41,7 +41,7 @@
 //! redoes a group lane by lane on the rare escape; the scalar decoder pulls the same layout lane
 //! by lane throughout.
 //!
-//! Everything here is off the hot path: the recursive mode sends `T_Y`, `T_u`, `T_R` and one
+//! None of this touches the prover's kernels, and the recursive mode sends `T_Y`, `T_u`, `T_R` and one
 //! LaBRADOR proof, which are true wire widths already.
 use crate::labrador::PolxBuf;
 use crate::ring::{

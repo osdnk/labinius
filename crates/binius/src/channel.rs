@@ -4,7 +4,7 @@
 //! binius64's Merkle/BaseFold commitment, which this pipeline does not use — our commitment is
 //! written into the transcript directly and opened by our own PCS. So the channel is a
 //! `VerifierTranscript` that forwards every interactive-protocol method and answers the oracle
-//! ones with nothing: no oracle is ever received on the keccak path.
+//! ones with nothing: no oracle is ever received on this path.
 use binius_core::word::Word;
 use binius_iop::channel::{Error as IOPError, IOPVerifierChannel, OracleSpec, TransparentEvalFn};
 use binius_ip::channel::{
@@ -86,7 +86,7 @@ impl<C: Challenger> IOPVerifierChannel<B128> for OracleFreeChannel<'_, C> {
         _log_msg_len: usize,
         _witness_dependent: bool,
     ) -> Result<(), IOPError> {
-        unreachable!("the keccak constraint system commits no binius64 oracle")
+        unreachable!("the hash constraint systems commit no binius64 oracle")
     }
 
     fn verify_oracle_relation(
@@ -95,6 +95,6 @@ impl<C: Challenger> IOPVerifierChannel<B128> for OracleFreeChannel<'_, C> {
         _transparent: TransparentEvalFn<B128>,
         _claim: B128,
     ) -> Result<(), IOPError> {
-        unreachable!("the keccak constraint system commits no binius64 oracle")
+        unreachable!("the hash constraint systems commit no binius64 oracle")
     }
 }

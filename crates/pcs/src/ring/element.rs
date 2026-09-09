@@ -151,7 +151,8 @@ impl RingElement {
 }
 
 /// 32 ring elements in "vertical" layout: `v[j][p]` is coefficient/slot j of polynomial p, so one
-/// 512-bit vector holds one slot of all 32 polynomials. 64-byte aligned, 41472 bytes.
+/// 512-bit vector holds one slot of all 32 polynomials. 64-byte aligned, 41472 bytes of slots
+/// (41536 with the representation tag and the alignment padding).
 #[repr(C, align(64))]
 #[derive(Clone)]
 pub struct Batch32 {
