@@ -13,7 +13,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BIN_NTT_LABRADOR_DIR");
 
     if !PathBuf::from(format!("{labrador_dir}/Makefile")).exists() {
-        panic!("the labrador submodule is missing at {labrador_dir}; run `git submodule update --init`");
+        panic!("the vendored labrador library is missing at {labrador_dir}");
     }
 
     // The LaBRADOR objects hard-code LOGQ (modulus, K, and the labrador<LOGQ>_ symbol

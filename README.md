@@ -21,7 +21,6 @@ One AVX-512 thread throughout.
 ## Building and running
 
 ```
-git submodule update --init                 # crates/pcs/labrador, the C library
 cargo build --release --workspace --bins
 taskset -c 3 ./target/release/bin-ntt --suite m
 ./bench.sh                                  # every binary at every suite

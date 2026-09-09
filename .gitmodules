@@ -1,4 +1,0 @@
-[submodule "labrador"]
-	path = crates/pcs/labrador
-	url = https://github.com/osdnk/labrador.git
-	branch = perf
