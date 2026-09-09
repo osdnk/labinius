@@ -1,0 +1,94 @@
+=== size sizel ===
+=== short challenge: weight 28, canonical bound 12, 1000 samples ===
+  acceptance rate: 0.6605 (1 in 1.51)
+
+bin-ntt, core 3, one thread, moduli 3889, 2917, 4861
+
+=== recursion off ===
+witness: 2^22 F162 = 1048576 ring elements of R_648, 512 columns of 8192 F162
+folded witness: 2048 ring elements of R_648, 512 F162 of row evaluation
+  public parameters                8.36 ms
+
+PROVER
+  commit                         293.50 ms
+  row_evaluate                     7.33 ms
+  fold                            68.17 ms
+  pack commitment, row             2.62 ms
+  encode folded witness            3.30 ms
+  total                          374.93 ms
+  total except encode            371.63 ms
+
+STATEMENT
+  derive_evaluation_point          1.48 ms
+  mle_evaluate                     7.36 ms
+  total                            8.84 ms
+
+VERIFIER
+  derive_folding_challenges        0.64 ms
+  decode                           0.59 ms
+  fold_commitment                  0.26 ms
+  fold_row_evaluation              0.01 ms
+  verify_evaluation                0.01 ms
+  verify_folded_opening            1.64 ms
+  total                            3.17 ms
+  total except decode              2.58 ms
+
+wire: commitment 1498.5 KB, row evaluation 10.1 KB, folded witness 1358.0 KB, TOTAL 2866.6 KB
+verification: accepted
+
+=== plain-bd ===
+witness: 2^22 F162 = 1048576 ring elements of R_648, 512 columns of 8192 F162
+dropped bits 8, residual cap 202934108160 over the expectation 5.073e10
+  public parameters                7.54 ms
+
+PROVER
+  commit (with the digits)       303.33 ms
+  row_evaluate                     7.26 ms
+  fold                            67.88 ms
+  pack commitment, row             1.75 ms
+  encode folded witness            3.36 ms
+  total                          383.59 ms
+  total except encode            380.23 ms
+
+STATEMENT
+  derive_evaluation_point          1.92 ms
+  mle_evaluate                     7.20 ms
+  total                            9.12 ms
+
+VERIFIER
+  derive_folding_challenges        0.60 ms
+  decode                           1.94 ms
+  fold_row_evaluation              0.01 ms
+  verify_evaluation                0.01 ms
+  verify_folded_opening            3.48 ms
+  total                            6.05 ms
+  total except decode              4.11 ms
+
+wire: commitment 1174.5 KB, row evaluation 10.1 KB, folded witness 1479.4 KB, TOTAL 2664.0 KB
+verification: accepted
+tampered fold: rejected (the opening was rejected)
+
+peak resident set: 1517 MB
+	Command being timed: "./target/release/bin-ntt --suite l"
+	User time (seconds): 2.16
+	System time (seconds): 0.91
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.08
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1553528
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 829805
+	Voluntary context switches: 1
+	Involuntary context switches: 38
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

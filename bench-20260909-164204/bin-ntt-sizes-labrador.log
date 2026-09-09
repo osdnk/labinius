@@ -1,0 +1,69 @@
+=== size sizes ===
+=== short challenge: weight 28, canonical bound 12, 1000 samples ===
+  acceptance rate: 0.6605 (1 in 1.51)
+
+
+=== recursion on ===
+witness: 2^18 F162 = 65536 ring elements of R_648, 256 columns of 1024 F162
+  public parameters               37.55 ms
+  key-time buffers                   24 MB
+  witness: 18 vectors, 10816 polynomials of Z_Q[X]/(X^64+1)
+  commitment ranks: kappa_Y 11, kappa_u 3, kappa_R 8
+
+PROVER
+  commit (with T_Y)               17.92 ms
+  row_evaluate                     0.28 ms
+  commit_left_expansion            0.21 ms
+  prove_opening                  220.86 ms
+    fold                           4.18 ms
+    encoding                       7.54 ms
+    T_R                            2.42 ms
+    masks                          5.22 ms
+    constraint phi                 2.37 ms
+    statement build               14.94 ms
+    labrador::prove              182.39 ms
+  total                          239.27 ms
+
+STATEMENT
+  derive_evaluation_point          0.00 ms
+  mle_evaluate                     0.30 ms
+  total                            0.30 ms
+
+VERIFIER
+  derive_folding_challenges        0.31 ms
+  statement rebuild               15.91 ms
+    layout                         1.33 ms
+    no-wrap bound                  2.28 ms
+    constraint phi                 2.40 ms
+    statement build                7.85 ms
+  labrador::verify               110.26 ms
+  total                          129.39 ms
+
+wire: T_Y 4.1 KB, T_u 1.1 KB, T_R 3.0 KB, norms 0.1 KB, labrador 71.3 KB
+proof: 79.7 KB total, per-proof phi 1 MB
+verification: accepted
+
+peak resident set: 285 MB
+	Command being timed: "./target/release/bin-ntt --suite s"
+	User time (seconds): 0.36
+	System time (seconds): 0.11
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.48
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 291896
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 106600
+	Voluntary context switches: 2
+	Involuntary context switches: 8
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

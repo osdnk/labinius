@@ -1,0 +1,21 @@
+binary	size	status	seconds	peak_MB
+bin-ntt	sizes	ok	0	104
+pcs-competitors	sizes	ok	1	101
+hashes-flock	sizes	ok	6	1443
+hashes-binius	sizes	ok	12	2730
+bin-ntt	sizem	ok	1	403
+pcs-competitors	sizem	ok	5	310
+hashes-flock	sizem	ok	10	2697
+hashes-binius	sizem	ok	47	10708
+bin-ntt	sizel	ok	4	1517
+pcs-competitors	sizel	ok	23	1248
+hashes-flock	sizel	ok	24	6968
+hashes-binius	sizel	ok	192	41913
+bin-ntt	sizexl	ok	12	6004
+pcs-competitors	sizexl	ok	102	4750
+hashes-flock	sizexl	ok	78	22623
+hashes-binius	sizexl	skipped: 62 GB < 80 GB	-	-
+bin-ntt	sizes/labrador	ok	0	285
+bin-ntt	sizem/labrador	ok	2	842
+bin-ntt	sizel/labrador	ok	3	2349
+bin-ntt	sizexl/labrador	ok	9	7453

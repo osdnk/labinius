@@ -1,0 +1,56 @@
+=== size sizel ===
+four hash-based PCSs on 2^22 B128, opened at one point of 22 coordinates, core 3, one thread
+
+  scheme                            rate  target   commit ms     open ms   verify ms     C bytes  |pi| bytes
+  binius64 BaseFold                  1/2      96      176.43       94.27        0.67          32      391088
+  binius64 BaseFold                  1/4      96      338.55      121.38        0.47          32      282096
+  binius64 BaseFold                  1/2     100      175.79       89.38        0.69          32      404624
+  binius64 BaseFold                  1/4     100      340.01      119.68        0.49          32      291888
+  binius64 WHIR                      1/2      96      206.83      232.63        1.24          32      291120
+  binius64 WHIR                      1/4      96      404.47      263.73        1.03          32      240944
+  binius64 WHIR                      1/2     100      207.16      237.98        1.33          32      301072
+  binius64 WHIR                      1/4     100      406.84      264.12        1.07          32      249264
+  flock-core Ligerito Fast           1/2    ~128      221.67      452.39        1.53        4096      333040
+  flock-core Ligerito Slim           1/4    ~128      455.27      527.40        1.07        2048      219984
+  flock-core Ligerito Fast100        1/2     100      193.46      316.63        1.61        4096      338768
+  flock-core Ligerito Slim100        1/4     100      394.11      418.66        0.96        2048      188272
+  Brakedown tensor                 0.704      96      169.11       23.59       20.68          32    11151872
+  Brakedown tensor                 0.581      96      227.61       18.48       12.05          32     5597888
+
+  binius64 BaseFold at 1/2, 96 bits: unique decoding, 232 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/4, 96 bits: unique decoding, 142 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/2, 100 bits: unique decoding, 241 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/4, 100 bits: unique decoding, 148 queries, no grinding, opening claim element-MLE
+  binius64 WHIR at 1/2, 96 bits: unique decoding, 96.3 achieved, no grinding, ladder 1/2x232 1/16x106 1/32x101, opening claim element-MLE
+  binius64 WHIR at 1/4, 96 bits: unique decoding, 96.3 achieved, no grinding, ladder 1/4x142 1/16x106 1/32x101, opening claim element-MLE
+  binius64 WHIR at 1/2, 100 bits: unique decoding, 100.0 achieved, no grinding, ladder 1/2x241 1/16x110 1/32x105, opening claim element-MLE
+  binius64 WHIR at 1/4, 100 bits: unique decoding, 100.3 achieved, no grinding, ladder 1/4x148 1/16x110 1/32x105, opening claim element-MLE
+  flock-core Ligerito Fast at 1/2, ~128 bits: queries [244, 79, 48, 35, 29], rates [1, 3, 5, 7, 9], grinding [16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  flock-core Ligerito Slim at 1/4, ~128 bits: queries [119, 60, 41, 32, 27], rates [2, 4, 6, 8, 10], grinding [16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  flock-core Ligerito Fast100 at 1/2, 100 bits: queries [218, 106, 71, 53, 43], rates [1, 2, 3, 4, 5], grinding [0, 0, 0, 0, 0], opening claim element-MLE, chosen point
+  flock-core Ligerito Slim100 at 1/4, 100 bits: queries [90, 60, 45, 36, 31], rates [2, 3, 4, 5, 6], grinding [16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  Brakedown tensor at 0.704, 96 bits: unique decoding to d/3 at delta 0.020, 10052 queries, no grinding, opening claim element-MLE
+  Brakedown tensor at 0.581, 96 bits: unique decoding to d/3 at delta 0.070, 2846 queries, no grinding, opening claim element-MLE
+	Command being timed: "./target/release/pcs-competitors --suite l"
+	User time (seconds): 19.47
+	System time (seconds): 3.56
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:23.05
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1277628
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3358127
+	Voluntary context switches: 4562
+	Involuntary context switches: 6397
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

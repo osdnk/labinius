@@ -1,0 +1,36 @@
+   Compiling bin-ntt v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/pcs)
+   Compiling bin-ntt-bench v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/bench)
+   Compiling bin-ntt-flock v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/flock)
+   Compiling bin-ntt-binius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/binius)
+   Compiling pcs-competitors v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/competitors)
+warning: function `recursive` is never used
+   --> crates/bench/src/bin/bin-ntt.rs:362:4
+    |
+362 | fn recursive(suite: &Suite) {
+    |    ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `bin-ntt-bench` (bin "bin-ntt") generated 1 warning
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 00s
+   Compiling bin-ntt v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/pcs)
+   Compiling bin-ntt-bench v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/bench)
+   Compiling bin-ntt-flock v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/flock)
+   Compiling pcs-competitors v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/competitors)
+   Compiling bin-ntt-binius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/binius)
+warning: function `plain` is never used
+  --> crates/bench/src/bin/bin-ntt.rs:60:4
+   |
+60 | fn plain(suite: &Suite) {
+   |    ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `plain_bd` is never used
+   --> crates/bench/src/bin/bin-ntt.rs:210:4
+    |
+210 | fn plain_bd(suite: &Suite) {
+    |    ^^^^^^^^
+
+warning: `bin-ntt-bench` (bin "bin-ntt") generated 2 warnings
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 01s
