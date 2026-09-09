@@ -41,7 +41,7 @@ for s in SIZES:
     rec = ours_rec(open(f"{D}/bin-ntt-{s}-labrador.log").read())
     comp = {}
     for line in open(f"{D}/pcs-competitors-{s}.log"):
-        m = re.match(r"\s*(binius64 BaseFold|binius64 WHIR|flock-core Ligerito Fast100|flock-core Ligerito Slim100)\s+(1/[24])\s+\S+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)", line)
+        m = re.match(r"\s*(binius64 BaseFold|binius64 WHIR|flock-core Ligerito Fast100|flock-core Ligerito Slim100|Brakedown tensor)\s+(1/[24]|0\.\d+)\s+\S+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)", line)
         if m:
             comp[(m.group(1), m.group(2))] = dict(comm=float(m.group(3)), prover=float(m.group(4)), verifier=float(m.group(5)), c=int(m.group(6)) / 1024, pi=int(m.group(7)) / 1024)
     pcs[s] = dict(clear=clear, bd=bd, rec=rec, comp=comp)
@@ -50,20 +50,28 @@ def cells(d):
     c = f"{d['c']:.2f}" if d["c"] < 0.1 else f"{d['c']:.1f}"
     return " & ".join([f"{d['comm']:.1f}", f"{d['prover']:.1f}", f"{d['verifier']:.1f}", c, f"{d['pi']:.1f}"])
 
+PANELS = [SIZES[:2], SIZES[2:]]
+
+def panels(pick):
+    return [" & ".join(cells(pick(s)) for s in panel) for panel in PANELS]
+
 rows = {}
-rows[r"\basefold, $1/2$"] = " & ".join(cells(pcs[s]["comp"][("binius64 BaseFold", "1/2")]) for s in SIZES)
-rows[r"\basefold, $1/4$"] = " & ".join(cells(pcs[s]["comp"][("binius64 BaseFold", "1/4")]) for s in SIZES)
-rows[r"\whir, $1/2$"] = " & ".join(cells(pcs[s]["comp"][("binius64 WHIR", "1/2")]) for s in SIZES)
-rows[r"\whir, $1/4$"] = " & ".join(cells(pcs[s]["comp"][("binius64 WHIR", "1/4")]) for s in SIZES)
-rows[r"\ligerito, $1/2$"] = " & ".join(cells(pcs[s]["comp"][("flock-core Ligerito Fast100", "1/2")]) for s in SIZES)
-rows[r"\ligerito, $1/4$"] = " & ".join(cells(pcs[s]["comp"][("flock-core Ligerito Slim100", "1/4")]) for s in SIZES)
+rows[r"\basefold, $1/2$"] = panels(lambda s: pcs[s]["comp"][("binius64 BaseFold", "1/2")])
+rows[r"\basefold, $1/4$"] = panels(lambda s: pcs[s]["comp"][("binius64 BaseFold", "1/4")])
+rows[r"\whir, $1/2$"] = panels(lambda s: pcs[s]["comp"][("binius64 WHIR", "1/2")])
+rows[r"\whir, $1/4$"] = panels(lambda s: pcs[s]["comp"][("binius64 WHIR", "1/4")])
+rows[r"\ligerito, $1/2$"] = panels(lambda s: pcs[s]["comp"][("flock-core Ligerito Fast100", "1/2")])
+rows[r"\ligerito, $1/4$"] = panels(lambda s: pcs[s]["comp"][("flock-core Ligerito Slim100", "1/4")])
+rows[r"\brakedown, $0.704$"] = panels(lambda s: pcs[s]["comp"][("Brakedown tensor", "0.704")])
+rows[r"\brakedown, $0.581$"] = panels(lambda s: pcs[s]["comp"][("Brakedown tensor", "0.581")])
 best = []
 for s in SIZES:
     pick = "bd" if pcs[s]["bd"]["total"] < pcs[s]["clear"]["total"] else "clear"
     best.append(pick)
     print(f"{s}: clear total {pcs[s]['clear']['total']:.1f} KB, bd total {pcs[s]['bd']['total']:.1f} KB -> {pick}", file=sys.stderr)
-rows[r"\ourwork"] = " & ".join(cells(pcs[s][p]) for s, p in zip(SIZES, best))
-rows[r"\ourwork +\labrador"] = " & ".join(cells(pcs[s]["rec"]) for s in SIZES)
+picked = dict(zip(SIZES, best))
+rows[r"\ourwork"] = panels(lambda s: pcs[s][picked[s]])
+rows[r"\ourwork +\labrador"] = panels(lambda s: pcs[s]["rec"])
 
 def hash_tables(kind):
     out = {}
@@ -79,8 +87,6 @@ def hash_tables(kind):
             cols = re.search(r"^\s+total\s+(.*?) ms$", section(block, "PROVER", "VERIFIER"), re.M)
             if kind == "binius":
                 prov = [float(x) for x in re.search(r"^\s*total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+) ms", section(block, "PROVER", "VERIFIER"), re.M).groups()]
-                wit = float(re.search(r"^\s*witness\s+([\d.]+)", section(block, "PROVER", "VERIFIER"), re.M).group(1))
-                prov = [p - wit for p in prov]
                 ver = [float(x) for x in re.search(r"^\s*total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+) ms", section(block, "VERIFIER", "SIZES"), re.M).groups()]
                 siz = [float(x) for x in re.search(r"^\s*total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+) KB", section(block, "SIZES", "peak"), re.M).groups()]
                 count = re.search(r": (\d+) (permutations|compressions)", block).group(1)
@@ -99,26 +105,32 @@ for name, runs in list(binius.items()) + list(flock.items()):
 
 tex = open(TEX).read()
 def patch_row(block, label, values):
-    pat = re.compile(r"^(\t*" + re.escape(label) + r" & ).*?( \\\\)$", re.M)
-    assert len(pat.findall(block)) == 1, label
-    return pat.sub(lambda m: m.group(1) + values + m.group(2), block)
+    if isinstance(values, str):
+        values = [values]
+    loose = r"\s*".join(re.escape(c) for c in label if not c.isspace())
+    pat = re.compile(r"^(\s*" + loose + r"\s*&\s*).*?(\s*\\\\)$", re.M)
+    assert len(pat.findall(block)) == len(values), (label, len(pat.findall(block)), len(values))
+    it = iter(values)
+    return pat.sub(lambda m: m.group(1) + next(it) + m.group(2), block)
 
 tables = re.split(r"(?=\\begin\{table\})", tex)
 def fmt3(triples):
     return " & ".join(" & ".join(f"{v:.1f}" for v in t) for t in triples)
+def hpanels(triples):
+    return [fmt3(triples[:2]), fmt3(triples[2:])] if len(triples) == 4 else [fmt3(triples)]
 for i, tb in enumerate(tables):
-    if "tab:concrete-sizes" in tb:
+    if r"\label{tab:concrete-sizes}" in tb:
         for label, values in rows.items():
             tb = patch_row(tb, label, values)
     for kind, data, stock in (("binius", binius, r"\binius"), ("flock", flock, r"\flock")):
         for name, runs in data.items():
             key = {"keccak-256": "binius-keccak", "sha-256": "binius-sha256", "blake3": "binius-blake3", "BLAKE3": "flock-blake3", "SHA-256": "flock-sha256"}[name]
-            if f"tab:{key}" in tb:
-                tb = patch_row(tb, stock, fmt3([r[2][0] for r in runs]))
+            if f"\\label{{tab:{key}}}" in tb:
+                tb = patch_row(tb, stock, hpanels([r[2][0] for r in runs]))
                 picks = [r[2][3] if r[2][3][2] < r[2][1][2] else r[2][1] for r in runs]
                 for r, pk in zip(runs, picks):
                     print(f"{name} {r[0]}: clear {r[2][1][2]:.1f} KB, bd {r[2][3][2]:.1f} KB -> {'bd' if pk is r[2][3] else 'clear'}", file=sys.stderr)
-                tb = patch_row(tb, r"\ourwork", fmt3(picks))
-                tb = patch_row(tb, r"\ourwork +\labrador", fmt3([r[2][2] for r in runs]))
+                tb = patch_row(tb, r"\ourwork", hpanels(picks))
+                tb = patch_row(tb, r"\ourwork +\labrador", hpanels([r[2][2] for r in runs]))
     tables[i] = tb
 open(TEX, "w").write("".join(tables))
