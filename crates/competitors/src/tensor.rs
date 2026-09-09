@@ -2,9 +2,11 @@
 //! multilinear given as 2^log_len `B128`.
 //!
 //! The evaluation vector is read as a `rows x k` matrix `M`, row-major, so the low `log2(k)`
-//! coordinates of a point address a column and the high ones a row. Every row is encoded with the
-//! code, giving `rows x n`, and the `n` columns are the leaves of one Merkle tree: leaf `j` is the
-//! whole column, `rows` elements of `B128`. The commitment is that root as it travels on the tape,
+//! coordinates of a point address a column and the high ones a row. `M` is then held transposed,
+//! symbol `i` of every row contiguous, and all `rows` messages are encoded together under
+//! [`LinearCode::encode_interleaved`], which leaves the `rows x n` codeword matrix in that same
+//! symbol-major order. That order is already the Merkle leaf layout: leaf `j` is column `j`,
+//! `rows` contiguous elements of `B128`. The commitment is that root as it travels on the tape,
 //! 32 bytes, which is what [`commit`] measures.
 //!
 //! The point splits as `r = (r_lo, r_hi)` and the equality indicator factors with it,
@@ -68,6 +70,18 @@
 //! and pays `2 * t * rows` multiplications for the column checks. The proof is
 //! `2k` field elements for the two rows, `t * rows` for the opened columns, and the Merkle advice;
 //! [`Tensor::proof_bytes`] is that accounting written out.
+//!
+//! The transpose is one pass over `2^log_len` elements and everything after it reads columns:
+//! `gamma^T M` and `b^T M` become `k` dot products over contiguous runs of `rows` rather than
+//! `rows` strided passes over a `k`-long accumulator, and the codeword matrix lands in leaf order
+//! with no strided scatter. At 2^18 on one i7-11850H core, a single combination costs
+//! 0.454 -> 0.415 ms for the Brakedown code at `rows = 8, k = 2^15` and 0.507 -> 0.425 ms for the
+//! Lightning code at `rows = 2, k = 2^17`. The encoded buffer is unchanged element for element,
+//! so the tree, the openings and the proof are byte for byte what the row-at-a-time layout wrote.
+//! The encoding itself waits on the code: the default [`LinearCode::encode_interleaved`]
+//! transposes in and out around the same per-row `encode`, 0.42 + 11.77 ms against 8.14 for
+//! Brakedown and 0.35 + 5.97 against 5.53 for Lightning, so the commitment is the slower half of
+//! the trade until a code encodes interleaved natively.
 //!
 //! `n` need not be a power of two, but a binary Merkle tree spans one, so the column-major buffer
 //! is padded to `2^depth` columns of zeros. Query indices are drawn by rejection from `[0, n)`, so
@@ -249,29 +263,35 @@ impl<'a> Tensor<'a> {
                 .proof_size(1 << self.depth, self.queries, layer_depth)
     }
 
-    fn columns(&self, values: &[B128]) -> FieldBuffer<B128> {
+    /// `witness[i * rows + j]` is symbol `i` of row `j`, the layout everything below reads.
+    fn witness(&self, values: &[B128]) -> Vec<B128> {
         let k = 1 << self.log_k;
-        let mut columns = vec![B128::ZERO; self.rows << self.depth];
-        let mut codeword = vec![B128::ZERO; self.code.codeword_len()];
-        for row in 0..self.rows {
-            self.code
-                .encode(&values[row * k..(row + 1) * k], &mut codeword);
-            for (j, &symbol) in codeword.iter().enumerate() {
-                columns[j * self.rows + row] = symbol;
-            }
+        let mut witness = Vec::with_capacity(values.len());
+        for i in 0..k {
+            witness.extend((0..self.rows).map(|j| values[j * k + i]));
         }
+        witness
+    }
+
+    fn columns(&self, witness: &[B128]) -> FieldBuffer<B128> {
+        let mut columns = vec![B128::ZERO; self.rows << self.depth];
+        let encoded = self.rows * self.code.codeword_len();
+        self.code
+            .encode_interleaved(self.rows, witness, &mut columns[..encoded]);
         FieldBuffer::new(self.depth + self.log_len - self.log_k, columns)
     }
 
-    fn combine(&self, values: &[B128], weights: &[B128]) -> Vec<B128> {
-        let k = 1 << self.log_k;
-        let mut row = vec![B128::ZERO; k];
-        for (i, &weight) in weights.iter().enumerate() {
-            for (out, &value) in row.iter_mut().zip(&values[i * k..(i + 1) * k]) {
-                *out += weight * value;
-            }
-        }
-        row
+    fn combine(&self, witness: &[B128], weights: &[B128]) -> Vec<B128> {
+        witness
+            .chunks_exact(self.rows)
+            .map(|column| {
+                column
+                    .iter()
+                    .zip(weights)
+                    .map(|(&value, &weight)| weight * value)
+                    .sum()
+            })
+            .collect()
     }
 
     fn encoded(&self, row: &[B128]) -> Vec<B128> {
@@ -309,7 +329,7 @@ pub struct Prove {
 /// tape.
 pub fn commit(tensor: &Tensor<'_>, values: &[B128]) -> Vec<u8> {
     let mut channel = ProverChannel::new(ProverTranscript::default());
-    let columns = tensor.columns(values);
+    let columns = tensor.columns(&tensor.witness(values));
     channel.send_merkle_commitment(columns.as_view(), tensor.rows);
     channel.into_transcript().finalize()
 }
@@ -330,15 +350,17 @@ pub fn prove(
     let mut channel = ProverChannel::new(ProverTranscript::default());
 
     let start = Instant::now();
-    let columns = tensor.columns(values);
+    let witness = tensor.witness(values);
+    let columns = tensor.columns(&witness);
     let commitment = channel.send_merkle_commitment(columns.as_view(), tensor.rows);
     timing.commit = milliseconds(start);
 
     let spoken = match tamper {
-        None => values.to_vec(),
+        None => witness,
         Some(i) => {
-            let mut spoken = values.to_vec();
-            spoken[i] += B128::ONE;
+            let mut spoken = witness;
+            let k = 1 << tensor.log_k;
+            spoken[(i % k) * tensor.rows + i / k] += B128::ONE;
             spoken
         }
     };
@@ -452,7 +474,8 @@ mod tests {
         let tensor = Tensor::new(&code, 10, SECURITY_BITS);
         let a = eq_ind_partial_eval::<B128>(&point[..tensor.log_k]);
         let b = eq_ind_partial_eval::<B128>(&point[tensor.log_k..]);
-        let row = tensor.combine(&values, &b.iter_scalars().collect::<Vec<_>>());
+        let witness = tensor.witness(&values);
+        let row = tensor.combine(&witness, &b.iter_scalars().collect::<Vec<_>>());
         let split: B128 = row
             .iter()
             .zip(a.iter_scalars())
