@@ -947,6 +947,7 @@ dependencies = [
  "bin-ntt-bench",
  "binius-compute",
  "binius-core",
+ "binius-field",
  "binius-hash",
  "binius-iop",
  "binius-iop-prover",

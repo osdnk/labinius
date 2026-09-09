@@ -1,7 +1,9 @@
 pub mod basefold;
+pub mod brakedown;
+pub mod codes;
 pub mod ligerito_flock;
+pub mod tensor;
 pub mod whir;
-
 use bin_ntt_bench::Rng;
 use bin_ntt::Suite;
 pub use bin_ntt_bench::{median_of, ms as milliseconds, once, pin, pinned};

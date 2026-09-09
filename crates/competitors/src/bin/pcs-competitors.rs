@@ -1,6 +1,6 @@
 use bin_ntt::scheme::suite_from_args;
 use pcs_competitors::{
-    basefold, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, TARGETS,
+    basefold, brakedown, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, TARGETS,
     WITNESS_SEED,
 };
 
@@ -52,9 +52,12 @@ fn main() {
     for profile in ligerito_flock::PROFILES {
         rows.push(ligerito_flock::run(log_len, profile, &u64s));
     }
+    for spec in [0, 5] {
+        rows.push(brakedown::run(log_len, spec, &u64s));
+    }
 
     println!(
-        "three hash-based PCSs on 2^{log_len} B128, opened at one point of {log_len} \
+        "four hash-based PCSs on 2^{log_len} B128, opened at one point of {log_len} \
          coordinates, core {}, one thread",
         pinned()
     );

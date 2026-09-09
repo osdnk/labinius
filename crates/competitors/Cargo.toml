@@ -9,6 +9,7 @@ bin-ntt.workspace = true
 bin-ntt-bench.workspace = true
 binius-compute.workspace = true
 binius-core.workspace = true
+binius-field.workspace = true
 binius-hash.workspace = true
 binius-iop.workspace = true
 binius-iop-prover.workspace = true
