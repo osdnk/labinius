@@ -27,7 +27,7 @@ pub struct Shape {
 /// The binary fold sums in the `Z` basis, where a binary challenge against a binary lift brings no
 /// sign cancellation at all, so its quotient and carry grow with the number of terms: the largest
 /// quotient coefficient measured `7.05 n r` and the largest carry `10.5 n r` over 25 calibration
-/// rounds (`examples/gadget.rs` under `GADGET_STATS`) across every limb list and shapes from
+/// rounds (`calibrate gadget` under `GADGET_STATS`) across every limb list and shapes from
 /// `(n, r) = (256, 64)` to `(1024, 256)`, with a spread of 6% and 30% between rounds. The
 /// constants carry a 1.1 margin over those maxima, which keeps the basic shape at two levels of
 /// each. The evaluation chain is a few hundredths of the fold chain and shares its gadgets.

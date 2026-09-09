@@ -22,12 +22,12 @@
 //! port-0 slot per lookup (1080 per batch, ~17% of the port-0 budget). The tables are therefore
 //! stored **byte-split** (low halves at byte n, high halves at byte 16+n) and looked up
 //! with `vpermb` (1 uop, p5 only) on the byte-index rows `(n, 16+n)` that
-//! [`transpose::slice_polys_idx`] emits directly (`BinaryIndex32`), so the kernel has no
+//! `transpose_f162::slice_f162_into` emits directly (`BinaryIndex32`), so the kernel has no
 //! index-expansion prologue at all.
 //! `vpbroadcastd zmm, m32` really is a free load (0 p0/p5 uops), so every twiddle is stored as a
 //! duplicated u32.
 //!
-//! ## Bounds (|lane| as a multiple of q; `tests/vertical_bin_asm.rs`: `proved_bounds_9721`
+//! ## Bounds (|lane| as a multiple of q; `tests/ntt.rs::bin_asm`: `proved_bounds_9721`
 //! propagates the worst case over all i16 lane values, the i32 shadow model replays the exact
 //! schedule on the test inputs)
 //!
@@ -159,8 +159,7 @@ const fn build_tables<const Q: u16>() -> Tables {
                         let t = if s1 == 0 { inner } else { (q - inner) % q };
                         let base = ((n0 + ka * n2) % q + t) % q;
                         let v = base * f % q * extra % q;
-                        // Montgomery-form output: scale the table entries by R = 2^16 mod q; everything
-                        // after the tables is linear, so the whole transform comes out times R.
+                        // the table holds the centred value itself; nothing is scaled into Montgomery form
                         let e = center(v, q) as u16;
                         let ti = ((k * 2 + s2) * 3 + r) * 2 + ab;
                         lut[ti][n] = e as u8;

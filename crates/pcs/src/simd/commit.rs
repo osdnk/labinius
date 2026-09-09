@@ -16,19 +16,20 @@
 //! whole computation (4.4 ms) and every design decision below is about hiding it behind the
 //! transform rather than adding traffic of its own.
 //!
-//! # Raw VNNI accumulation
+//! # Raw accumulation
 //!
-//! A slot product is never reduced. One `vpdpwssd` per slot per batch does
-//! `acc32 += W_j * A_j` on adjacent pairs of 16-bit lanes, so a 32-bit lane carries the running
-//! sum of two ring elements' products: one multiply-port uop, three loads and one store per slot
-//! per batch, against the 4 multiply-port uops a Montgomery slot product would cost. Nothing but
+//! A slot product is never reduced. A `vpmaddwd` per slot per batch does `acc32 += W_j * A_j`
+//! on adjacent pairs of 16-bit lanes, so a 32-bit lane carries the running sum of two ring
+//! elements' products: one multiply-port uop per slot per batch, against the 4 multiply-port uops
+//! a Montgomery slot product would cost. (The first design used the VNNI form `vpdpwssd`; the
+//! packed accumulator below replaced it and nothing here emits a VNNI instruction any more.) Nothing but
 //! the sum is ever needed, and `sum_i A_i[j] W_i[j]` is congruent mod q whatever representatives
 //! the transform leaves, so the only question is overflow.
 //!
 //! # The exact fold-back
 //!
 //! The transform's output is lazily reduced to [`w_bound`] (7.5 q for q = 3889, 2.294 q for
-//! q = 9721, 1.706 q and 1.580 q for the two primes above `2^14`) and `|A| <= (q-1)/2`, so one
+//! q = 9721, 1.786 q and 1.580 q for the two primes above `2^14`) and `|A| <= (q-1)/2`, so one
 //! batch adds at most [`acc_per_batch`] to a lane. Every [`red_period`] batches the accumulator
 //! is folded back into `|acc| <= 2^15 (1 + R)` ([`acc_after_reduce`], `R = 2^16 mod q`) by
 //! [`reduce_acc_i32`]: three uops per accumulator vector, one of them on the multiply port,
@@ -43,7 +44,7 @@
 //!
 //! # The packed accumulator
 //!
-//! One `vpdpwssd` per slot leaves 16 i32 lanes per slot: 648 vectors, 41 KB, read and written once
+//! The first design, one `vpdpwssd` per slot, leaves 16 i32 lanes per slot: 648 vectors, 41 KB, read and written once
 //! per slot per batch. That does not fit L1 next to the A stream — measured 85 cycles per ring
 //! element against a 40-cycle uop floor. Folding the 16 lanes of a slot down to 8 and packing two
 //! slots into one vector cuts the accumulator to 21.5 KB and its traffic by a third for the same
@@ -650,7 +651,7 @@ pub const fn period_for(q: u16, per: i64) -> usize {
 pub const fn red_period_quad01(q: u16) -> usize {
     period_for(q, acc_per_batch_quad01(q))
 }
-/// Batches between two fold-backs of the `P_2` accumulator (4 / 4 / 1).
+/// Batches between two fold-backs of the `P_2` accumulator (8 / 2 / 1).
 pub const fn red_period_quad2(q: u16) -> usize {
     period_for(q, acc_per_batch_quad2(q))
 }

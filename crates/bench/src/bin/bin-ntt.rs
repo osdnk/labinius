@@ -1,6 +1,6 @@
 //! The reference usage: one round end to end in each mode, with the wall clock on every step.
 //!
-//! `cargo run --release --offline`, pinned with `taskset -c 2`.
+//! `cargo run --release --offline`. The binary pins itself to core 3, or to `$BENCH_CPU`.
 use bin_ntt::scheme::suite_from_args;
 use bin_ntt::{Opening, OpeningMessage, Suite};
 use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, pinned, row};

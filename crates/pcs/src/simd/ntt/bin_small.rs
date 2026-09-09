@@ -8,7 +8,7 @@
 //! reduction written where the bound argument needs it — so that the generated kernel has
 //! something to be checked against: for q = 3889 the two are bit-identical (same operation order
 //! per butterfly, no reduction at all), for q = 9721 they agree modulo q
-//! (`tests/vertical_bin.rs`).
+//! (`tests/ntt.rs`, module `bin_small`).
 //!
 //! Levels 0, 1, 2 and the level-3 twiddles are all folded into 16-entry lookup tables indexed by
 //! the 4-bit nibble (b_i, b_{i+162}, b_{i+324}, b_{i+486}) of each polynomial; levels 3..6 are
@@ -28,7 +28,7 @@
 //! `vpbroadcastd zmm, m32` really is a free load (0 p0/p5 uops), so every twiddle is stored as a
 //! duplicated u32.
 //!
-//! ## Bounds (|lane| as a multiple of q; `tests/vertical_bin.rs` checks every output against the
+//! ## Bounds (|lane| as a multiple of q; `tests/ntt.rs::bin_small` checks every output against the
 //! declared bound and against `scalar::ntt` of the same lift)
 //!
 //! Table entries are centered, |T| <= q/2. A twiddle multiplication `mont(a, w, w')` with

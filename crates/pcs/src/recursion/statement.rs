@@ -3,7 +3,7 @@
 //! Nothing here reads the witness: the layout instance of [`Instance::layout`] already fixes every
 //! block, and the only per-proof numbers are the three pre-commitments, the announced norms and
 //! the verifier's mask scalars. The `phi` of a run of key rows is aliased out of [`Setup`]; the
-//! challenges are converted in bulk once per `(chunk, diagonal)` and shared by all ten chains; the
+//! challenges are converted in bulk once per `(chunk, diagonal)` and shared by every chain; the
 //! binary lifts are assembled out of the nine-bit pattern table.
 use std::sync::Arc;
 

@@ -45,7 +45,7 @@
 //! port 0 and 2 or 8 on port 5.
 //!
 //! Measured over the same 216-butterfly level, both written out in intrinsics
-//! (`tests/vertical_bin_large.rs::the_unsigned_alternative`), the signed one wins anyway:
+//! (`tests/ntt.rs::bin_large::the_unsigned_alternative`), the signed one wins anyway:
 //! **3.68 ns per butterfly against the unsigned form's 5.96 at q = 17497, and 4.40 against 6.08
 //! at q = 19441** — 1.6x and 1.4x. The uop counts are a wash and the dependency chains are
 //! not: a Shoup product is

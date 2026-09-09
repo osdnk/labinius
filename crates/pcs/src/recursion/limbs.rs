@@ -39,7 +39,7 @@ pub struct Shape {
 
 /// The limb's quotient and carries are linear in the fold, whose length the cap holds under
 /// `sqrt(FOLD_CAP n N r)`; at the cap the largest quotient coefficient measured `226 sqrt(n r)`
-/// and the largest carry `207 q sqrt(n r)`, each over 33 calibration rounds (`examples/gadget.rs`
+/// and the largest carry `207 q sqrt(n r)`, each over 33 calibration rounds (`calibrate gadget`
 /// under `GADGET_STATS`) across every limb and shapes from `(n, r) = (256, 64)` to
 /// `(1024, 256)`, with a two-fold spread between rounds once normalised. The constants carry a
 /// 1.4 margin over those maxima.

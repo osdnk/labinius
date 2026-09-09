@@ -28,7 +28,7 @@
 //! # Bounds
 //!
 //! [`fwd_model`] and [`inv_model`] replay the schedules on bounds and are asserted below; the i32
-//! shadow in `tests/vertical_gen_large.rs` replays them on the data. `r` is
+//! shadow in `tests/ntt.rs::gen_large` replays them on the data. `r` is
 //! [`vl::barrett_lut_max`], `0.527 q` for both primes.
 //!
 //! ```text

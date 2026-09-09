@@ -12,8 +12,9 @@ use crate::scheme::FoldedWitness;
 pub const LANES: usize = 64;
 
 /// The folded witness, entropy-coded against its own histogram. `base_q` is the modulus its
-/// coefficients are centered modulo; it is carried in the header, so [`decode`] needs nothing
-/// but the bytes.
+/// coefficients are centered modulo. It is recorded in the header for the reader's information
+/// only: [`decode`] needs nothing but the bytes and does not read it back, the verifier takes the
+/// modulus from its parameters and re-checks the decoded coefficients against it.
 pub fn encode(folded: &FoldedWitness, base_q: u16) -> Vec<u8> {
     let elements = folded.elements();
     let coefficients = elements.len() * N;

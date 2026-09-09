@@ -23,7 +23,7 @@ One AVX-512 thread throughout.
 ```
 git submodule update --init                 # crates/pcs/labrador, the C library
 cargo build --release --workspace --bins
-taskset -c 3 ./target/release/bin-ntt --suite m
+./target/release/bin-ntt --suite m            # pins itself to core 3, or to $BENCH_CPU
 ./bench.sh                                  # every binary at every suite
 cargo test --release --workspace
 ```
@@ -48,4 +48,4 @@ verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear 
 }).unwrap();
 ```
 
-`crates/bench/src/bin/bin-ntt.rs` runs this in all three modes with the wall clock on every step.
+`crates/bench/src/bin/bin-ntt.rs` runs this with the wall clock on every step, in the clear and bit-dropped modes, or in the recursive mode when built with `--features bin-ntt-bench/labrador` (which is why `bench.sh` builds twice).

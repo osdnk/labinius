@@ -86,7 +86,7 @@ fn the_folded_witness_is_one_short_column() {
         r.folded_witness.len(),
         params.witness_len() / params.columns() / 4
     );
-    // A coefficient is a sum of r * 21 signed 0/1 terms, so it stays far inside q1 / 2 = 1944.5.
+    // A coefficient is a sum of r * 28 signed 0/1 terms, so it stays far inside q1 / 2 = 1944.5.
     let max = r
         .folded_witness
         .elements()

@@ -5,7 +5,7 @@
 //!
 //! A witness of `r` chunks `W_0, .., W_{r-1}`, each `len_ring` elements of
 //! `R_648 = Z_q[X]/(X^648 - X^324 + 1)`, is committed under one key `A` to the `r` elements
-//! `C_j = sum_i A_i W_{j,i}`. A challenge `c_j` is a short binary element of the subring
+//! `C_j = sum_i A_i W_{j,i}`. A challenge `c_j` is a short signed element of the subring
 //! `R_162 = Z_q[Z]/Phi_243(Z)`, embedded into `R_648` as `c_j(-X^4)` (coefficient of `X^{4m}` is
 //! `(-1)^m c_{j,m}`, everything else zero — the embedding of "The lift is a ring extension of
 //! degree 4"). The folded witness and its commitment are
@@ -104,7 +104,7 @@ pub const fn fold_per_chunk(q: u16) -> i64 {
 /// Chunks accumulated between two fold-backs of a base limb's accumulator.
 ///
 /// `|acc| <= acc_after_reduce + P * fold_per_chunk` must fit `i32`; for `q = 3889` that is
-/// `2^15 (1 + 3312) + P * 29167 * 1944 = 108 592 384 + P * 56 700 648`, so `P = 32` (1 923 013 120)
+/// `2^15 (1 + 3312) + P * 29167 * 1944 = 108 560 384 + P * 56 700 648`, so `P = 32` (1 923 013 120)
 /// fits and `P = 64` does not. The chunks are accumulated in pairs, so the period must be even.
 pub const fn fold_period(q: u16) -> usize {
     cm::period_for(q, fold_per_chunk(q))
@@ -134,7 +134,7 @@ const _: () = {
 };
 
 /// Batches of `A v` between two fold-backs of a splitting limb's accumulator: both operands are
-/// centered, so a lane grows by `4 ((q-1)/2)^2` per batch. 128 for 3889 and 32 for 9721, where
+/// centered, so a lane grows by `4 ((q-1)/2)^2` per batch. 128 for 3889 and 16 for 9721, where
 /// the whole product used to run unreduced over the eight batches of the basic shape; 4 for the
 /// two primes above `2^14`, which is what forces the fold-back to exist at all.
 pub const fn av_period(q: u16) -> usize {

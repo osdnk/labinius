@@ -49,7 +49,7 @@ pub const MAX_WEIGHT: usize = 32;
 /// The weight the crate samples at unless told otherwise.
 pub const DEFAULT_WEIGHT: usize = 28;
 
-/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 11^2 = 121`.
+/// The default canonical-embedding bound: `max_u |c(zeta^u)|^2 <= 12^2 = 144`.
 pub const DEFAULT_BOUND: f64 = 12.0;
 
 // =============================================================================================

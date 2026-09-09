@@ -1,6 +1,6 @@
 //! The wire forms: exact round trips for the bit-packed uniform objects and for the entropy
-//! coder, on honest rounds at several shapes and bases and on adversarial folds, and the size
-//! and wall clock the README quotes (`--nocapture`, under `taskset -c 3`).
+//! coder, on honest rounds at several shapes and bases and on adversarial folds, and a size
+//! and wall-clock report (`--nocapture`, pinned to one core).
 use bin_ntt::{Opening, OpeningMessage};
 use bin_ntt::ring::{Representation, RingElement};
 use bin_ntt::wire::{self, WireError};
