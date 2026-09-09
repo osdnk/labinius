@@ -121,6 +121,11 @@ impl Instance {
         }
     }
 
+    /// Flock's own end-to-end prover, `prove_fast` -> `prove_fast_ligerito_union`: it builds a
+    /// union instance, compacts the witness to the used chunk-columns (46 of 64 lanes for BLAKE3,
+    /// 50 for SHA-256 at `sizem`), commits lane-major and opens through the merged/jagged opening
+    /// transport. That is a different protocol from the one our columns run, so it is printed as
+    /// the "stock union" column and is not the phase-aligned baseline; see [`Self::core_params`].
     pub fn stock_prove<Ch: Challenger>(
         &self,
         ch: &mut Ch,
@@ -131,6 +136,34 @@ impl Instance {
         }
     }
 
+    /// Why the "stock core" column exists, and why it is not simply `stock_prove`.
+    ///
+    /// Our columns run flock's single-table reductions (zerocheck, lincheck) and open the two
+    /// resulting claims with our own commitment. `prove_fast` runs the union machinery instead:
+    /// a compacted, lane-major commitment and the merged opening. Comparing the two puts two
+    /// different protocols in one totals row and says nothing about the commitment scheme. The
+    /// core column therefore runs flock through its *core* path — `prove_fast_core` (flock's own
+    /// commit, bind, zerocheck and lincheck, with the `s_hat_v` precomputation it hands out) and
+    /// `open_batch_mixed_ligerito_with_precomputed_s_hat_v_and_grinding` over the two claims,
+    /// verified by `verify_core_with_grinding` and `verify_claims_ligerito` — so that the
+    /// committed buffer (the full padded `2^(m-7)` words) and every phase are the same as ours
+    /// and the commitment is the only thing that differs.
+    ///
+    /// The union path could not serve here even if we wanted it to: the batch opening asserts
+    /// `!lane_major || n_rs == 0`, i.e. a lane-major (compacted) commitment cannot carry
+    /// ring-switched claims, so a phase-aligned baseline has to give up the compaction.
+    ///
+    /// Everything called is public upstream. The one `pub(crate)` helper on that path,
+    /// `open_claims_with_precomputed_ligerito`, is two lines (the `x_inner_rest ‖ x_outer`
+    /// concatenation) and is inlined in [`Self::core_open`] as `x_outer_full`. The `PcsParams`
+    /// are built here rather than taken from the setup because the setup's are the union's:
+    /// `m = dense_m` with the zero lanes dropped, whereas the core path needs `m = r1cs.m` and
+    /// `num_lanes: None`, at the same profile and rate.
+    ///
+    /// What the choice costs against real flock: the union commits less and spends it back in
+    /// the merged opening, so union/core prover totals were 1.31 at `sizes` and 1.00 at `sizel`
+    /// when this column was added, while the core proof is 8–19% larger than the union's at
+    /// every size. Both columns are printed so the reader can see both.
     pub fn core_params(&self) -> PcsParams {
         let m = self.r1cs().m;
         let profile = self.pcs_params().profile;
