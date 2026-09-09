@@ -9,7 +9,7 @@ const WITNESS_SEED: u64 = 0x5A;
 #[test]
 fn the_opening_verifies_and_a_tampered_one_does_not() {
     let pool = BufferPool::new();
-    let pcs = Pcs::new(LOG_LEN, 1);
+    let pcs = Pcs::new(LOG_LEN, 1, pcs_competitors::SECURITY_BITS);
     let words = random_words(LOG_LEN, WITNESS_SEED);
 
     let (proof, claim, _) = prove(&pcs, &pool, LOG_LEN, &words, None);

@@ -1,6 +1,7 @@
 use bin_ntt::scheme::suite_from_args;
 use pcs_competitors::{
-    basefold, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, WITNESS_SEED,
+    basefold, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, TARGETS,
+    WITNESS_SEED,
 };
 
 fn print(rows: &[Row]) {
@@ -38,11 +39,15 @@ fn main() {
     let u64s = random_u64s(log_len, WITNESS_SEED);
 
     let mut rows = Vec::new();
-    for log_inv_rate in [1, 2] {
-        rows.push(basefold::run(log_len, log_inv_rate, &u64s));
+    for security_bits in TARGETS {
+        for log_inv_rate in [1, 2] {
+            rows.push(basefold::run(log_len, log_inv_rate, security_bits, &u64s));
+        }
     }
-    for log_inv_rate in [1, 2] {
-        rows.push(whir::run(log_len, log_inv_rate, &u64s));
+    for security_bits in TARGETS {
+        for log_inv_rate in [1, 2] {
+            rows.push(whir::run(log_len, log_inv_rate, security_bits, &u64s));
+        }
     }
     for profile in ligerito_flock::PROFILES {
         rows.push(ligerito_flock::run(log_len, profile, &u64s));

@@ -9,7 +9,7 @@
 //! between the claim and the sumcheck. The compilers are built at the keccak example's hash suite,
 //! so the commitment and the opening are the ones `src/hashes/stock.rs` measures inside a whole
 //! proof, read at the rate the caller asks for rather than at that example's single one.
-use super::{median_of, milliseconds, once, rate_label, Row, SECURITY_BITS};
+use super::{median_of, milliseconds, once, rate_label, Row};
 use binius_compute::BufferPool;
 use binius_core::word::Word;
 use binius_hash::StdHashSuite;
@@ -42,10 +42,11 @@ pub struct Pcs {
     verifier: BaseFoldVerifierCompiler<B128>,
     prover: BaseFoldProverCompiler<Packed, ProverNTT>,
     log_inv_rate: usize,
+    security_bits: usize,
 }
 
 impl Pcs {
-    pub fn new(log_len: usize, log_inv_rate: usize) -> Pcs {
+    pub fn new(log_len: usize, log_inv_rate: usize, security_bits: usize) -> Pcs {
         let merkle_scheme = BinaryMerkleTreeScheme::<B128, StdHashSuite>::new();
         let arity = ConstantArityStrategy::with_optimal_arity::<B128, _>(
             &merkle_scheme,
@@ -55,7 +56,7 @@ impl Pcs {
             &merkle_scheme,
             vec![OracleSpec::new(log_len)],
             log_inv_rate,
-            calculate_n_test_queries(SECURITY_BITS, log_inv_rate),
+            calculate_n_test_queries(security_bits, log_inv_rate),
             &ConstantArityStrategy::new(arity.arity),
         );
         let domain_context = GaoMateerPreExpanded::<B128>::generate(verifier.max_log_domain_size());
@@ -65,11 +66,12 @@ impl Pcs {
             verifier,
             prover,
             log_inv_rate,
+            security_bits,
         }
     }
 
     pub fn n_test_queries(&self) -> usize {
-        calculate_n_test_queries(SECURITY_BITS, self.log_inv_rate)
+        calculate_n_test_queries(self.security_bits, self.log_inv_rate)
     }
 }
 
@@ -185,9 +187,9 @@ pub fn verify(
     Ok(())
 }
 
-pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
+pub fn run(log_len: usize, log_inv_rate: usize, security_bits: usize, u64s: &[u64]) -> Row {
     let pool = BufferPool::new();
-    let pcs = Pcs::new(log_len, log_inv_rate);
+    let pcs = Pcs::new(log_len, log_inv_rate, security_bits);
     let words: Vec<Word> = u64s.iter().map(|&w| Word(w)).collect();
 
     let (commit_ms, commitment) = {
@@ -208,7 +210,7 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
     Row {
         scheme: "binius64 BaseFold",
         rate: rate_label(log_inv_rate),
-        target: format!("{SECURITY_BITS}"),
+        target: format!("{security_bits}"),
         security: format!("unique decoding, {} queries, no grinding", pcs.n_test_queries()),
         claim: "element-MLE",
         commit_ms,

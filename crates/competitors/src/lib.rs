@@ -14,7 +14,12 @@ pub const WITNESS_SEED: u64 = 0xC7;
 
 pub const CPU: usize = 3;
 
+/// The default target of the binius64 rows, and the one its own configuration uses.
 pub const SECURITY_BITS: usize = binius_verifier::SECURITY_BITS;
+
+/// The targets the table reports every scheme at: binius64's own, and the 100 bits two of the
+/// Ligerito profiles are built for, so that the rows can be read against each other.
+pub const TARGETS: [usize; 2] = [SECURITY_BITS, 100];
 
 pub struct Row {
     pub scheme: &'static str,

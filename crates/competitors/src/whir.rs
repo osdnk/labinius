@@ -1,5 +1,5 @@
 use super::basefold::evaluate_elements;
-use super::{median_of, milliseconds, once, rate_label, Row, SECURITY_BITS};
+use super::{median_of, milliseconds, once, rate_label, Row};
 use binius_compute::BufferPool;
 use binius_core::word::Word;
 use binius_hash::StdHashSuite;
@@ -30,14 +30,14 @@ pub struct Pcs {
 }
 
 impl Pcs {
-    pub fn new(log_len: usize, log_inv_rate: usize) -> Pcs {
+    pub fn new(log_len: usize, log_inv_rate: usize, security_bits: usize) -> Pcs {
         let merkle_scheme = BinaryMerkleTreeScheme::<B128, StdHashSuite>::new();
         let verifier = WHIRVerifierCompiler::<B128>::optimal(
             &merkle_scheme,
             vec![OracleSpec::new(log_len)],
             log_inv_rate,
             SoundnessRegime::UniqueDecoding,
-            SECURITY_BITS,
+            security_bits,
             Grinding::NONE,
         )
         .expect("a ladder over this message reaches the security target");
@@ -132,9 +132,9 @@ pub fn verify(
     Ok(())
 }
 
-pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
+pub fn run(log_len: usize, log_inv_rate: usize, security_bits: usize, u64s: &[u64]) -> Row {
     let pool = BufferPool::new();
-    let pcs = Pcs::new(log_len, log_inv_rate);
+    let pcs = Pcs::new(log_len, log_inv_rate, security_bits);
     let words: Vec<Word> = u64s.iter().map(|&w| Word(w)).collect();
 
     let (commit_ms, commitment) = {
@@ -155,7 +155,7 @@ pub fn run(log_len: usize, log_inv_rate: usize, u64s: &[u64]) -> Row {
     Row {
         scheme: "binius64 WHIR",
         rate: rate_label(log_inv_rate),
-        target: format!("{SECURITY_BITS}"),
+        target: format!("{security_bits}"),
         security: format!(
             "unique decoding, {:.1} achieved, no grinding, ladder {}",
             pcs.achieved(),
