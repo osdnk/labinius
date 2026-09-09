@@ -441,7 +441,7 @@ pub fn verify(
 
 /// A uniform point of `log_len` coordinates, so a wrapper can open at one without a transcript.
 pub fn eval_point(log_len: usize, seed: u64) -> Vec<B128> {
-    let mut rng = bin_ntt::rng::Rng::new(seed);
+    let mut rng = labinius::rng::Rng::new(seed);
     (0..log_len)
         .map(|_| B128::new(((rng.next_u64() as u128) << 64) | rng.next_u64() as u128))
         .collect()

@@ -1,10 +1,10 @@
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::SUITES;
-use bin_ntt::bd::{self, Dropped};
-use bin_ntt::params::N;
-use bin_ntt::wire;
-use bin_ntt::Modulus;
-use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::{Opening, OpeningMessage};
+use labinius::SUITES;
+use labinius::bd::{self, Dropped};
+use labinius::params::N;
+use labinius::wire;
+use labinius::Modulus;
+use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 const MATRIX_SEED: [u8; 32] = [0x31; 32];
 const WITNESS_SEED: [u8; 32] = [0x77; 32];
@@ -31,7 +31,7 @@ fn crt(residues: &[u64], primes: &[u64]) -> u128 {
     let mut t = 0u128;
     for (&r, &q) in residues.iter().zip(primes) {
         let m = modulus / q as u128;
-        let inv = bin_ntt::params::inv_mod((m % q as u128) as u64, q) as u128;
+        let inv = labinius::params::inv_mod((m % q as u128) as u64, q) as u128;
         t = (t + r as u128 * m % modulus * inv) % modulus;
     }
     t
@@ -154,7 +154,7 @@ fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
     let verifier = Verifier::new(&pp);
     let (commitment, opening) = prover.commit(&witness);
 
-    let mut transcript = Transcript::new(b"bin-ntt/test-bd");
+    let mut transcript = Transcript::new(b"labinius/test-bd");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let row = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
@@ -207,10 +207,10 @@ fn a_bd_opening_verifies_and_a_wrapped_fold_or_a_swapped_column_is_refused() {
             digit.swap(i, N + i);
         }
     }
-    let swapped = bin_ntt::scheme::Commitment::of(
+    let swapped = labinius::scheme::Commitment::of(
         params.primes(),
         params.columns(),
-        bin_ntt::scheme::CommitmentValue::Dropped(std::sync::Arc::new(Dropped::of(
+        labinius::scheme::CommitmentValue::Dropped(std::sync::Arc::new(Dropped::of(
             params.primes(),
             params.columns(),
             params.dropped_bits(),

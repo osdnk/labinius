@@ -86,7 +86,7 @@ impl Masks {
         let rows = (0..lifts())
             .map(|h| {
                 let mut bytes = vec![0u8; 12 * total];
-                transcript.fill(format!("bin-ntt/recursion/mask/{h}").as_bytes(), &mut bytes);
+                transcript.fill(format!("labinius/recursion/mask/{h}").as_bytes(), &mut bytes);
                 let mut at = 0;
                 let mut row = Vec::with_capacity(setup.ranks.iter().sum());
                 for (i, &n) in setup.ranks.iter().enumerate() {

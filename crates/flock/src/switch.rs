@@ -1,5 +1,5 @@
-use bin_ntt::fields::crossfield as cf;
-use bin_ntt::fields::scalar::{B128 as SB, F162};
+use labinius::fields::crossfield as cf;
+use labinius::fields::scalar::{B128 as SB, F162};
 use flock_core::pcs::ring_switch::build_claim_weights_from_skip;
 use flock_core::proof::ZClaim;
 use flock_field::F128;

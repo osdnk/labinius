@@ -1,7 +1,7 @@
 //! What the code tests in this directory share: random and low-weight messages, and the Hamming
 //! weight a distance check reads off a codeword.
 use crate::codes::LinearCode;
-use bin_ntt::rng::Rng;
+use labinius::rng::Rng;
 use binius_field::Field;
 use binius_verifier::config::B128;
 

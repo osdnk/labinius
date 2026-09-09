@@ -185,7 +185,7 @@
 //! in memory except at the small levels that could go either way, which is the 31 B/nonzero at
 //! `k = 2^12` and 2 MB of it.
 use crate::codes::LinearCode;
-use bin_ntt::rng::Rng;
+use labinius::rng::Rng;
 use binius_field::{Field, PackedGhash1x128b, PackedGhash4x128b, WideMul};
 use binius_verifier::config::B128;
 
@@ -765,7 +765,7 @@ mod tests {
     fn setup_cost() {
         for log_k in [12, 16, 20] {
             let k = 1 << log_k;
-            let (ms, code) = bin_ntt_bench::once(|| BrakedownCode::new(k, SPEC[0], 3));
+            let (ms, code) = labinius_bench::once(|| BrakedownCode::new(k, SPEC[0], 3));
             println!(
                 "brakedown-1 k = 2^{log_k}  setup {ms:>8.3} ms  {:>7.1} MB  {:.1} B/nonzero",
                 code.matrix_bytes() as f64 / 1e6,
@@ -787,14 +787,14 @@ mod tests {
                 for _ in 0..(1 << 22) / k {
                     code.encode_interleaved(rows, &messages, &mut codeword);
                 }
-                let (ms, _) = bin_ntt_bench::median_of(5, || {
+                let (ms, _) = labinius_bench::median_of(5, || {
                     code.encode_interleaved(rows, &messages, &mut codeword)
                 });
-                let (naive, _) = bin_ntt_bench::median_of(3, || {
+                let (naive, _) = labinius_bench::median_of(3, || {
                     encode_interleaved_naive(&code, rows, &messages, &mut codeword)
                 });
                 let mut one = vec![B128::ZERO; n];
-                let (single, _) = bin_ntt_bench::median_of(5, || code.encode(&messages[..k], &mut one));
+                let (single, _) = labinius_bench::median_of(5, || code.encode(&messages[..k], &mut one));
                 let per = |t: f64| t * 1e6 / (k * rows) as f64;
                 println!(
                     "brakedown-1 k = 2^{log_k} rows {rows:>2}  {ms:>8.3} ms {:>5.1} ns/sym   naive {naive:>8.3} ms {:>5.1} ns/sym   rows*encode {:>8.3} ms {:>5.1} ns/sym",
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     #[ignore]
     fn throughput() {
-        bin_ntt_bench::pin(crate::CPU);
+        labinius_bench::pin(crate::CPU);
         for log_k in [12, 14, 16, 20] {
             let k = 1 << log_k;
             let code = BrakedownCode::new(k, SPEC[0], 3);
@@ -819,7 +819,7 @@ mod tests {
             for _ in 0..(1 << 22) / k {
                 code.encode(&message, &mut codeword);
             }
-            let (ms, _) = bin_ntt_bench::median_of(9, || code.encode(&message, &mut codeword));
+            let (ms, _) = labinius_bench::median_of(9, || code.encode(&message, &mut codeword));
             println!(
                 "brakedown-1 k = 2^{log_k}  {ms:>7.3} ms  {:.1} muls/symbol  {:.0} ns/symbol",
                 code.field_muls() as f64 / k as f64,

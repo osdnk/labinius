@@ -13,8 +13,8 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-bin-ntt = { path = "crates/pcs" }
-bin-ntt-bench = { path = "crates/bench" }
+labinius = { path = "crates/pcs" }
+labinius-bench = { path = "crates/bench" }
 # Fiat-Shamir transcript (challenge.rs): blake3 as the hash and the XOF.
 blake3 = "1.8"
 # binius64 instruments its phases with tracing spans; the baseline column reads them.

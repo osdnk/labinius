@@ -300,7 +300,7 @@ pub trait FoldingSource {
 
 impl FoldingSource for RowEvaluation {
     fn absorb(&self, transcript: &mut Transcript) {
-        transcript.absorb_bytes(b"bin-ntt/row-evaluation");
+        transcript.absorb_bytes(b"labinius/row-evaluation");
         let mut bytes = Vec::with_capacity(24 * self.values.len());
         for x in &self.values {
             for limb in x.0 {
@@ -313,7 +313,7 @@ impl FoldingSource for RowEvaluation {
 
 impl FoldingSource for LeftExpansionCommitment {
     fn absorb(&self, transcript: &mut Transcript) {
-        transcript.absorb_bytes(b"bin-ntt/left-expansion-commitment");
+        transcript.absorb_bytes(b"labinius/left-expansion-commitment");
         transcript.absorb_bytes(self.t_u.as_bytes());
     }
 }

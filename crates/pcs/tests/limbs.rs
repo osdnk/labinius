@@ -1,7 +1,7 @@
 //! The moduli lists: the whole round over the base modulus alone and over every combination of
 //! extra moduli the API offers, splitting and quadratic-slot alike.
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::{
+use labinius::{Opening, OpeningMessage};
+use labinius::{
     Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
 };
 
@@ -39,7 +39,7 @@ fn round(
     let witness = Witness::random(&params, WITNESS_SEED);
 
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/limbs");
+    let mut transcript = Transcript::new(b"labinius/test/limbs");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claimed_value = witness.mle_evaluate(&point);
     let row_evaluation = witness.row_evaluate(&point);

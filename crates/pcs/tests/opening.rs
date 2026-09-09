@@ -1,15 +1,15 @@
 //! The recursive opening: an honest round, the two sides agreeing on the statement, the tampers
 //! the relation has to catch, and the retry the fold's norm cap makes necessary.
-use bin_ntt::Opening as OpeningMode;
-use bin_ntt::OpeningMessage;
+use labinius::Opening as OpeningMode;
+use labinius::OpeningMessage;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bin_ntt::labrador;
-use bin_ntt::recursion::setup::Setup;
-use bin_ntt::recursion::statement::{build, Masks, Opening, ProofPhi};
-use bin_ntt::recursion::Instance;
-use bin_ntt::{
+use labinius::labrador;
+use labinius::recursion::setup::Setup;
+use labinius::recursion::statement::{build, Masks, Opening, ProofPhi};
+use labinius::recursion::Instance;
+use labinius::{
     Commitment, EvaluationPoint, FoldingChallenges, LeftExpansionCommitment, Modulus, OpeningError,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, Transcript, Verifier, Witness,
     F162,
@@ -33,7 +33,7 @@ struct Round {
     verifier: Verifier,
     witness: Witness,
     commitment: Commitment,
-    opening: Option<bin_ntt::CommitmentOpening>,
+    opening: Option<labinius::CommitmentOpening>,
     transcript: Transcript,
     point: EvaluationPoint,
     claim: F162,
@@ -129,7 +129,7 @@ fn an_honest_recursive_round_is_accepted() {
         vec![Modulus::Q4861_Q_S],
         vec![Modulus::Q19441_FS_L],
     ] {
-        let mut round = Round::new(&small(extra.clone()), b"bin-ntt/test/opening");
+        let mut round = Round::new(&small(extra.clone()), b"labinius/test/opening");
         let proof = round.prove().expect("the honest fold is within its cap");
         assert!(round.verify(&proof), "{extra:?}");
         assert_eq!(proof.norms().len(), round.setup.caps.len());
@@ -147,7 +147,7 @@ fn an_honest_recursive_round_is_accepted() {
 #[test]
 fn the_stage_timings_account_for_the_run() {
     let params = small(vec![Modulus::Q9721_FS_S]);
-    let mut round = Round::new(&params, b"bin-ntt/test/opening/timings");
+    let mut round = Round::new(&params, b"labinius/test/opening/timings");
     let whole = Instant::now();
     let proof = round.prove().expect("the honest fold is within its cap");
     let prove = whole.elapsed();
@@ -201,7 +201,7 @@ fn a_recursive_round_takes_any_base() {
         for attempt in 0..8u8 {
             let mut round = Round::new(
                 &params,
-                &[b"bin-ntt/test/opening/base/"[..].to_vec(), vec![attempt]].concat(),
+                &[b"labinius/test/opening/base/"[..].to_vec(), vec![attempt]].concat(),
             );
             let Ok(proof) = round.prove() else { continue };
             assert!(round.verify(&proof), "base {base:?}");
@@ -229,7 +229,7 @@ fn an_honest_plain_round_is_accepted() {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/opening/plain");
+    let mut transcript = Transcript::new(b"labinius/test/opening/plain");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claim = witness.mle_evaluate(&point);
     let row = witness.row_evaluate(&point);
@@ -262,7 +262,7 @@ fn an_honest_plain_round_is_accepted() {
 fn the_prover_and_the_verifier_encode_the_same_relation() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/same",
+        b"labinius/test/opening/same",
     );
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let proof = round.prove().expect("honest opening");
@@ -331,7 +331,7 @@ fn the_prover_and_the_verifier_encode_the_same_relation() {
 fn a_wrong_norm_is_rejected() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/norm",
+        b"labinius/test/opening/norm",
     );
     let proof = round.prove().expect("honest opening");
     assert!(round.verify(&proof));
@@ -349,7 +349,7 @@ fn a_wrong_norm_is_rejected() {
 fn a_modified_left_expansion_commitment_is_rejected() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/left",
+        b"labinius/test/opening/left",
     );
     let proof = round.prove().expect("honest opening");
     let other = {
@@ -367,7 +367,7 @@ fn a_modified_left_expansion_commitment_is_rejected() {
 fn a_commitment_to_other_residues_is_rejected() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/residue",
+        b"labinius/test/opening/residue",
     );
     let proof = round.prove().expect("honest opening");
     let mut other = round.witness.elements().to_vec();
@@ -391,7 +391,7 @@ fn a_commitment_to_other_residues_is_rejected() {
 fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/zero",
+        b"labinius/test/opening/zero",
     );
     let residues = round.opening.as_ref().unwrap().residues().unwrap().clone();
     let opening = round.opening.take().unwrap();
@@ -448,10 +448,10 @@ fn a_coefficient_at_a_zero_position_is_caught_by_the_masks() {
 fn a_wrong_challenge_set_is_rejected() {
     let mut round = Round::new(
         &small(vec![Modulus::Q9721_FS_S]),
-        b"bin-ntt/test/opening/challenges",
+        b"labinius/test/opening/challenges",
     );
     let proof = round.prove().expect("honest opening");
-    let mut other = Transcript::new(b"bin-ntt/test/opening/challenges/other");
+    let mut other = Transcript::new(b"labinius/test/opening/challenges/other");
     let challenges = round
         .verifier
         .derive_folding_challenges(&mut other, &round.left);
@@ -497,7 +497,7 @@ fn a_long_fold_is_refused_and_a_short_one_is_proven() {
 impl Round {
     fn challenges_reaching_the_cap(&mut self, over: bool, tries: usize) -> FoldingChallenges {
         for k in 0..tries {
-            let mut transcript = Transcript::new(b"bin-ntt/test/opening/cap");
+            let mut transcript = Transcript::new(b"labinius/test/opening/cap");
             transcript.absorb_u64(k as u64);
             let challenges = self
                 .verifier

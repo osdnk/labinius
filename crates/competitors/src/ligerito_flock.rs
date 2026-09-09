@@ -1,5 +1,5 @@
 use super::{median_of, once, rate_label, Row};
-use bin_ntt::rng::Rng;
+use labinius::rng::Rng;
 use flock_core::challenger::FsChallenger;
 use flock_core::field::F128;
 use flock_core::lincheck::build_eq_table;
@@ -15,7 +15,7 @@ const HASH_BYTES: usize = 32;
 
 const LOG_PACKING: usize = 7;
 
-const DOMAIN: &[u8] = b"bin-ntt-competitors";
+const DOMAIN: &[u8] = b"labinius-competitors";
 
 const POINT_SEED: u64 = 0x1D;
 

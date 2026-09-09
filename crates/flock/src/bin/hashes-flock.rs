@@ -1,8 +1,8 @@
-use bin_ntt_flock::circuit::LOG_INV_RATE;
-use bin_ntt_flock::{Hash, Instance, ProverTiming, Session, Sizes};
-use bin_ntt::scheme::suite_from_args;
-use bin_ntt::Suite;
-use bin_ntt_bench::{once, peak_rss, pin, pinned, table_row as row};
+use labinius_flock::circuit::LOG_INV_RATE;
+use labinius_flock::{Hash, Instance, ProverTiming, Session, Sizes};
+use labinius::scheme::suite_from_args;
+use labinius::Suite;
+use labinius_bench::{once, peak_rss, pin, pinned, table_row as row};
 use flock_transcript::challenger::FsChallenger;
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -28,11 +28,11 @@ fn compare(hash: Hash, suite: &Suite) {
     let (witness_ms, witness) = once(|| instance.witness());
 
     let (union_prove, (union_proof, union_commitment, _)) = once(|| {
-        let mut ch = FsChallenger::new(bin_ntt_flock::DOMAIN);
+        let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
         instance.stock_prove(&mut ch)
     });
     let (union_verify, union_ok) = once(|| {
-        let mut ch = FsChallenger::new(bin_ntt_flock::DOMAIN);
+        let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
         instance.stock_verify(&union_commitment, &union_proof, &mut ch)
     });
     union_ok.expect("stock flock verifies its own proof");
@@ -40,11 +40,11 @@ fn compare(hash: Hash, suite: &Suite) {
     drop(union_proof);
 
     let core_params = instance.core_params();
-    let mut ch = FsChallenger::new(bin_ntt_flock::DOMAIN);
+    let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
     let core_witness = instance.witness();
     let (core_reduce, core) = once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
     let (core_open, core_proof) = once(|| instance.core_open(&core_params, core, &mut ch));
-    let mut ch = FsChallenger::new(bin_ntt_flock::DOMAIN);
+    let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
     let (core_verify_reduce, core_claims) =
         once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
     let core_claims = core_claims.expect("stock flock replays its own reductions");
@@ -78,7 +78,7 @@ fn compare(hash: Hash, suite: &Suite) {
 
     let r1cs = instance.r1cs();
     println!(
-        "bin-ntt over flock {}, core {}, one thread, size {}",
+        "labinius over flock {}, core {}, one thread, size {}",
         hash.name(),
         pinned(),
         suite.name

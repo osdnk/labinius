@@ -41,7 +41,7 @@ impl Verifier {
     /// The shape, the moduli, the key seed and — with recursion on — LaBRADOR's modulus, absorbed
     /// before anything the prover chooses.
     fn absorb_parameters(&self, transcript: &mut Transcript) {
-        transcript.absorb_bytes(b"bin-ntt/parameters");
+        transcript.absorb_bytes(b"labinius/parameters");
         transcript.absorb_u64(self.params.witness_log_len as u64);
         transcript.absorb_u64(self.params.column_log_len as u64);
         for q in self.params.primes() {
@@ -49,7 +49,7 @@ impl Verifier {
         }
         transcript.absorb_u64(u64::from(self.params.recursion()));
         if self.params.dropped_bits() > 0 {
-            transcript.absorb_bytes(b"bin-ntt/dropped-bits");
+            transcript.absorb_bytes(b"labinius/dropped-bits");
             transcript.absorb_u64(self.params.dropped_bits() as u64);
         }
         if self.params.recursion() {
@@ -66,7 +66,7 @@ impl Verifier {
         commitment: &Commitment,
     ) -> EvaluationPoint {
         self.absorb_parameters(transcript);
-        transcript.absorb_bytes(b"bin-ntt/commitment");
+        transcript.absorb_bytes(b"labinius/commitment");
         transcript.absorb_u64(commitment.columns() as u64);
         match commitment.value() {
             CommitmentValue::Matrix(m) => {
@@ -76,7 +76,7 @@ impl Verifier {
             }
             CommitmentValue::Recursive(t) => transcript.absorb_bytes(t.as_bytes()),
             CommitmentValue::Dropped(d) => {
-                transcript.absorb_bytes(b"bin-ntt/dropped-commitment");
+                transcript.absorb_bytes(b"labinius/dropped-commitment");
                 transcript.absorb_bytes(&crate::wire::pack_dropped(d));
             }
         }
@@ -85,7 +85,7 @@ impl Verifier {
             self.params.column_log_len as usize,
         );
         let mut bytes = vec![0u8; 24 * (rows + cols)];
-        transcript.fill(b"bin-ntt/evaluation-point", &mut bytes);
+        transcript.fill(b"labinius/evaluation-point", &mut bytes);
         let element = |n: usize| {
             let mut limb = [0u64; 3];
             for (k, l) in limb.iter_mut().enumerate() {

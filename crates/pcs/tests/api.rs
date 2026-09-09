@@ -1,7 +1,7 @@
 //! The surface: parameter validation, witness construction, the commitment's accessors,
 //! determinism, and the workspace a prover reuses between two rounds.
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::{
+use labinius::{Opening, OpeningMessage};
+use labinius::{
     Modulus, ParamError, Params, Prover, PublicParameters, Transcript, Verifier, Witness,
     WitnessError, F162,
 };
@@ -18,7 +18,7 @@ fn small() -> Params {
 /// One round, returning whether both checks passed.
 fn round(prover: &mut Prover, verifier: &Verifier, witness: &Witness) -> bool {
     let (commitment, opening) = prover.commit(witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/api");
+    let mut transcript = Transcript::new(b"labinius/test/api");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claimed_value = witness.mle_evaluate(&point);
     let row_evaluation = witness.row_evaluate(&point);

@@ -5,10 +5,10 @@
 //! The reference lives here rather than in `src/fields`: nothing in the crate uses it. Its
 //! randomness is this crate's [`Rng`] in place of the library's `rand_chacha`, so the draws differ
 //! from upstream's but each test covers the same ground.
-use bin_ntt::fields::crossfield::*;
-use bin_ntt::fields::f162;
-use bin_ntt::fields::scalar::{B128, F162};
-use bin_ntt::rng::Rng;
+use labinius::fields::crossfield::*;
+use labinius::fields::f162;
+use labinius::fields::scalar::{B128, F162};
+use labinius::rng::Rng;
 use std::arch::x86_64::*;
 
 // ------------------------------------------------------- the bit-by-bit reference

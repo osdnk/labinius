@@ -2,16 +2,16 @@ pub mod circuit;
 pub mod piop;
 pub mod switch;
 
-use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage};
-use bin_ntt::Suite;
-use bin_ntt::fields::scalar::{B128 as SB, F162};
-use bin_ntt::scheme::{
+use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
+use labinius::Suite;
+use labinius::fields::scalar::{B128 as SB, F162};
+use labinius::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
     Witness,
 };
-use bin_ntt::wire;
-use bin_ntt::Transcript;
+use labinius::wire;
+use labinius::Transcript;
 use flock_core::verifier::{verify_core_with_grinding, FlockVerifyError};
 use flock_field::F128;
 use flock_transcript::challenger::{Challenger, FsChallenger};
@@ -19,7 +19,7 @@ use std::time::Instant;
 
 pub use circuit::{Hash, Instance};
 
-pub const DOMAIN: &[u8] = b"bin-ntt/flock";
+pub const DOMAIN: &[u8] = b"labinius/flock";
 
 #[derive(Debug)]
 pub enum Error {

@@ -10,7 +10,7 @@
 //! The opening's own messages do not go on that tape: `labrador::ProofHandle` is an opaque handle
 //! over the C prover's proof, so the recursive opening has no byte form to append, and [`Opening`]
 //! carries the two shapes side by side. The clear-text one does have a byte form and is held in
-//! it — the row evaluation bit-packed and the folded witness entropy-coded by [`bin_ntt::wire`], the
+//! it — the row evaluation bit-packed and the folded witness entropy-coded by [`labinius::wire`], the
 //! same code the reference binary sends — so its column of [`Sizes`] is measured rather than
 //! assumed, and the verifier decodes what it is given before checking it.
 pub mod channel;
@@ -20,16 +20,16 @@ pub mod phases;
 pub mod stock;
 pub mod switch;
 
-use bin_ntt::scheme::{Opening as OpeningMode, OpeningMessage};
-use bin_ntt::Suite;
-use bin_ntt::fields::scalar::{B128 as SB, F162};
-use bin_ntt::scheme::{
+use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
+use labinius::Suite;
+use labinius::fields::scalar::{B128 as SB, F162};
+use labinius::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
     Witness,
 };
-use bin_ntt::wire;
-use bin_ntt::Transcript;
+use labinius::wire;
+use labinius::Transcript;
 use binius_compute::GlobalAllocator;
 use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
@@ -111,7 +111,7 @@ impl Sizes {
 
 /// The evaluation proof, in the two shapes [`Params::recursion`] gives it.
 pub enum Opening {
-    /// The two messages as [`bin_ntt::wire`] codes them: 162 bits an `F162` of row evaluation, and
+    /// The two messages as [`labinius::wire`] codes them: 162 bits an `F162` of row evaluation, and
     /// the folded witness against its own histogram.
     Clear { row: Vec<u8>, folded: Vec<u8> },
     Recursive {
@@ -428,7 +428,7 @@ impl Session {
 
 /// The opening's transcript, seeded with 32 bytes drawn off binius64's channel.
 fn seeded(challenges: &mut [B128; 2]) -> Transcript {
-    let mut transcript = Transcript::new(b"bin-ntt/keccak");
+    let mut transcript = Transcript::new(b"labinius/keccak");
     for challenge in challenges {
         transcript.absorb_bytes(&u128::from(*challenge).to_le_bytes());
     }

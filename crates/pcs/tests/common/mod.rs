@@ -1,9 +1,9 @@
 #![allow(dead_code)]
-use bin_ntt::f162;
-use bin_ntt::params::N;
-use bin_ntt::rng::Rng;
-use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-use bin_ntt::F162;
+use labinius::f162;
+use labinius::params::N;
+use labinius::rng::Rng;
+use labinius::simd::transpose_f162::{self as tf, BinaryIndex32};
+use labinius::F162;
 
 /// The 648 binary coefficients of one ring element.
 pub type Bin = [u32; N];
@@ -112,21 +112,21 @@ pub fn batches_quad(count: usize, seed: u64) -> Vec<[Bin; 32]> {
     batches_of(adversarial_quad(), count, seed)
 }
 
-pub fn small() -> bin_ntt::Params {
-    bin_ntt::Params::new(
+pub fn small() -> labinius::Params {
+    labinius::Params::new(
         11,
         3,
-        vec![bin_ntt::Modulus::Q9721_FS_S],
-        bin_ntt::Opening::Clear,
+        vec![labinius::Modulus::Q9721_FS_S],
+        labinius::Opening::Clear,
     )
     .unwrap()
 }
 
 /// A limb that is not `base`, so that a round has two of them.
-pub fn second(base: bin_ntt::Modulus) -> bin_ntt::Modulus {
-    if base == bin_ntt::Modulus::Q9721_FS_S {
-        bin_ntt::Modulus::Q3889_FS_S
+pub fn second(base: labinius::Modulus) -> labinius::Modulus {
+    if base == labinius::Modulus::Q9721_FS_S {
+        labinius::Modulus::Q3889_FS_S
     } else {
-        bin_ntt::Modulus::Q9721_FS_S
+        labinius::Modulus::Q9721_FS_S
     }
 }

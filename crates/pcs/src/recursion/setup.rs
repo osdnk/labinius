@@ -134,7 +134,7 @@ impl Setup {
                 .sqrt();
             let length: usize = group.iter().map(|&i| setup.ranks[i]).sum();
             let mut h = blake3::Hasher::new();
-            h.update(b"bin-ntt/recursion/key");
+            h.update(b"labinius/recursion/key");
             h.update(&seed);
             h.update(label);
             let mut sub = [0u8; 16];

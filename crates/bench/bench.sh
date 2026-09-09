@@ -90,7 +90,7 @@ for size in $SIZES; do
     echo "$RULE"
     echo
 
-    run bin-ntt "$size"
+    run labinius "$size"
     run pcs-competitors "$size"
     run hashes-flock "$size"
 
@@ -101,10 +101,10 @@ for size in $SIZES; do
     fi
 done
 
-build bin-ntt-bench/labrador
+build labinius-bench/labrador
 
 for size in $SIZES; do
-    run bin-ntt "$size" labrador
+    run labinius "$size" labrador
 done
 
 echo

@@ -1,10 +1,10 @@
 //! The wire forms: exact round trips for the bit-packed uniform objects and for the entropy
 //! coder, on honest rounds at several shapes and bases and on adversarial folds, and a size
 //! and wall-clock report (`--nocapture`, pinned to one core).
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::ring::{Representation, RingElement};
-use bin_ntt::wire::{self, WireError};
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::{Opening, OpeningMessage};
+use labinius::ring::{Representation, RingElement};
+use labinius::wire::{self, WireError};
+use labinius::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
 mod common;
@@ -17,9 +17,9 @@ const WITNESS_SEED: [u8; 32] = [23u8; 32];
 
 struct Round {
     params: Params,
-    commitment: bin_ntt::Commitment,
-    row_evaluation: bin_ntt::RowEvaluation,
-    folded_witness: bin_ntt::FoldedWitness,
+    commitment: labinius::Commitment,
+    row_evaluation: labinius::RowEvaluation,
+    folded_witness: labinius::FoldedWitness,
 }
 
 fn round(params: Params) -> Round {
@@ -28,7 +28,7 @@ fn round(params: Params) -> Round {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/wire");
+    let mut transcript = Transcript::new(b"labinius/test/wire");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let row_evaluation = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
@@ -42,8 +42,8 @@ fn round(params: Params) -> Round {
 }
 
 /// A modulus that is not `base`, to be the second limb.
-fn fold_of(values: Vec<Vec<i16>>) -> bin_ntt::FoldedWitness {
-    bin_ntt::FoldedWitness::of(
+fn fold_of(values: Vec<Vec<i16>>) -> labinius::FoldedWitness {
+    labinius::FoldedWitness::of(
         values
             .into_iter()
             .map(|v| {
@@ -63,12 +63,12 @@ fn fold_of(values: Vec<Vec<i16>>) -> bin_ntt::FoldedWitness {
 #[test]
 fn the_row_evaluation_packs_at_162_bits() {
     for count in [0usize, 1, 2, 7, 256, 1024] {
-        let values = bin_ntt::f162::random_elems(count, 0xF162 + count as u64);
+        let values = labinius::f162::random_elems(count, 0xF162 + count as u64);
         let bytes = wire::pack_f162(&values);
         assert_eq!(bytes.len(), (count * 162).div_ceil(8), "{count} elements");
         assert_eq!(wire::unpack_f162(&bytes, count).unwrap(), values);
     }
-    let bytes = wire::pack_f162(&bin_ntt::f162::random_elems(256, 7));
+    let bytes = wire::pack_f162(&labinius::f162::random_elems(256, 7));
     assert_eq!(bytes.len(), 5184);
     assert_eq!(
         wire::unpack_f162(&bytes[..5183], 256),
@@ -101,21 +101,21 @@ fn the_commitment_packer_takes_the_extremes() {
     let primes = params.primes();
     for pick in [0usize, 1, 2] {
         let data = (0..4 * params.columns())
-            .map(|i| bin_ntt::ring::PowerOfThreeRingElementWithLimbs {
+            .map(|i| labinius::ring::PowerOfThreeRingElementWithLimbs {
                 limbs: primes
                     .iter()
                     .map(|&q| {
                         let half = ((q - 1) / 2) as i16;
                         let value = [0, half, -half][(pick + i) % 3];
-                        bin_ntt::ring::PowerOfThreeRingElement { v: [value; 162] }
+                        labinius::ring::PowerOfThreeRingElement { v: [value; 162] }
                     })
                     .collect(),
             })
             .collect();
-        let commitment = bin_ntt::Commitment::of(
+        let commitment = labinius::Commitment::of(
             primes.clone(),
             params.columns(),
-            bin_ntt::CommitmentValue::Matrix(bin_ntt::ring::VerticallyAlignedMatrix::new(
+            labinius::CommitmentValue::Matrix(labinius::ring::VerticallyAlignedMatrix::new(
                 4,
                 params.columns(),
                 data,
@@ -204,7 +204,7 @@ fn an_honest_fold_round_trips() {
 /// puts the escape symbol to work.
 #[test]
 fn an_adversarial_fold_round_trips() {
-    let empty = bin_ntt::FoldedWitness::of(Vec::new());
+    let empty = labinius::FoldedWitness::of(Vec::new());
     let bytes = wire::encode(&empty, 3889);
     assert_eq!(bytes.len(), 16);
     assert!(wire::decode(&bytes).unwrap().is_empty());
@@ -276,7 +276,7 @@ fn the_coder_takes_any_i16() {
     let mut extremes = folded.elements().to_vec();
     extremes[0].v[0] = i16::MIN;
     extremes[0].v[1] = i16::MAX;
-    let folded = bin_ntt::FoldedWitness::of(extremes);
+    let folded = labinius::FoldedWitness::of(extremes);
     let bytes = wire::encode(&folded, 3889);
     assert_eq!(wire::decode(&bytes).unwrap().elements(), folded.elements());
 }
@@ -401,7 +401,7 @@ fn the_verifier_takes_the_decoded_objects() {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/wire");
+    let mut transcript = Transcript::new(b"labinius/test/wire");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claimed_value = witness.mle_evaluate(&point);
     let row_evaluation = witness.row_evaluate(&point);

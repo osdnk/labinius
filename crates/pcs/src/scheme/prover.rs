@@ -41,7 +41,7 @@ impl Prover {
             elements: vec![F162::ZERO; pp.params.witness_len()],
         };
         let (commitment, opening) = prover.commit(&witness);
-        let mut transcript = Transcript::new(b"bin-ntt/warm-up");
+        let mut transcript = Transcript::new(b"labinius/warm-up");
         let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
         let row_evaluation = witness.row_evaluate(&point);
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);

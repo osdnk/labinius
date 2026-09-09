@@ -1,7 +1,7 @@
 //! Calibration: run one recursive round at `witness_log column_log base extra...` and let
 //! GADGET_STATS print the chain magnitudes.
-use bin_ntt::Opening;
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::Opening;
+use labinius::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 fn modulus(s: &str) -> Modulus {
     match s {
@@ -36,7 +36,7 @@ pub fn run() {
     let mut prover = Prover::new(&pp);
     let verifier = Verifier::new(&pp);
     let (commitment, opening) = prover.commit(&witness);
-    let mut t = Transcript::new(&[b"bin-ntt/gadget".as_slice(), &[seed]].concat());
+    let mut t = Transcript::new(&[b"labinius/gadget".as_slice(), &[seed]].concat());
     let point = verifier.derive_evaluation_point(&mut t, &commitment);
     let claim = witness.mle_evaluate(&point);
     let row = witness.row_evaluate(&point);

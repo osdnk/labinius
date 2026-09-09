@@ -2,16 +2,16 @@
 //! commitment against the scalar reference for both primes, the raw accumulator's exact fold-back
 //! and its overflow bound (replayed in i64 against the real kernel output), and the two-limb
 //! commitment against two single-limb ones.
-use bin_ntt::f162::{self, RandomF162};
-use bin_ntt::params::N;
-use bin_ntt::rng::Rng;
-use bin_ntt::scalar;
-use bin_ntt::simd::commit::{self as cm, Acc};
-use bin_ntt::simd::transpose_f162 as tf;
-use bin_ntt::simd::ntt::bin_asm as vb;
-use bin_ntt::simd::ntt::bin_large as vl;
-use bin_ntt::ring::*;
-use bin_ntt::F162;
+use labinius::f162::{self, RandomF162};
+use labinius::params::N;
+use labinius::rng::Rng;
+use labinius::scalar;
+use labinius::simd::commit::{self as cm, Acc};
+use labinius::simd::transpose_f162 as tf;
+use labinius::simd::ntt::bin_asm as vb;
+use labinius::simd::ntt::bin_large as vl;
+use labinius::ring::*;
+use labinius::F162;
 
 /// The binary kernel of a splitting prime: `ntt::bin_asm` below `2^14`, `ntt::bin_large`
 /// above it.
@@ -197,7 +197,7 @@ fn bound_adversarial<const Q: u16>() {
     let mut w: Vec<Batch32> = (0..nb)
         .map(|_| Batch32::zero(Representation::Ntt))
         .collect();
-    let mut idx = bin_ntt::simd::transpose_f162::BinaryIndex32::zero();
+    let mut idx = labinius::simd::transpose_f162::BinaryIndex32::zero();
     for (b, o) in w.iter_mut().enumerate() {
         unsafe {
             tf::slice_f162_into(
@@ -324,7 +324,7 @@ fn two_limbs() {
     assert_eq!(z[1], y9);
     assert_eq!(z[2], y19);
 
-    let mut idx = bin_ntt::simd::transpose_f162::BinaryIndex32::zero();
+    let mut idx = labinius::simd::transpose_f162::BinaryIndex32::zero();
     let mut want = Batch32::zero(Representation::Ntt);
     for (b, got) in w.iter().enumerate() {
         unsafe {

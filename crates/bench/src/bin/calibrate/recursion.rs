@@ -1,8 +1,8 @@
 //! The shape of the encoded relation at `Params::basic()`: sizes, norms, carries and the
 //! no-wraparound margins.
-use bin_ntt::Opening;
-use bin_ntt::recursion::{Cap, Instance, BLOCKS, DEG, Q};
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::Opening;
+use labinius::recursion::{Cap, Instance, BLOCKS, DEG, Q};
+use labinius::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::time::Instant;
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -34,7 +34,7 @@ pub fn the_encoding_at_the_basic_parameters() {
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
     let residues = opening.residues().expect("recursion is on").clone();
-    let mut transcript = Transcript::new(b"bin-ntt/bench/recursion");
+    let mut transcript = Transcript::new(b"labinius/bench/recursion");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claim = witness.mle_evaluate(&point);
     let evaluation = witness.row_evaluate(&point);

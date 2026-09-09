@@ -1,13 +1,13 @@
 //! The recursion encoding: the ring conventions, the chain on synthetic identities, and the whole
 //! instance on the real pipeline.
-use bin_ntt::Opening;
-use bin_ntt::ring::N162;
-use bin_ntt::params::N;
-use bin_ntt::recursion::{
+use labinius::Opening;
+use labinius::ring::N162;
+use labinius::params::N;
+use labinius::recursion::{
     binary, chunk, limbs, Gadget, Instance, SElem, BLOCKS, BLOCK_LIMIT, CHUNK, CHUNKS, DEG, Q, V,
 };
-use bin_ntt::rng::Rng;
-use bin_ntt::{scalar, Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::rng::Rng;
+use labinius::{scalar, Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 const MATRIX_SEED: [u8; 32] = [17u8; 32];
 const WITNESS_SEED: [u8; 32] = [29u8; 32];
@@ -21,7 +21,7 @@ fn round(params: &Params) -> Instance {
     let witness = Witness::random(params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
     let residues = opening.residues().expect("recursion is on").clone();
-    let mut transcript = Transcript::new(b"bin-ntt/test/recursion");
+    let mut transcript = Transcript::new(b"labinius/test/recursion");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claim = witness.mle_evaluate(&point);
     let row = witness.row_evaluate(&point);
@@ -158,14 +158,14 @@ fn residues_re_transform_to_the_commitment() {
             for j in 0..r {
                 let mut a = [0i64; N];
                 for m in 0..4 {
-                    let c: [bin_ntt::recursion::Poly; CHUNKS] =
+                    let c: [labinius::recursion::Poly; CHUNKS] =
                         core::array::from_fn(|b| residues.vectors[limb * 4 + m][b * r + j]);
                     let e = chunk::decode(&c);
                     for t in 0..N162 {
                         a[4 * t + m] = if t % 2 == 0 { e[t] } else { -e[t] };
                     }
                 }
-                let back = bin_ntt::ring::components_of(q, &limbs::transform(q, &a));
+                let back = labinius::ring::components_of(q, &limbs::transform(q, &a));
                 for m in 0..4 {
                     assert_eq!(
                         back[m],
@@ -373,7 +373,7 @@ fn the_exported_constraints_are_satisfied() {
 /// A lift and its reduction agree with `F162`.
 #[test]
 fn lifts_reduce_to_f162() {
-    use bin_ntt::F162;
+    use labinius::F162;
     let mut rng = Rng::new(23);
     for _ in 0..16 {
         let x = F162([

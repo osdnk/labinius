@@ -1,5 +1,5 @@
 use crate::switch::LOG_PACKING;
-use bin_ntt::Suite;
+use labinius::Suite;
 use flock_core::lincheck::{LincheckCircuit, LincheckProof};
 use flock_core::pcs::ligerito::embedded_initial_k_or_default;
 use flock_core::pcs::{

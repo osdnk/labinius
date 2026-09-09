@@ -1,7 +1,7 @@
 //! The fold: the shape and the size of the amortised witness, determinism, the opening check
 //! `A v = sum_j c_j C_j` on every modulus, and what the verifier does with a corrupted opening.
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::{
+use labinius::{Opening, OpeningMessage};
+use labinius::{
     Modulus, Params, Prover, PublicParameters, Transcript, VerificationError, Verifier, Witness,
 };
 
@@ -16,14 +16,14 @@ const WITNESS_SEED: [u8; 32] = [23u8; 32];
 /// Everything one round produces, so that a test can corrupt any of it.
 struct Round {
     verifier: Verifier,
-    commitment: bin_ntt::Commitment,
-    point: bin_ntt::EvaluationPoint,
-    claimed_value: bin_ntt::F162,
-    row_evaluation: bin_ntt::RowEvaluation,
-    challenges: bin_ntt::FoldingChallenges,
-    folded_witness: bin_ntt::FoldedWitness,
-    folded_commitment: bin_ntt::FoldedCommitment,
-    folded_row_value: bin_ntt::F162,
+    commitment: labinius::Commitment,
+    point: labinius::EvaluationPoint,
+    claimed_value: labinius::F162,
+    row_evaluation: labinius::RowEvaluation,
+    challenges: labinius::FoldingChallenges,
+    folded_witness: labinius::FoldedWitness,
+    folded_commitment: labinius::FoldedCommitment,
+    folded_row_value: labinius::F162,
 }
 
 fn round(params: Params) -> Round {
@@ -32,7 +32,7 @@ fn round(params: Params) -> Round {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/fold");
+    let mut transcript = Transcript::new(b"labinius/test/fold");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let claimed_value = witness.mle_evaluate(&point);
     let row_evaluation = witness.row_evaluate(&point);
@@ -136,13 +136,13 @@ fn the_folded_commitment_is_bound_to_the_challenges() {
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
 
-    let mut transcript = Transcript::new(b"bin-ntt/test/fold");
+    let mut transcript = Transcript::new(b"labinius/test/fold");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let row_evaluation = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);
     let folded_witness = prover.fold(opening, &challenges);
 
-    let mut other = Transcript::new(b"bin-ntt/test/fold-other");
+    let mut other = Transcript::new(b"labinius/test/fold-other");
     let other_challenges = verifier.derive_folding_challenges(&mut other, &row_evaluation);
     let folded_commitment = verifier.fold_commitment(&commitment, &other_challenges);
     let folded_row_value = verifier.fold_row_evaluation(&row_evaluation, &challenges);

@@ -1,11 +1,11 @@
 //! The reference usage: one round end to end in each mode, with the wall clock on every step.
 //!
 //! `cargo run --release --offline`. The binary pins itself to core 3, or to `$BENCH_CPU`.
-use bin_ntt::scheme::suite_from_args;
-use bin_ntt::{Opening, OpeningMessage, Suite};
-use bin_ntt_bench::{duration_ms, median_of, once, peak_rss, pin, pinned, row};
-use bin_ntt::wire;
-use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::scheme::suite_from_args;
+use labinius::{Opening, OpeningMessage, Suite};
+use labinius_bench::{duration_ms, median_of, once, peak_rss, pin, pinned, row};
+use labinius::wire;
+use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 /// The seed the public matrix `A` is expanded from.
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -18,10 +18,10 @@ const CPU: usize = 3;
 const SAMPLES: usize = 1000;
 
 fn stats() {
-    use bin_ntt::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
+    use labinius::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
     let mut attempts = Vec::with_capacity(SAMPLES);
     for i in 0..SAMPLES as u64 {
-        let mut t = Transcript::new(b"bin-ntt/stats");
+        let mut t = Transcript::new(b"labinius/stats");
         t.absorb_u64(i);
         attempts.push(sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).1);
     }
@@ -67,7 +67,7 @@ fn plain(suite: &Suite) {
 
     let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
 
-    let mut transcript = Transcript::new(b"bin-ntt/reference");
+    let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
     let (evaluation_point_ms, evaluation_point) = median_of(10, || {
         transcript = start.clone();
@@ -127,7 +127,7 @@ fn plain(suite: &Suite) {
 
     let moduli: Vec<String> = commitment.moduli().iter().map(|q| q.to_string()).collect();
     println!(
-        "bin-ntt, core {}, one thread, moduli {}",
+        "labinius, core {}, one thread, moduli {}",
         pinned(),
         moduli.join(", ")
     );
@@ -222,7 +222,7 @@ fn plain_bd(suite: &Suite) {
 
     let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
 
-    let mut transcript = Transcript::new(b"bin-ntt/reference");
+    let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
     let (evaluation_point_ms, evaluation_point) = median_of(10, || {
         transcript = start.clone();
@@ -298,7 +298,7 @@ fn plain_bd(suite: &Suite) {
         "dropped bits {}, residual cap {} over the expectation {:.3e}",
         params.dropped_bits(),
         params.bd_cap(),
-        bin_ntt::bd::expected_normsq(params.columns(), params.dropped_bits())
+        labinius::bd::expected_normsq(params.columns(), params.dropped_bits())
     );
     row("public parameters", setup_ms);
 
@@ -373,7 +373,7 @@ fn recursive(suite: &Suite) {
 
     let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
 
-    let mut transcript = Transcript::new(b"bin-ntt/reference");
+    let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
     let (evaluation_point_ms, evaluation_point) = median_of(10, || {
         transcript = start.clone();

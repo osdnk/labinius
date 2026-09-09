@@ -1,4 +1,4 @@
-# bin-ntt
+# labinius
 
 An Ajtai commitment, a fold and their verifier over `R_648 = Z_q[X]/(X^648 - X^324 + 1)`, the
 1944-th cyclotomic ring, for binary witnesses held as `F162 = GF(2)[x]/(x^162+x^81+1)`. The
@@ -12,8 +12,8 @@ One AVX-512 thread throughout.
 
 ## Layout
 
-- `crates/pcs` — `bin-ntt`: commitment, fold, verifier, AVX-512 kernels, the C LaBRADOR bridge.
-- `crates/bench` — the reference round (`bin-ntt`), calibration (`calibrate`), `bench.sh`, `tables.py`.
+- `crates/pcs` — `labinius`: commitment, fold, verifier, AVX-512 kernels, the C LaBRADOR bridge.
+- `crates/bench` — the reference round (`labinius`), calibration (`calibrate`), `bench.sh`, `tables.py`.
 - `crates/binius` — binius64's hash proofs over this commitment (`hashes-binius`).
 - `crates/flock` — Flock as the second PIOP (`hashes-flock`).
 - `crates/competitors` — BaseFold, WHIR and Ligerito on their own (`pcs-competitors`).
@@ -22,7 +22,7 @@ One AVX-512 thread throughout.
 
 ```
 cargo build --release --workspace --bins
-./target/release/bin-ntt --suite m            # pins itself to core 3, or to $BENCH_CPU
+./target/release/labinius --suite m            # pins itself to core 3, or to $BENCH_CPU
 ./bench.sh                                  # every binary at every suite
 cargo test --release --workspace
 ```
@@ -34,7 +34,7 @@ let pp = PublicParameters::from_seed(Params::basic(), MATRIX_SEED);   // Opening
 let witness = Witness::random(pp.params(), WITNESS_SEED);
 let (mut prover, verifier) = (Prover::new(&pp), Verifier::new(&pp));
 let (commitment, opening) = prover.commit(&witness);
-let mut t = Transcript::new(b"bin-ntt/reference");
+let mut t = Transcript::new(b"labinius/reference");
 let point = verifier.derive_evaluation_point(&mut t, &commitment);
 let (claimed, row) = (witness.mle_evaluate(&point), witness.row_evaluate(&point));
 let challenges = verifier.derive_folding_challenges(&mut t, &row);
@@ -47,4 +47,4 @@ verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear 
 }).unwrap();
 ```
 
-`crates/bench/src/bin/bin-ntt.rs` runs this with the wall clock on every step, in the clear and bit-dropped modes, or in the recursive mode when built with `--features bin-ntt-bench/labrador` (which is why `bench.sh` builds twice).
+`crates/bench/src/bin/labinius.rs` runs this with the wall clock on every step, in the clear and bit-dropped modes, or in the recursive mode when built with `--features labinius-bench/labrador` (which is why `bench.sh` builds twice).

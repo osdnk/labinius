@@ -60,7 +60,7 @@
 //! every constraint against it -- an aggregation pass' worth of work, 60 ms of a 375 ms proof at
 //! `Params::basic()` -- to tell an honest prover what it already knows. [`prove_verified`] keeps
 //! it for the tests. The library's own stdout chatter is redirected to `/dev/null` around every
-//! entry point unless `BIN_NTT_LABRADOR_VERBOSE` is set; on a terminal it cost 48 ms of a proof
+//! entry point unless `LABINIUS_LABRADOR_VERBOSE` is set; on a terminal it cost 48 ms of a proof
 //! and 27 ms of a verification.
 
 pub mod ffi;
@@ -426,7 +426,7 @@ impl Statement {
     /// the prover will actually read.
     pub fn content_digest(&self) -> [u8; 32] {
         let mut h = blake3::Hasher::new();
-        h.update(b"bin-ntt/labrador/statement/v1");
+        h.update(b"labinius/labrador/statement/v1");
         h.update(&(logq() as u64).to_le_bytes());
         h.update(&(self.vectors.len() as u64).to_le_bytes());
         for v in &self.vectors {
@@ -557,13 +557,13 @@ impl Witness {
 
 /// LaBRADOR prints a page of statement and proof-size chatter per recursion level. Every
 /// entry point into the library takes one of these, which redirects fd 1 to `/dev/null`
-/// for as long as it lives; `BIN_NTT_LABRADOR_VERBOSE=1` leaves it alone. Errors go to
+/// for as long as it lives; `LABINIUS_LABRADOR_VERBOSE=1` leaves it alone. Errors go to
 /// stderr and are never suppressed.
 struct Quiet(bool);
 
 impl Quiet {
     fn new() -> Quiet {
-        let verbose = std::env::var_os("BIN_NTT_LABRADOR_VERBOSE").is_some();
+        let verbose = std::env::var_os("LABINIUS_LABRADOR_VERBOSE").is_some();
         if !verbose {
             unsafe { ffi::bn_mute_stdout() };
         }

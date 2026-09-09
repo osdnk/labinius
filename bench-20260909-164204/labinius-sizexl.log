@@ -2,7 +2,7 @@
 === short challenge: weight 28, canonical bound 12, 1000 samples ===
   acceptance rate: 0.6605 (1 in 1.51)
 
-bin-ntt, core 3, one thread, moduli 3889, 2917, 9721
+labinius, core 3, one thread, moduli 3889, 2917, 9721
 
 === recursion off ===
 witness: 2^24 F162 = 4194304 ring elements of R_648, 1024 columns of 16384 F162
@@ -69,7 +69,7 @@ verification: accepted
 tampered fold: rejected (the opening was rejected)
 
 peak resident set: 6004 MB
-	Command being timed: "./target/release/bin-ntt --suite xl"
+	Command being timed: "./target/release/labinius --suite xl"
 	User time (seconds): 8.17
 	System time (seconds): 3.26
 	Percent of CPU this job got: 99%

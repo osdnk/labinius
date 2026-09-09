@@ -5,8 +5,8 @@ edition.workspace = true
 description = "The polynomial commitments this one is measured against: BaseFold, WHIR and Ligerito."
 
 [dependencies]
-bin-ntt.workspace = true
-bin-ntt-bench.workspace = true
+labinius.workspace = true
+labinius-bench.workspace = true
 binius-compute.workspace = true
 binius-core.workspace = true
 binius-field.workspace = true

@@ -9,8 +9,8 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let labrador_dir =
-        env::var("BIN_NTT_LABRADOR_DIR").unwrap_or_else(|_| format!("{manifest_dir}/labrador"));
-    println!("cargo:rerun-if-env-changed=BIN_NTT_LABRADOR_DIR");
+        env::var("LABINIUS_LABRADOR_DIR").unwrap_or_else(|_| format!("{manifest_dir}/labrador"));
+    println!("cargo:rerun-if-env-changed=LABINIUS_LABRADOR_DIR");
 
     if !PathBuf::from(format!("{labrador_dir}/Makefile")).exists() {
         panic!("the vendored labrador library is missing at {labrador_dir}");
@@ -19,7 +19,7 @@ fn main() {
     // The LaBRADOR objects hard-code LOGQ (modulus, K, and the labrador<LOGQ>_ symbol
     // prefix), so a LOGQ change has to invalidate every object file, not just relink.
     let libobj_dir = format!("{labrador_dir}/libobj");
-    let stamp_path = format!("{libobj_dir}/.bin_ntt_logq_stamp");
+    let stamp_path = format!("{libobj_dir}/.labinius_logq_stamp");
     let stamp_matches = std::fs::read_to_string(&stamp_path)
         .map(|s| s.trim() == LOGQ)
         .unwrap_or(false);
@@ -91,7 +91,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", entry.unwrap().path().display());
     }
 
-    let c_lib = out_dir.join("libbin_ntt_c.a");
+    let c_lib = out_dir.join("liblabinius_c.a");
     let _ = std::fs::remove_file(&c_lib);
     let status = Command::new("ar")
         .arg("rcs")
@@ -99,11 +99,11 @@ fn main() {
         .args(&objects)
         .status()
         .expect("failed to invoke ar");
-    assert!(status.success(), "ar failed to archive libbin_ntt_c.a");
+    assert!(status.success(), "ar failed to archive liblabinius_c.a");
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-search=native={labrador_dir}");
-    println!("cargo:rustc-link-lib=static=bin_ntt_c");
+    println!("cargo:rustc-link-lib=static=labinius_c");
     println!("cargo:rustc-link-lib=static=labrador");
     println!("cargo:rustc-link-lib=m");
 }

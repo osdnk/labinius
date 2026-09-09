@@ -35,25 +35,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "bin-ntt"
+name = "labinius"
 version = "0.1.0"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
-name = "bin-ntt-bench"
+name = "labinius-bench"
 version = "0.1.0"
 dependencies = [
- "bin-ntt",
+ "labinius",
 ]
 
 [[package]]
-name = "bin-ntt-binius"
+name = "labinius-binius"
 version = "0.1.0"
 dependencies = [
- "bin-ntt",
- "bin-ntt-bench",
+ "labinius",
+ "labinius-bench",
  "binius-circuits",
  "binius-compute",
  "binius-core",
@@ -72,11 +72,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bin-ntt-flock"
+name = "labinius-flock"
 version = "0.1.0"
 dependencies = [
- "bin-ntt",
- "bin-ntt-bench",
+ "labinius",
+ "labinius-bench",
  "bincode",
  "blake3",
  "flock-core",
@@ -943,8 +943,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "pcs-competitors"
 version = "0.1.0"
 dependencies = [
- "bin-ntt",
- "bin-ntt-bench",
+ "labinius",
+ "labinius-bench",
  "binius-compute",
  "binius-core",
  "binius-field",

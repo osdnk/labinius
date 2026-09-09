@@ -1,4 +1,4 @@
-bin-ntt over flock BLAKE3, core 3, one thread, size sizes
+labinius over flock BLAKE3, core 3, one thread, size sizes
 2048 compressions of BLAKE3: m = 25, k_log = 14, 11707 useful bits per block, 262144 committed
 stock union: log_inv_rate 1, profile Fast, Ligerito over the compacted stack, dense m = 25 in 188416 F128
 stock core:  log_inv_rate 1, profile Fast, Ligerito over the padded buffer, m = 25 in 262144 F128
@@ -44,7 +44,7 @@ SIZES
 
 peak resident set: 1120 MB
 
-bin-ntt over flock SHA-256, core 3, one thread, size sizes
+labinius over flock SHA-256, core 3, one thread, size sizes
 1024 compressions of SHA-256: m = 25, k_log = 15, 25470 useful bits per block, 262144 committed
 stock union: log_inv_rate 1, profile Fast, Ligerito over the compacted stack, dense m = 25 in 204800 F128
 stock core:  log_inv_rate 1, profile Fast, Ligerito over the padded buffer, m = 25 in 262144 F128

@@ -1,12 +1,12 @@
 [package]
-name = "bin-ntt-flock"
+name = "labinius-flock"
 version.workspace = true
 edition.workspace = true
 description = "Flock as the second PIOP: its hash R1CS and reductions over this crate's commitment."
 
 [dependencies]
-bin-ntt.workspace = true
-bin-ntt-bench.workspace = true
+labinius.workspace = true
+labinius-bench.workspace = true
 blake3.workspace = true
 bincode.workspace = true
 serde.workspace = true

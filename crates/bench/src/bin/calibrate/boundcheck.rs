@@ -1,10 +1,10 @@
-use bin_ntt::Opening;
-use bin_ntt::ring::Modulus;
-use bin_ntt::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
-use bin_ntt::fields::scalar::F162;
-use bin_ntt::recursion::Instance;
-use bin_ntt::scheme::{EvaluationPoint, FoldingChallenges};
-use bin_ntt::{Params, PublicParameters, Transcript};
+use labinius::Opening;
+use labinius::ring::Modulus;
+use labinius::challenge::{sample_short_challenge, DEFAULT_BOUND, DEFAULT_WEIGHT};
+use labinius::fields::scalar::F162;
+use labinius::recursion::Instance;
+use labinius::scheme::{EvaluationPoint, FoldingChallenges};
+use labinius::{Params, PublicParameters, Transcript};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 
@@ -29,7 +29,7 @@ pub fn run() {
             .unwrap();
     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
     let setup = pp.recursion().expect("recursion is on").clone();
-    let mut t = Transcript::new(b"bin-ntt/boundcheck");
+    let mut t = Transcript::new(b"labinius/boundcheck");
     let challenges = FoldingChallenges::of(
         (0..params.columns())
             .map(|_| sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND).0)

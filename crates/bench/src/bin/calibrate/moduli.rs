@@ -18,15 +18,15 @@
 //!
 //! `the_fold_per_base` is the wall clock of `Prover::fold` at the same shape with each modulus in
 //! turn as the base limb.
-use bin_ntt::Opening;
-use bin_ntt::key::{AuxData, CommitmentKey};
-use bin_ntt::ring::BASE_PRIME;
-use bin_ntt::params::N;
-use bin_ntt::simd::commit as cm;
-use bin_ntt::simd::transpose_f162::{slice_f162_into, BinaryIndex32};
-use bin_ntt::simd::ntt::{bin_asm as vb, bin_large as vl, bin_quad as vq};
-use bin_ntt::ring::{Batch32, Representation};
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness, F162};
+use labinius::Opening;
+use labinius::key::{AuxData, CommitmentKey};
+use labinius::ring::BASE_PRIME;
+use labinius::params::N;
+use labinius::simd::commit as cm;
+use labinius::simd::transpose_f162::{slice_f162_into, BinaryIndex32};
+use labinius::simd::ntt::{bin_asm as vb, bin_large as vl, bin_quad as vq};
+use labinius::ring::{Batch32, Representation};
+use labinius::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness, F162};
 use std::time::Instant;
 
 const COLUMNS: usize = 256;
@@ -34,7 +34,7 @@ const F162_PER_COLUMN: usize = 1024;
 const RING_PER_COLUMN: usize = F162_PER_COLUMN / 4;
 
 fn witness(n: usize) -> Vec<F162> {
-    bin_ntt::f162::random_elems(n, 0x243F_6A88)
+    labinius::f162::random_elems(n, 0x243F_6A88)
 }
 
 fn index() -> BinaryIndex32 {
@@ -212,7 +212,7 @@ fn fold_ms(base: Modulus, extra: Vec<Modulus>, reps: usize) -> f64 {
     let mut samples = Vec::with_capacity(reps);
     for _ in 0..reps {
         let (commitment, opening) = prover.commit(&w);
-        let mut transcript = Transcript::new(b"bin-ntt/bench/fold");
+        let mut transcript = Transcript::new(b"labinius/bench/fold");
         let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
         let row = w.row_evaluate(&point);
         let challenges = verifier.derive_folding_challenges(&mut transcript, &row);

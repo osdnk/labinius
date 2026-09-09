@@ -70,7 +70,7 @@ pub struct DenseRandom {
 impl DenseRandom {
     pub fn new(k: usize, n: usize, seed: u64) -> DenseRandom {
         assert!(n > k && k > 0);
-        let mut rng = bin_ntt::rng::Rng::new(seed);
+        let mut rng = labinius::rng::Rng::new(seed);
         let parity = (0..k * (n - k))
             .map(|_| B128::new(((rng.next_u64() as u128) << 64) | rng.next_u64() as u128))
             .collect();

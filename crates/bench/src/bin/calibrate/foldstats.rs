@@ -1,6 +1,6 @@
-use bin_ntt::Opening;
-use bin_ntt::ring::Modulus;
-use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::Opening;
+use labinius::ring::Modulus;
+use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 
@@ -20,7 +20,7 @@ pub fn run() {
         "wl {wl} cl {cl} base {bp} n {n} r {r} half {}",
         (bp as i64 - 1) / 2
     );
-    println!("predicted sd {:.1}", (bin_ntt::recursion::FOLD_CAP * r as f64).sqrt());
+    println!("predicted sd {:.1}", (labinius::recursion::FOLD_CAP * r as f64).sqrt());
     for round in 0..rounds {
         let mut seed = [0xC7u8; 32];
         seed[0] = round as u8;
@@ -30,7 +30,7 @@ pub fn run() {
         let t0 = std::time::Instant::now();
         let (commitment, opening) = prover.commit(&witness);
         let commit_ms = t0.elapsed().as_secs_f64() * 1e3;
-        let mut transcript = Transcript::new(b"bin-ntt/foldstats");
+        let mut transcript = Transcript::new(b"labinius/foldstats");
         let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
         let row = witness.row_evaluate(&point);
         let ch = verifier.derive_folding_challenges(&mut transcript, &row);
@@ -58,7 +58,7 @@ pub fn run() {
         println!(
             "round {round}: coeffs {count} sd {sd:.2} max {max} ({:.2} sd) normsq {sq} fill {:.3}",
             max as f64 / sd,
-            sq as f64 / (bin_ntt::recursion::FOLD_CAP * (n * 648 * r) as f64)
+            sq as f64 / (labinius::recursion::FOLD_CAP * (n * 648 * r) as f64)
         );
         println!("  tail {:?}", &hist[12..]);
     }

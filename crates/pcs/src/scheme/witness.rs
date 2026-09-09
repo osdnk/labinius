@@ -47,7 +47,7 @@ impl Witness {
         let n = params.witness_len();
         let mut bytes = vec![0u8; 24 * n];
         let mut hasher = blake3::Hasher::new_keyed(&seed);
-        hasher.update(b"bin-ntt/witness");
+        hasher.update(b"labinius/witness");
         hasher.finalize_xof().fill(&mut bytes);
         let elements = (0..n)
             .map(|i| {

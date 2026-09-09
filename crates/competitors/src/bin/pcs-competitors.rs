@@ -1,4 +1,4 @@
-use bin_ntt::scheme::suite_from_args;
+use labinius::scheme::suite_from_args;
 use pcs_competitors::{
     basefold, brakedown, ligerito_flock, pin, pinned, random_u64s, whir, Row, CPU, TARGETS,
     WITNESS_SEED,

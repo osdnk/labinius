@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use bin_ntt::labrador::{
+use labinius::labrador::{
     self, warm_comkey, BSource, Block, CommitmentKey, Constraint, PhiSource, PolxBuf, Statement,
     VectorSpec, Witness, N,
 };
@@ -75,7 +75,7 @@ const SHAPE_K1: usize = 64;
 const SHAPE_K2: usize = 6;
 
 fn shape_witness() -> Witness {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/shape/witness");
+    let mut xof = Xof::new("labinius/labrador_ffi/shape/witness");
     Witness::new(SHAPE_N.iter().map(|&n| xof.ternary(n * N)).collect())
 }
 
@@ -83,7 +83,7 @@ fn shape_witness() -> Witness {
 /// `1024, 1024, 256`, exact l2-norm bounds, 64 two-block constraints at offsets that walk
 /// across both long vectors, and 6 constraints spanning everything.
 fn shape_statement(wit: &Witness) -> (Statement, ShapeTimings) {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/shape/phi");
+    let mut xof = Xof::new("labinius/labrador_ffi/shape/phi");
     let sx = wit.to_sx();
 
     let vectors: Vec<VectorSpec> = (0..3)
@@ -219,7 +219,7 @@ const COMMIT_KAPPA: usize = 8;
 
 #[test]
 fn commitment_constraint() {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/commit");
+    let mut xof = Xof::new("labinius/labrador_ffi/commit");
     let s = xof.ternary(COMMIT_N * N);
     let wit = Witness::new(vec![s.clone()]);
 
@@ -284,7 +284,7 @@ fn commitment_constraint() {
 /// nothing is copied and nothing is double-freed when the statement is torn down.
 #[test]
 fn commitment_key_shared_across_constraints() {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/commit/shared");
+    let mut xof = Xof::new("labinius/labrador_ffi/commit/shared");
     let n = 512;
     let kappa = 4;
     let wit = Witness::new(vec![xof.ternary(n * N), xof.ternary(n * N)]);
@@ -321,7 +321,7 @@ fn commitment_key_shared_across_constraints() {
 
 #[test]
 fn binary_vector() {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/binary");
+    let mut xof = Xof::new("labinius/labrador_ffi/binary");
     let n = 256;
     let wit = Witness::new(vec![xof.binary(n * N)]);
     let sx = wit.to_sx();
@@ -354,7 +354,7 @@ fn binary_vector() {
 const TAMPER_N: usize = 256;
 
 fn tamper_setup() -> (Statement, Witness) {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/tamper");
+    let mut xof = Xof::new("labinius/labrador_ffi/tamper");
     let wit = Witness::new(vec![xof.ternary(TAMPER_N * N), xof.ternary(TAMPER_N * N)]);
     let sx = wit.to_sx();
 
@@ -434,7 +434,7 @@ fn tamper_wrong_digest() {
 
 #[test]
 fn bench_polx_conversion() {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/bench");
+    let mut xof = Xof::new("labinius/labrador_ffi/bench");
     const LEN: usize = 8192;
     let i64s = xof.uniform_polys(LEN);
     let i16s: Vec<[i16; N]> = (0..LEN)
@@ -491,7 +491,7 @@ fn bench_comkey_warmup() {
 
 #[test]
 fn rejects_out_of_range_blocks() {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/validate");
+    let mut xof = Xof::new("labinius/labrador_ffi/validate");
     let wit = Witness::new(vec![xof.ternary(64 * N)]);
 
     let stmt = Statement::new(
@@ -531,7 +531,7 @@ const MIXED_SUPPORT: usize = 32;
 /// zero-part test of the recursion: `phi = sum_j rho_j X^{-j}` over the positions that must
 /// vanish, so the constant coefficient of the linear form is `sum_j rho_j s_j = 0`.
 fn mixed_setup(tamper: bool) -> (Statement, Witness) {
-    let mut xof = Xof::new("bin-ntt/labrador_ffi/mixed");
+    let mut xof = Xof::new("labinius/labrador_ffi/mixed");
     let mut vectors: Vec<Vec<i16>> = (0..2)
         .map(|_| {
             let mut v = xof.ternary(MIXED_N * N);

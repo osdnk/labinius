@@ -1,7 +1,7 @@
-use bin_ntt::scheme::suite_from_args;
-use bin_ntt::{Opening, OpeningMessage};
-use bin_ntt::bd;
-use bin_ntt::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::scheme::suite_from_args;
+use labinius::{Opening, OpeningMessage};
+use labinius::bd;
+use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 
@@ -38,7 +38,7 @@ pub fn run() {
         seed[1] = (round >> 8) as u8;
         let witness = Witness::random(&params, seed);
         let (commitment, opening) = prover.commit(&witness);
-        let mut transcript = Transcript::new(b"bin-ntt/bdstats");
+        let mut transcript = Transcript::new(b"labinius/bdstats");
         transcript.absorb_u64(round);
         let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
         let claim = witness.mle_evaluate(&point);

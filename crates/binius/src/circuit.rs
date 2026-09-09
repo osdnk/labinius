@@ -9,7 +9,7 @@ use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
 use binius_frontend::{Circuit as FrontendCircuit, CircuitBuilder, Wire};
 
-use bin_ntt::Suite;
+use labinius::Suite;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hash {

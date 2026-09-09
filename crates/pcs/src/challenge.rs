@@ -26,10 +26,10 @@
 //! coefficients grow like `r`, with zero-mean ones like `sqrt(r)`.
 //!
 //! ```no_run
-//! use bin_ntt::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
-//! # use bin_ntt::ring::PowerOfThreeRingElementWithLimbs;
+//! use labinius::challenge::{sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT};
+//! # use labinius::ring::PowerOfThreeRingElementWithLimbs;
 //! # let commitment = [PowerOfThreeRingElementWithLimbs::zero(2)];
-//! let mut t = Transcript::new(b"bin-ntt/example");
+//! let mut t = Transcript::new(b"labinius/example");
 //! t.absorb_elements(&commitment);
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
@@ -197,7 +197,7 @@ pub struct ShortChallenge {
 }
 
 static SIGN_KEY: LazyLock<Hasher> =
-    LazyLock::new(|| Hasher::new_derive_key("bin-ntt 2026 challenge signs v1"));
+    LazyLock::new(|| Hasher::new_derive_key("labinius 2026 challenge signs v1"));
 
 impl ShortChallenge {
     /// The zero element (weight 0).

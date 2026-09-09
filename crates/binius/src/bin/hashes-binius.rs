@@ -1,9 +1,9 @@
 //! `cargo run --release --offline --bin hashes-binius`, pinned with `taskset -c 3`.
-use bin_ntt_binius::stock::{Stock, LOG_INV_RATE};
-use bin_ntt_binius::{Circuit, Hash, Session, Sizes};
-use bin_ntt::scheme::suite_from_args;
-use bin_ntt::Suite;
-use bin_ntt_bench::{once, peak_rss, pin, pinned, table_row as row};
+use labinius_binius::stock::{Stock, LOG_INV_RATE};
+use labinius_binius::{Circuit, Hash, Session, Sizes};
+use labinius::scheme::suite_from_args;
+use labinius::Suite;
+use labinius_bench::{once, peak_rss, pin, pinned, table_row as row};
 
 /// The seed the public matrix `A` is expanded from.
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -65,7 +65,7 @@ fn compare(hash: Hash, suite: &Suite) {
         .expect("the honest proof verifies");
 
     println!(
-        "bin-ntt over binius64 {}, core {}, one thread, size {}",
+        "labinius over binius64 {}, core {}, one thread, size {}",
         hash.name(),
         pinned(),
         suite.name
@@ -194,7 +194,7 @@ fn compare(hash: Hash, suite: &Suite) {
         ],
         "ms",
     );
-    let listed = |t: &bin_ntt_binius::ProverTiming| {
+    let listed = |t: &labinius_binius::ProverTiming| {
         t.pack + t.commit + t.bitand + t.shift + t.switch + t.opening
     };
     row(

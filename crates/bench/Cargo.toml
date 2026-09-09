@@ -1,12 +1,12 @@
 [package]
-name = "bin-ntt-bench"
+name = "labinius-bench"
 version.workspace = true
 edition.workspace = true
 description = "The reference round, the calibration runs and the shared timing helpers."
-default-run = "bin-ntt"
+default-run = "labinius"
 
 [dependencies]
-bin-ntt.workspace = true
+labinius.workspace = true
 
 [features]
-labrador = ["bin-ntt/labrador"]
+labrador = ["labinius/labrador"]

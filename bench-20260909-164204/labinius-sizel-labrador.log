@@ -44,7 +44,7 @@ proof: 90.2 KB total, per-proof phi 6 MB
 verification: accepted
 
 peak resident set: 2349 MB
-	Command being timed: "./target/release/bin-ntt --suite l"
+	Command being timed: "./target/release/labinius --suite l"
 	User time (seconds): 2.35
 	System time (seconds): 0.76
 	Percent of CPU this job got: 99%

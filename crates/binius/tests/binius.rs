@@ -1,11 +1,11 @@
 //! The keccak pipeline: the coordinate mapping the switch and the commitment agree on, and the
 //! real 873-permutation instance end to end in both PCS modes, honest and tampered.
-use bin_ntt::Opening;
-use bin_ntt::fields::crossfield::eval_pi1;
-use bin_ntt::fields::scalar::B128;
-use bin_ntt_binius::{Circuit, Error, Hash, Session};
-use bin_ntt::rng::Rng;
-use bin_ntt::{EvaluationPoint, Modulus, Params, Witness, F162, SUITES};
+use labinius::Opening;
+use labinius::fields::crossfield::eval_pi1;
+use labinius::fields::scalar::B128;
+use labinius_binius::{Circuit, Error, Hash, Session};
+use labinius::rng::Rng;
+use labinius::{EvaluationPoint, Modulus, Params, Witness, F162, SUITES};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const HASH: Hash = Hash::Keccak256;

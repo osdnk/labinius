@@ -1,4 +1,4 @@
-bin-ntt over binius64 keccak-256, core 3, one thread, size sizem
+labinius over binius64 keccak-256, core 3, one thread, size sizem
 keccak-256 of 475319 bytes: 3495 permutations, 2096980 AND constraints, 2096981 non-public words
 stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
 recursion off: 2^20 F162 in 256 columns, moduli 3889, 2917, 4861
@@ -42,7 +42,7 @@ SIZES
 
 peak resident set: 10708 MB
 
-bin-ntt over binius64 sha-256, core 3, one thread, size sizem
+labinius over binius64 sha-256, core 3, one thread, size sizem
 sha-256 of 290487 bytes: 4539 compressions, 1652197 AND constraints, 2097040 non-public words
 stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
 recursion off: 2^20 F162 in 256 columns, moduli 3889, 2917, 4861
@@ -86,7 +86,7 @@ SIZES
 
 peak resident set: 10708 MB
 
-bin-ntt over binius64 blake3, core 3, one thread, size sizem
+labinius over binius64 blake3, core 3, one thread, size sizem
 blake3 of 495488 bytes: 8225 compressions, 1380916 AND constraints, 2097034 non-public words
 stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
 recursion off: 2^20 F162 in 256 columns, moduli 3889, 2917, 4861

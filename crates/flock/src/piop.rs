@@ -21,7 +21,7 @@ pub struct Timing {
     pub lincheck: f64,
 }
 
-pub fn carrier(commitment: &bin_ntt::scheme::Commitment, params: &PcsParams) -> Commitment {
+pub fn carrier(commitment: &labinius::scheme::Commitment, params: &PcsParams) -> Commitment {
     let cap = commitment
         .to_bytes()
         .chunks(32)

@@ -1,7 +1,7 @@
 //! Wire sizes and the median of 11 runs of each code at the basic shape.
-use bin_ntt::Opening;
-use bin_ntt::wire;
-use bin_ntt::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
+use labinius::Opening;
+use labinius::wire;
+use labinius::{Modulus, Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -36,7 +36,7 @@ pub fn run() {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, opening) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/example/wire_bench");
+    let mut transcript = Transcript::new(b"labinius/example/wire_bench");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let row_evaluation = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);

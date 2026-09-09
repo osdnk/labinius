@@ -1,12 +1,12 @@
 [package]
-name = "bin-ntt-binius"
+name = "labinius-binius"
 version.workspace = true
 edition.workspace = true
 description = "binius64's hash proofs with this crate's commitment in place of its BaseFold oracle."
 
 [dependencies]
-bin-ntt.workspace = true
-bin-ntt-bench.workspace = true
+labinius.workspace = true
+labinius-bench.workspace = true
 blake3.workspace = true
 tracing.workspace = true
 binius-circuits.workspace = true

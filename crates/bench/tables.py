@@ -35,10 +35,10 @@ def ours_rec(block):
 
 pcs = {}
 for s in SIZES:
-    t = open(f"{D}/bin-ntt-{s}.log").read()
+    t = open(f"{D}/labinius-{s}.log").read()
     clear = ours_clear(section(t, "=== recursion off ===", "=== plain-bd ==="))
     bd = ours_clear(section(t, "=== plain-bd ===", "peak resident"))
-    rec = ours_rec(open(f"{D}/bin-ntt-{s}-labrador.log").read())
+    rec = ours_rec(open(f"{D}/labinius-{s}-labrador.log").read())
     comp = {}
     for line in open(f"{D}/pcs-competitors-{s}.log"):
         m = re.match(r"\s*(binius64 BaseFold|binius64 WHIR|flock-core Ligerito Fast100|flock-core Ligerito Slim100|Brakedown tensor)\s+(1/[24]|0\.\d+)\s+\S+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)", line)
@@ -80,10 +80,10 @@ def hash_tables(kind):
             t = open(f"{H}/hashes-{kind}-{s}.log").read()
         except FileNotFoundError:
             continue
-        for block in re.split(r"(?=^bin-ntt over )", t, flags=re.M):
-            if not block.startswith("bin-ntt over"):
+        for block in re.split(r"(?=^labinius over )", t, flags=re.M):
+            if not block.startswith("labinius over"):
                 continue
-            name = re.match(r"bin-ntt over \S+ (\S+),", block).group(1)
+            name = re.match(r"labinius over \S+ (\S+),", block).group(1)
             cols = re.search(r"^\s+total\s+(.*?) ms$", section(block, "PROVER", "VERIFIER"), re.M)
             if kind == "binius":
                 prov = [float(x) for x in re.search(r"^\s*total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+) ms", section(block, "PROVER", "VERIFIER"), re.M).groups()]

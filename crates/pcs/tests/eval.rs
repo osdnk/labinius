@@ -1,6 +1,6 @@
 //! The `F162` side: the multilinear extension and the row evaluation against naive scalar
 //! references, the claim check, and the two ways of getting it wrong.
-use bin_ntt::{
+use labinius::{
     EvaluationPoint, Params, Prover, PublicParameters, Transcript, VerificationError,
     Verifier, Witness, F162,
 };
@@ -49,8 +49,8 @@ struct Setup {
     verifier: Verifier,
     witness: Witness,
     point: EvaluationPoint,
-    row_evaluation: bin_ntt::RowEvaluation,
-    challenges: bin_ntt::FoldingChallenges,
+    row_evaluation: labinius::RowEvaluation,
+    challenges: labinius::FoldingChallenges,
 }
 
 fn setup(params: Params) -> Setup {
@@ -59,7 +59,7 @@ fn setup(params: Params) -> Setup {
     let verifier = Verifier::new(&pp);
     let witness = Witness::random(&params, WITNESS_SEED);
     let (commitment, _) = prover.commit(&witness);
-    let mut transcript = Transcript::new(b"bin-ntt/test/eval");
+    let mut transcript = Transcript::new(b"labinius/test/eval");
     let point = verifier.derive_evaluation_point(&mut transcript, &commitment);
     let row_evaluation = witness.row_evaluate(&point);
     let challenges = verifier.derive_folding_challenges(&mut transcript, &row_evaluation);

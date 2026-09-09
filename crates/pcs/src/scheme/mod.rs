@@ -46,13 +46,13 @@ use crate::labrador::PolxBuf;
 
 /// The claimed value, `T_R` and the announced norms, in the transcript position `v` had.
 pub(super) fn absorb_opening(transcript: &mut Transcript, claim: &F162, t_r: &PolxBuf, norms: &[u64]) {
-    transcript.absorb_bytes(b"bin-ntt/claim");
+    transcript.absorb_bytes(b"labinius/claim");
     for limb in claim.0 {
         transcript.absorb_u64(limb);
     }
-    transcript.absorb_bytes(b"bin-ntt/rest-commitment");
+    transcript.absorb_bytes(b"labinius/rest-commitment");
     transcript.absorb_bytes(t_r.as_bytes());
-    transcript.absorb_bytes(b"bin-ntt/norms");
+    transcript.absorb_bytes(b"labinius/norms");
     for &n in norms {
         transcript.absorb_u64(n);
     }
@@ -62,6 +62,6 @@ pub(super) fn absorb_opening(transcript: &mut Transcript, claim: &F162, t_r: &Po
 /// digest is one derivation of the transcript rather than a hash of the constraints.
 pub(super) fn statement_digest(transcript: &mut Transcript) -> [u8; 32] {
     let mut digest = [0u8; 32];
-    transcript.fill(b"bin-ntt/recursion/statement", &mut digest);
+    transcript.fill(b"labinius/recursion/statement", &mut digest);
     digest
 }

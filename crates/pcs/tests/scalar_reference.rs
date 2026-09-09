@@ -1,7 +1,7 @@
 //! The ring constants and the exact scalar reference the SIMD kernels are tested against.
-use bin_ntt::params::*;
-use bin_ntt::rng::Rng;
-use bin_ntt::scalar;
+use labinius::params::*;
+use labinius::rng::Rng;
+use labinius::scalar;
 
 mod common;
 use common::random_bin;

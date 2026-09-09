@@ -15,15 +15,15 @@ mod bin_small {
     //! levels and with a different Barrett (reference: `params::barrett_i16` at levels 4, 5 and 6;
     //! asm: the lookup Barrett at level 4 and `barrett_i16` at level 6), so they agree only modulo q.
     use crate::common::*;
-    use bin_ntt::f162;
-    use bin_ntt::params::*;
+    use labinius::f162;
+    use labinius::params::*;
 
-    use bin_ntt::scalar;
+    use labinius::scalar;
 
-    use bin_ntt::simd::ntt::bin_small as vb;
-    use bin_ntt::simd::ntt::bin_asm as vba;
-    use bin_ntt::ring::*;
-    use bin_ntt::F162;
+    use labinius::simd::ntt::bin_small as vb;
+    use labinius::simd::ntt::bin_asm as vba;
+    use labinius::ring::*;
+    use labinius::F162;
 
     // ------------------------------------------------------------------ inputs
 
@@ -121,14 +121,14 @@ mod bin_asm {
     //! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
     //! what a commitment feeds it.
     use crate::common::*;
-    use bin_ntt::f162;
-    use bin_ntt::params::*;
+    use labinius::f162;
+    use labinius::params::*;
 
-    use bin_ntt::scalar;
-    use bin_ntt::simd::transpose_f162::{self as tf, BinaryIndex32};
-    use bin_ntt::simd::ntt::bin_asm as vb;
-    use bin_ntt::simd::ntt::bin_large as vl;
-    use bin_ntt::ring::*;
+    use labinius::scalar;
+    use labinius::simd::transpose_f162::{self as tf, BinaryIndex32};
+    use labinius::simd::ntt::bin_asm as vb;
+    use labinius::simd::ntt::bin_large as vl;
+    use labinius::ring::*;
 
     // ------------------------------------------------------------------ inputs
 
@@ -466,15 +466,15 @@ mod bin_large {
     //! element (`f162::pack4`) and sliced by the production front end, so the kernel is fed exactly
     //! what a commitment feeds it.
     use crate::common::*;
-    use bin_ntt::f162;
-    use bin_ntt::params::*;
-    use bin_ntt::rng::Rng;
-    use bin_ntt::scalar;
+    use labinius::f162;
+    use labinius::params::*;
+    use labinius::rng::Rng;
+    use labinius::scalar;
 
-    use bin_ntt::simd::ntt::bin_asm::{barrett_lut_corr, barrett_lut_i16};
-    use bin_ntt::simd::ntt::bin_large as vl;
-    use bin_ntt::simd::ntt::bin_large::{RED_LUT, RED_MUL};
-    use bin_ntt::ring::*;
+    use labinius::simd::ntt::bin_asm::{barrett_lut_corr, barrett_lut_i16};
+    use labinius::simd::ntt::bin_large as vl;
+    use labinius::simd::ntt::bin_large::{RED_LUT, RED_MUL};
+    use labinius::ring::*;
 
     // ------------------------------------------------------------------ the i32 shadow
 
@@ -1072,11 +1072,11 @@ mod bin_large {
 mod gen_small {
     //! Correctness and bound tests for `simd::ntt::gen_small`.
 
-    use bin_ntt::params::*;
-    use bin_ntt::rng::Rng;
-    use bin_ntt::scalar;
-    use bin_ntt::simd::ntt::gen_small::{intt_gen_batch32, ntt_gen_batch32, Tw, TwI};
-    use bin_ntt::ring::*;
+    use labinius::params::*;
+    use labinius::rng::Rng;
+    use labinius::scalar;
+    use labinius::simd::ntt::gen_small::{intt_gen_batch32, ntt_gen_batch32, Tw, TwI};
+    use labinius::ring::*;
 
     /// Exact i32 mirror of the kernel: same operation order, same Barrett placement, but every value
     /// kept as i32 so that an i16 overflow is observable. Returns the output and the per-level maximum
@@ -1634,11 +1634,11 @@ mod gen_large {
     //! `simd::ntt::gen_large` against `scalar::ntt` / `scalar::intt`, against its own declared
     //! bounds and against the `const` recursions that prove them.
 
-    use bin_ntt::params::*;
-    use bin_ntt::rng::Rng;
-    use bin_ntt::scalar;
-    use bin_ntt::simd::ntt::gen_large as vgl;
-    use bin_ntt::ring::{Batch32, Representation};
+    use labinius::params::*;
+    use labinius::rng::Rng;
+    use labinius::scalar;
+    use labinius::simd::ntt::gen_large as vgl;
+    use labinius::ring::{Batch32, Representation};
 
     /// Adversarial coefficient batches at the declared input bound `|x| <= q`, then random ones.
     fn inputs<const Q: u16>(count: usize, seed: u64) -> Vec<Batch32> {
@@ -1789,15 +1789,15 @@ mod quad {
     //! inverse — against the scalar reference slot for slot, the declared bounds, an i32 shadow model
     //! of the binary kernel's schedule, and the `R_162` decomposition of a transform.
     use crate::common::*;
-    use bin_ntt::f162;
-    use bin_ntt::params::*;
-    use bin_ntt::recursion::limbs;
-    use bin_ntt::rng::Rng;
-    use bin_ntt::scalar::{self, Coeffs};
+    use labinius::f162;
+    use labinius::params::*;
+    use labinius::recursion::limbs;
+    use labinius::rng::Rng;
+    use labinius::scalar::{self, Coeffs};
 
-    use bin_ntt::simd::ntt::bin_quad as vq;
-    use bin_ntt::simd::ntt::gen_quad as vgq;
-    use bin_ntt::ring::*;
+    use labinius::simd::ntt::bin_quad as vq;
+    use labinius::simd::ntt::gen_quad as vgq;
+    use labinius::ring::*;
 
     // ------------------------------------------------------------------ inputs
 
@@ -1839,7 +1839,7 @@ mod quad {
         // the R_162 classes of the two trees agree, and each class owns a + and a - leaf
         for s in 0..162 {
             let v = QUAD_POW3_CLASS[s] as usize;
-            assert_eq!(v, bin_ntt::ring::POW3_SLOT_EXP[s] as usize);
+            assert_eq!(v, labinius::ring::POW3_SLOT_EXP[s] as usize);
             let (jp, jm) = (
                 QUAD_CLASS_SLOT[0][s] as usize,
                 QUAD_CLASS_SLOT[1][s] as usize,
@@ -1988,7 +1988,7 @@ mod quad {
             self.see(r as i32)
         }
         fn bar(&mut self, a: i16) -> i16 {
-            self.see(bin_ntt::simd::ntt::bin_asm::barrett_lut_i16(a, Q) as i32)
+            self.see(labinius::simd::ntt::bin_asm::barrett_lut_i16(a, Q) as i32)
         }
         fn r3(&mut self, a0: i16, a1: i16, a2: i16, zeta: u16, bar: bool) -> (i16, i16, i16) {
             let q = Q as u64;
