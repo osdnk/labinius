@@ -52,8 +52,10 @@ fn main() {
     for profile in ligerito_flock::PROFILES {
         rows.push(ligerito_flock::run(log_len, profile, &u64s));
     }
-    for spec in [0, 5] {
-        rows.push(brakedown::run(log_len, spec, &u64s));
+    for security_bits in TARGETS {
+        for spec in [0, 5] {
+            rows.push(brakedown::run(log_len, spec, security_bits, &u64s));
+        }
     }
 
     println!(

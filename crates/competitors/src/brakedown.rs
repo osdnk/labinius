@@ -11,7 +11,7 @@
 use super::codes::brakedown_code::{self, BrakedownCode};
 use super::codes::LinearCode;
 use super::tensor::{self, Tensor};
-use super::{median_of, once, Row, SECURITY_BITS};
+use super::{median_of, once, Row};
 
 const CODE_SEED: u64 = 0x3B;
 
@@ -21,21 +21,21 @@ const PROBE_K: usize = 1 << 12;
 
 /// The shape is read off a probe of the code itself rather than off the spec, so the `delta` and
 /// the rate the split is chosen from are exactly the ones [`Tensor`] then asserts against.
-fn code(log_len: usize, spec: usize) -> BrakedownCode {
+fn code(log_len: usize, spec: usize, security_bits: usize) -> BrakedownCode {
     let row = brakedown_code::SPEC[spec];
     let probe = BrakedownCode::new(PROBE_K, row, CODE_SEED);
     let log_k = tensor::balanced_log_k(
         log_len,
         probe.relative_distance(),
         probe.rate(),
-        SECURITY_BITS,
+        security_bits,
     );
     BrakedownCode::new(1 << log_k, row, CODE_SEED)
 }
 
-pub fn run(log_len: usize, spec: usize, u64s: &[u64]) -> Row {
-    let code = code(log_len, spec);
-    let tensor = Tensor::new(&code, log_len, SECURITY_BITS);
+pub fn run(log_len: usize, spec: usize, security_bits: usize, u64s: &[u64]) -> Row {
+    let code = code(log_len, spec, security_bits);
+    let tensor = Tensor::new(&code, log_len, security_bits);
     let values = tensor::elements(log_len, u64s);
     let point = tensor::eval_point(log_len, POINT_SEED);
 
@@ -54,7 +54,7 @@ pub fn run(log_len: usize, spec: usize, u64s: &[u64]) -> Row {
     Row {
         scheme: "Brakedown tensor",
         rate: format!("{:.3}", code.rate()),
-        target: format!("{SECURITY_BITS}"),
+        target: format!("{security_bits}"),
         security: format!(
             "unique decoding to d/3 at delta {:.3}, {} queries, no grinding",
             code.relative_distance(),
