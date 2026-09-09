@@ -98,7 +98,7 @@ dependencies = [
 [[package]]
 name = "binius-circuits"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-core",
  "binius-frontend",
@@ -113,7 +113,7 @@ dependencies = [
 [[package]]
 name = "binius-compute"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "rayon",
 ]
@@ -121,7 +121,7 @@ dependencies = [
 [[package]]
 name = "binius-core"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-field",
  "binius-utils",
@@ -134,7 +134,7 @@ dependencies = [
 [[package]]
 name = "binius-field"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-utils",
  "bytemuck",
@@ -147,7 +147,7 @@ dependencies = [
 [[package]]
 name = "binius-frontend"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-core",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "binius-hash"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-utils",
  "blake3",
@@ -179,7 +179,7 @@ dependencies = [
 [[package]]
 name = "binius-hash-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-field",
@@ -199,7 +199,7 @@ dependencies = [
 [[package]]
 name = "binius-iop"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -217,7 +217,7 @@ dependencies = [
 [[package]]
 name = "binius-iop-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-core",
@@ -240,7 +240,7 @@ dependencies = [
 [[package]]
 name = "binius-ip"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "array-util",
  "binius-core",
@@ -254,7 +254,7 @@ dependencies = [
 [[package]]
 name = "binius-ip-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "auto_impl",
  "binius-compute",
@@ -272,7 +272,7 @@ dependencies = [
 [[package]]
 name = "binius-math"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-field",
@@ -287,7 +287,7 @@ dependencies = [
 [[package]]
 name = "binius-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-core",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "binius-spartan-frontend"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-field",
  "binius-utils",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "binius-spartan-prover"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-compute",
  "binius-core",
@@ -355,7 +355,7 @@ dependencies = [
 [[package]]
 name = "binius-spartan-verifier"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -373,7 +373,7 @@ dependencies = [
 [[package]]
 name = "binius-transcript"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "auto_impl",
  "binius-field",
@@ -387,7 +387,7 @@ dependencies = [
 [[package]]
 name = "binius-utils"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "array-util",
  "bytes",
@@ -401,7 +401,7 @@ dependencies = [
 [[package]]
 name = "binius-verifier"
 version = "0.1.0"
-source = "git+https://github.com/IrreducibleOSS/binius64?rev=b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f#b3caccf0a5dd705c0150d52c8e4c9e2aa4f28c9f"
+source = "git+https://github.com/IrreducibleOSS/binius64?rev=37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4#37e9cd64e82243cde0e79c7d8ac0dc319f1cbeb4"
 dependencies = [
  "binius-core",
  "binius-field",
@@ -684,7 +684,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 [[package]]
 name = "flock-core"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "bincode",
  "blake3",
@@ -704,7 +704,7 @@ dependencies = [
 [[package]]
 name = "flock-field"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "serde",
 ]
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "flock-hash"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "serde",
 ]
@@ -720,7 +720,7 @@ dependencies = [
 [[package]]
 name = "flock-merkle"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "blake3",
  "flock-hash",
@@ -732,7 +732,7 @@ dependencies = [
 [[package]]
 name = "flock-multilinear"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "rayon",
 ]
@@ -740,7 +740,7 @@ dependencies = [
 [[package]]
 name = "flock-parallel"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "rayon",
 ]
@@ -748,7 +748,7 @@ dependencies = [
 [[package]]
 name = "flock-prover"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "bincode",
  "blake3",
@@ -766,7 +766,7 @@ dependencies = [
 [[package]]
 name = "flock-transcript"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/flock?rev=4ae92adf7c726ae78309a2377c2f78cb95eb7562#4ae92adf7c726ae78309a2377c2f78cb95eb7562"
+source = "git+https://github.com/succinctlabs/flock?rev=a4a0b4a9dd555f9b58853951c133d7c990af5dad#a4a0b4a9dd555f9b58853951c133d7c990af5dad"
 dependencies = [
  "blake3",
  "flock-field",
@@ -1186,17 +1186,6 @@ checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
-]
-
-[[package]]
-name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
@@ -1311,13 +1300,13 @@ dependencies = [
 
 [[package]]
 name = "trait-set"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b79e2e9c9ab44c6d7c20d5976961b47e8f49ac199154daa514b77cd1ab536625"
+checksum = "55442dd31337ec4b06189213a6a65cc414e4ae34e4cbc7bc050fae1573d14ed5"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 3.0.4",
 ]
 
 [[package]]
