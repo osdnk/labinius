@@ -1,0 +1,69 @@
+=== size sizes ===
+=== short challenge: weight 28, canonical bound 12, 1000 samples ===
+  acceptance rate: 0.6562 (1 in 1.52)
+
+
+=== recursion on ===
+witness: 2^18 F162 = 65536 ring elements of R_648, 256 columns of 1024 F162
+  public parameters               28.84 ms
+  key-time buffers                   24 MB
+  witness: 18 vectors, 10816 polynomials of Z_Q[X]/(X^64+1)
+  commitment ranks: kappa_Y 11, kappa_u 3, kappa_R 8
+
+PROVER
+  commit (with T_Y)               11.51 ms
+  row_evaluate                     0.20 ms
+  commit_left_expansion            0.16 ms
+  prove_opening                  149.08 ms
+    fold                           2.37 ms
+    encoding                       5.05 ms
+    T_R                            2.03 ms
+    masks                          3.97 ms
+    constraint phi                 2.38 ms
+    statement build               10.91 ms
+    labrador::prove              120.76 ms
+  total                          160.95 ms
+
+STATEMENT
+  derive_evaluation_point          0.01 ms
+  mle_evaluate                     0.21 ms
+  total                            0.22 ms
+
+VERIFIER
+  derive_folding_challenges        0.28 ms
+  statement rebuild               12.42 ms
+    layout                         1.06 ms
+    no-wrap bound                  1.87 ms
+    constraint phi                 2.36 ms
+    statement build                5.55 ms
+  labrador::verify                76.60 ms
+  total                           91.83 ms
+
+wire: T_Y 4.1 KB, T_u 1.1 KB, T_R 3.0 KB, norms 0.1 KB, labrador 71.0 KB
+proof: 79.4 KB total, per-proof phi 1 MB
+verification: accepted
+
+peak resident set: 285 MB
+	Command being timed: "./target/release/labinius --suite s"
+	User time (seconds): 0.24
+	System time (seconds): 0.09
+	Percent of CPU this job got: 100%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.33
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 292056
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 106597
+	Voluntary context switches: 2
+	Involuntary context switches: 4
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

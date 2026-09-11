@@ -1,0 +1,9 @@
+/target
+/target-*
+tools/ubench/ubench
+tools/ubench/ports
+tools/membw/membw
+*.o
+.claude/
+bench-*/
+*.out

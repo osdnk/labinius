@@ -1,0 +1,16 @@
+[package]
+name = "labinius-flock"
+version.workspace = true
+edition.workspace = true
+description = "Flock as the second PIOP: its hash R1CS and reductions over this crate's commitment."
+
+[dependencies]
+labinius.workspace = true
+labinius-bench.workspace = true
+blake3.workspace = true
+bincode.workspace = true
+serde.workspace = true
+flock-core.workspace = true
+flock-field.workspace = true
+flock-prover.workspace = true
+flock-transcript.workspace = true
