@@ -2,7 +2,7 @@ use labinius_flock::circuit::LOG_INV_RATE;
 use labinius_flock::{Hash, Instance, ProverTiming, Session, Sizes};
 use labinius::scheme::suite_from_args;
 use labinius::Suite;
-use labinius_bench::{once, peak_rss, pin, pinned, table_row as row};
+use labinius_bench::{median_of, medians, once, peak_rss, pin, pinned, table_row as row, REPS};
 use flock_transcript::challenger::FsChallenger;
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -24,14 +24,14 @@ fn main() {
 }
 
 fn compare(hash: Hash, suite: &Suite) {
-    let (setup_ms, instance) = once(|| Instance::new(hash, suite));
-    let (witness_ms, witness) = once(|| instance.witness());
+    let (setup_ms, instance) = median_of(REPS, || Instance::new(hash, suite));
+    let (witness_ms, witness) = median_of(REPS, || instance.witness());
 
-    let (union_prove, (union_proof, union_commitment, _)) = once(|| {
+    let (union_prove, (union_proof, union_commitment, _)) = median_of(REPS, || {
         let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
         instance.stock_prove(&mut ch)
     });
-    let (union_verify, union_ok) = once(|| {
+    let (union_verify, union_ok) = median_of(REPS, || {
         let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
         instance.stock_verify(&union_commitment, &union_proof, &mut ch)
     });
@@ -40,16 +40,26 @@ fn compare(hash: Hash, suite: &Suite) {
     drop(union_proof);
 
     let core_params = instance.core_params();
-    let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
-    let core_witness = instance.witness();
-    let (core_reduce, core) = once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
-    let (core_open, core_proof) = once(|| instance.core_open(&core_params, core, &mut ch));
-    let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
-    let (core_verify_reduce, core_claims) =
-        once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
-    let core_claims = core_claims.expect("stock flock replays its own reductions");
-    let (core_verify_open, core_ok) =
-        once(|| instance.core_verify_open(&core_params, &core_proof, &core_claims, &mut ch));
+    let ([core_reduce, core_open], core_proof) = medians(
+        REPS,
+        || witness.clone(),
+        |core_witness| {
+            let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
+            let (reduce, core) =
+                once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
+            let (open, proof) = once(|| instance.core_open(&core_params, core, &mut ch));
+            ([reduce, open], proof)
+        },
+    );
+    let ([core_verify_reduce, core_verify_open], core_ok) = medians(REPS, || (), |()| {
+        let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
+        let (reduce, claims) =
+            once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
+        let claims = claims.expect("stock flock replays its own reductions");
+        let (open, ok) =
+            once(|| instance.core_verify_open(&core_params, &core_proof, &claims, &mut ch));
+        ([reduce, open], ok)
+    });
     core_ok.expect("stock flock verifies its own opening");
     let core_sizes = Sizes {
         commitment: core_proof.commitment.cap.len() * 32,
@@ -60,21 +70,30 @@ fn compare(hash: Hash, suite: &Suite) {
     };
     drop(core_proof);
 
-    let (off_setup, mut off) = once(|| Session::new(suite, false, MATRIX_SEED));
-    let (on_setup, mut on) = once(|| Session::new(suite, true, MATRIX_SEED));
-    let (bd_setup, mut bd) = once(|| Session::bd(suite, MATRIX_SEED));
-    let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&instance, &witness));
-    let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&instance, &witness));
-    let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&instance, &witness));
-    let off_verifier = off
-        .verify(&instance, &off_proof)
-        .expect("the honest proof verifies");
-    let on_verifier = on
-        .verify(&instance, &on_proof)
-        .expect("the honest proof verifies");
-    let bd_verifier = bd
-        .verify(&instance, &bd_proof)
-        .expect("the honest proof verifies");
+    let (off_setup, mut off) = median_of(REPS, || Session::new(suite, false, MATRIX_SEED));
+    let (on_setup, mut on) = median_of(REPS, || Session::new(suite, true, MATRIX_SEED));
+    let (bd_setup, mut bd) = median_of(REPS, || Session::bd(suite, MATRIX_SEED));
+    let prove = |session: &mut Session| {
+        medians(REPS, || (), |()| {
+            let (proof, timing, sizes) = session.prove(&instance, &witness);
+            (timing, (proof, sizes))
+        })
+    };
+    let (off_prover, (off_proof, off_sizes)) = prove(&mut off);
+    let (on_prover, (on_proof, on_sizes)) = prove(&mut on);
+    let (bd_prover, (bd_proof, bd_sizes)) = prove(&mut bd);
+    let verify = |session: &Session, proof| {
+        medians(REPS, || (), |()| {
+            let timing = session
+                .verify(&instance, proof)
+                .expect("the honest proof verifies");
+            (timing, ())
+        })
+        .0
+    };
+    let off_verifier = verify(&off, &off_proof);
+    let on_verifier = verify(&on, &on_proof);
+    let bd_verifier = verify(&bd, &bd_proof);
 
     let r1cs = instance.r1cs();
     println!(

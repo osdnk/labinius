@@ -11,7 +11,7 @@
 use super::codes::brakedown_code::{self, BrakedownCode};
 use super::codes::LinearCode;
 use super::tensor::{self, Tensor};
-use super::{median_of, once, Row};
+use super::{median_of, medians, Row, REPS};
 
 const CODE_SEED: u64 = 0x3B;
 
@@ -39,10 +39,13 @@ pub fn run(log_len: usize, spec: usize, security_bits: usize, u64s: &[u64]) -> R
     let values = tensor::elements(log_len, u64s);
     let point = tensor::eval_point(log_len, POINT_SEED);
 
-    let (commit_ms, commitment) = median_of(3, || tensor::commit(&tensor, &values));
+    let (commit_ms, commitment) = median_of(REPS, || tensor::commit(&tensor, &values));
 
-    let (_, (proof, claim, timing)) = once(|| tensor::prove(&tensor, &values, &point, None));
-    let (verify_ms, verified) = median_of(3, || tensor::verify(&tensor, &proof, &point, claim));
+    let (open_ms, (proof, claim)) = medians(REPS, || (), |()| {
+        let (proof, claim, timing) = tensor::prove(&tensor, &values, &point, None);
+        (timing.opening, (proof, claim))
+    });
+    let (verify_ms, verified) = median_of(REPS, || tensor::verify(&tensor, &proof, &point, claim));
     verified.expect("the honest opening verifies");
 
     let (tampered, tampered_claim, _) = tensor::prove(&tensor, &values, &point, Some(0));
@@ -62,7 +65,7 @@ pub fn run(log_len: usize, spec: usize, security_bits: usize, u64s: &[u64]) -> R
         ),
         claim: "element-MLE",
         commit_ms,
-        open_ms: timing.opening,
+        open_ms,
         verify_ms,
         commitment: commitment.len(),
         proof: proof.len() - commitment.len(),

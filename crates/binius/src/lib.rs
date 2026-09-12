@@ -87,6 +87,13 @@ pub struct VerifierTiming {
     pub total: f64,
 }
 
+labinius_bench::medians_by_field!(ProverTiming {
+    pack, commit, bitand, shift, switch, opening, total
+});
+labinius_bench::medians_by_field!(VerifierTiming {
+    commitment, reduce, wiring, switch, decode, opening, total
+});
+
 /// Bytes per part of the proof.
 #[derive(Clone, Copy, Default)]
 pub struct Sizes {

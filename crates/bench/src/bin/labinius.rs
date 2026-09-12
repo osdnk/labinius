@@ -3,7 +3,7 @@
 //! `cargo run --release --offline`. The binary pins itself to core 3, or to `$BENCH_CPU`.
 use labinius::scheme::suite_from_args;
 use labinius::{Opening, OpeningMessage, Suite};
-use labinius_bench::{duration_ms, median_of, once, peak_rss, pin, pinned, row};
+use labinius_bench::{duration_ms, median_of, medians, once, peak_rss, pin, pinned, row, REPS};
 use labinius::wire;
 use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
@@ -60,41 +60,45 @@ fn main() {
 fn plain(suite: &Suite) {
     let params = Params::sized(suite, Opening::Clear);
     let (setup_ms, public_parameters) =
-        once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
+        median_of(REPS, || PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
-    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
+    let (evaluation_point_ms, evaluation_point) = median_of(REPS, || {
         transcript = start.clone();
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
-    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
+    let (mle_ms, claimed_value) = median_of(REPS, || witness.mle_evaluate(&evaluation_point));
     let (row_evaluate_ms, row_evaluation) =
-        median_of(10, || witness.row_evaluate(&evaluation_point));
+        median_of(REPS, || witness.row_evaluate(&evaluation_point));
     let after_point = transcript.clone();
-    let (challenges_ms, folding_challenges) = median_of(10, || {
+    let (challenges_ms, folding_challenges) = median_of(REPS, || {
         transcript = after_point.clone();
         verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
     });
 
-    let (fold_ms, folded_witness) = once(|| prover.fold(opening, &folding_challenges));
+    let (fold_ms, folded_witness) = medians(
+        REPS,
+        || opening.clone(),
+        |opening| once(|| prover.fold(opening, &folding_challenges)),
+    );
 
     // What the prover puts on the wire, and what the verifier takes off it: everything below
     // this point runs against the decoded objects, so the round trip is on the real path.
-    let (pack_ms, (commitment_wire, row_wire)) = median_of(10, || {
+    let (pack_ms, (commitment_wire, row_wire)) = median_of(REPS, || {
         (
             wire::pack_commitment(&commitment),
             wire::pack_row_evaluation(&row_evaluation),
         )
     });
     let (encode_ms, fold_wire) =
-        median_of(10, || wire::encode(&folded_witness, params.base.prime()));
-    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(10, || {
+        median_of(REPS, || wire::encode(&folded_witness, params.base.prime()));
+    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(REPS, || {
         (
             wire::unpack_commitment(&params, &commitment_wire).expect("a commitment off the wire"),
             wire::unpack_row_evaluation(&row_wire, params.columns())
@@ -103,16 +107,16 @@ fn plain(suite: &Suite) {
         )
     });
 
-    let (fold_commitment_ms, folded_commitment) = median_of(10, || {
+    let (fold_commitment_ms, folded_commitment) = median_of(REPS, || {
         verifier.fold_commitment(&commitment, &folding_challenges)
     });
-    let (fold_row_ms, folded_row_value) = median_of(10, || {
+    let (fold_row_ms, folded_row_value) = median_of(REPS, || {
         verifier.fold_row_evaluation(&row_evaluation, &folding_challenges)
     });
-    let (verify_evaluation_ms, evaluation_ok) = median_of(10, || {
+    let (verify_evaluation_ms, evaluation_ok) = median_of(REPS, || {
         verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
     });
-    let (verify_opening_ms, opening_ok) = median_of(10, || {
+    let (verify_opening_ms, opening_ok) = median_of(REPS, || {
         verifier.verify_opening(
             &commitment,
             &folding_challenges,
@@ -215,39 +219,43 @@ fn plain_bd(suite: &Suite) {
         },
     );
     let (setup_ms, public_parameters) =
-        once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
+        median_of(REPS, || PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let witness = Witness::random(&params, WITNESS_SEED);
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
-    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
+    let (evaluation_point_ms, evaluation_point) = median_of(REPS, || {
         transcript = start.clone();
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
-    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
+    let (mle_ms, claimed_value) = median_of(REPS, || witness.mle_evaluate(&evaluation_point));
     let (row_evaluate_ms, row_evaluation) =
-        median_of(10, || witness.row_evaluate(&evaluation_point));
+        median_of(REPS, || witness.row_evaluate(&evaluation_point));
     let after_point = transcript.clone();
-    let (challenges_ms, folding_challenges) = median_of(10, || {
+    let (challenges_ms, folding_challenges) = median_of(REPS, || {
         transcript = after_point.clone();
         verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
     });
 
-    let (fold_ms, folded_witness) = once(|| prover.fold(opening, &folding_challenges));
+    let (fold_ms, folded_witness) = medians(
+        REPS,
+        || opening.clone(),
+        |opening| once(|| prover.fold(opening, &folding_challenges)),
+    );
 
-    let (pack_ms, (commitment_wire, row_wire)) = median_of(10, || {
+    let (pack_ms, (commitment_wire, row_wire)) = median_of(REPS, || {
         (
             wire::pack_commitment(&commitment),
             wire::pack_row_evaluation(&row_evaluation),
         )
     });
     let (encode_ms, fold_wire) =
-        median_of(10, || wire::encode(&folded_witness, params.base.prime()));
-    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(10, || {
+        median_of(REPS, || wire::encode(&folded_witness, params.base.prime()));
+    let (decode_ms, (commitment, row_evaluation, folded_witness)) = median_of(REPS, || {
         (
             wire::unpack_commitment(&params, &commitment_wire).expect("a commitment off the wire"),
             wire::unpack_row_evaluation(&row_wire, params.columns())
@@ -256,13 +264,13 @@ fn plain_bd(suite: &Suite) {
         )
     });
 
-    let (fold_row_ms, folded_row_value) = median_of(10, || {
+    let (fold_row_ms, folded_row_value) = median_of(REPS, || {
         verifier.fold_row_evaluation(&row_evaluation, &folding_challenges)
     });
-    let (verify_evaluation_ms, evaluation_ok) = median_of(10, || {
+    let (verify_evaluation_ms, evaluation_ok) = median_of(REPS, || {
         verifier.verify_evaluation(&evaluation_point, &claimed_value, &row_evaluation)
     });
-    let (verify_opening_ms, opening_ok) = median_of(10, || {
+    let (verify_opening_ms, opening_ok) = median_of(REPS, || {
         verifier.verify_opening(
             &commitment,
             &folding_challenges,
@@ -362,7 +370,7 @@ fn plain_bd(suite: &Suite) {
 fn recursive(suite: &Suite) {
     let params = Params::sized(suite, Opening::Recursive);
     let (setup_ms, public_parameters) =
-        once(|| PublicParameters::from_seed(params.clone(), MATRIX_SEED));
+        median_of(REPS, || PublicParameters::from_seed(params.clone(), MATRIX_SEED));
     let setup = public_parameters
         .recursion()
         .expect("recursion is on")
@@ -371,54 +379,67 @@ fn recursive(suite: &Suite) {
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = once(|| prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
-    let (evaluation_point_ms, evaluation_point) = median_of(10, || {
+    let (evaluation_point_ms, evaluation_point) = median_of(REPS, || {
         transcript = start.clone();
         verifier.derive_evaluation_point(&mut transcript, &commitment)
     });
-    let (mle_ms, claimed_value) = median_of(10, || witness.mle_evaluate(&evaluation_point));
+    let (mle_ms, claimed_value) = median_of(REPS, || witness.mle_evaluate(&evaluation_point));
     let (row_evaluate_ms, row_evaluation) =
-        median_of(10, || witness.row_evaluate(&evaluation_point));
-    let (left_ms, left) = median_of(10, || prover.commit_left_expansion(&row_evaluation));
+        median_of(REPS, || witness.row_evaluate(&evaluation_point));
+    let (left_ms, left) = median_of(REPS, || prover.commit_left_expansion(&row_evaluation));
     let after_point = transcript.clone();
-    let (challenges_ms, folding_challenges) = median_of(10, || {
+    let (challenges_ms, folding_challenges) = median_of(REPS, || {
         transcript = after_point.clone();
         verifier.derive_folding_challenges(&mut transcript, &left)
     });
 
-    let mut check = transcript.clone();
-    let (prove_ms, proof) = once(|| {
-        prover
-            .prove_opening(
-                &mut transcript,
-                opening,
-                &folding_challenges,
-                &evaluation_point,
-                &left,
-                &row_evaluation,
-                &claimed_value,
-                &commitment,
-            )
-            .expect("the honest fold is within its cap")
-    });
-    let prove = *proof.timings();
-    let (verify_ms, verified) = once(|| {
-        verifier.verify_opening(
-            &commitment,
-            &folding_challenges,
-            &evaluation_point,
-            OpeningMessage::Recursive {
-                transcript: &mut check,
-                left: &left,
-                claimed_value: &claimed_value,
-                proof: &proof,
-            },
-        )
-    });
-    let verify = verified.unwrap_or_default();
+    let before_proof = transcript.clone();
+    let ((prove_ms, prove), proof) = medians(
+        REPS,
+        || opening.clone(),
+        |opening| {
+            transcript = before_proof.clone();
+            let (ms, proof) = once(|| {
+                prover
+                    .prove_opening(
+                        &mut transcript,
+                        opening,
+                        &folding_challenges,
+                        &evaluation_point,
+                        &left,
+                        &row_evaluation,
+                        &claimed_value,
+                        &commitment,
+                    )
+                    .expect("the honest fold is within its cap")
+            });
+            ((ms, *proof.timings()), proof)
+        },
+    );
+    let ((verify_ms, verify), verified) = medians(
+        REPS,
+        || before_proof.clone(),
+        |mut check| {
+            let (ms, verified) = once(|| {
+                verifier.verify_opening(
+                    &commitment,
+                    &folding_challenges,
+                    &evaluation_point,
+                    OpeningMessage::Recursive {
+                        transcript: &mut check,
+                        left: &left,
+                        claimed_value: &claimed_value,
+                        proof: &proof,
+                    },
+                )
+            });
+            ((ms, verified.unwrap_or_default()), verified)
+        },
+    );
 
     println!("\n=== recursion on ===");
     println!(
