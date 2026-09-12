@@ -111,6 +111,12 @@ impl Prover {
         }
     }
 
+    /// Hand an opening back unfolded, so that the next commitment reuses its buffers instead of
+    /// mapping fresh memory: what a benchmark that commits repeatedly needs.
+    pub fn recycle(&mut self, opening: CommitmentOpening) {
+        self.workspace = Some(opening.aux);
+    }
+
     pub fn fold(
         &mut self,
         opening: CommitmentOpening,

@@ -3,7 +3,8 @@
 //! `cargo run --release --offline`. The binary pins itself to core 3, or to `$BENCH_CPU`.
 use labinius::scheme::suite_from_args;
 use labinius::{Opening, OpeningMessage, Suite};
-use labinius_bench::{duration_ms, median_of, medians, once, peak_rss, pin, pinned, row, REPS};
+use labinius::{Commitment, CommitmentOpening};
+use labinius_bench::{duration_ms, median_of, medians, once, peak_rss, pin, pinned, row, Medians, REPS};
 use labinius::wire;
 use labinius::{Params, Prover, PublicParameters, Transcript, Verifier, Witness};
 
@@ -57,6 +58,49 @@ fn main() {
     println!("\npeak resident set: {:.0} MB", peak_rss());
 }
 
+/// Median of `REPS` commitments to `witness`. Every repetition but the last hands its opening back
+/// to the prover, so each commit runs on the warm workspace `Prover::new` set up rather than on
+/// freshly mapped memory: the paper measures a prover that holds its buffers, and mapping and
+/// faulting in the multi-gigabyte transform costs more than computing it.
+fn commit_reps(prover: &mut Prover, witness: &Witness) -> (f64, (Commitment, CommitmentOpening)) {
+    let mut samples = Vec::with_capacity(REPS);
+    let mut last = None;
+    for i in 0..REPS {
+        let (ms, out) = once(|| prover.commit(witness));
+        samples.push(ms);
+        if i + 1 < REPS {
+            prover.recycle(out.1);
+        } else {
+            last = Some(out);
+        }
+    }
+    (f64::medians(samples), last.unwrap())
+}
+
+/// Median of `REPS` runs of `step`, each consuming an opening of `witness`. Between repetitions
+/// the witness is recommitted, untimed, onto the workspace the previous step handed back, in
+/// place of cloning the opening, which would put every repetition on fresh memory.
+fn opening_reps<S: Medians, V>(
+    prover: &mut Prover,
+    witness: &Witness,
+    opening: CommitmentOpening,
+    mut step: impl FnMut(&mut Prover, CommitmentOpening) -> (S, V),
+) -> (S, V) {
+    let mut samples = Vec::with_capacity(REPS);
+    let mut opening = Some(opening);
+    let mut last = None;
+    for i in 0..REPS {
+        let (sample, value) = step(prover, opening.take().unwrap());
+        samples.push(sample);
+        if i + 1 < REPS {
+            opening = Some(prover.commit(witness).1);
+        } else {
+            last = Some(value);
+        }
+    }
+    (S::medians(samples), last.unwrap())
+}
+
 fn plain(suite: &Suite) {
     let params = Params::sized(suite, Opening::Clear);
     let (setup_ms, public_parameters) =
@@ -65,7 +109,7 @@ fn plain(suite: &Suite) {
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = commit_reps(&mut prover, &witness);
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
@@ -82,11 +126,9 @@ fn plain(suite: &Suite) {
         verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
     });
 
-    let (fold_ms, folded_witness) = medians(
-        REPS,
-        || opening.clone(),
-        |opening| once(|| prover.fold(opening, &folding_challenges)),
-    );
+    let (fold_ms, folded_witness) = opening_reps(&mut prover, &witness, opening, |prover, opening| {
+        once(|| prover.fold(opening, &folding_challenges))
+    });
 
     // What the prover puts on the wire, and what the verifier takes off it: everything below
     // this point runs against the decoded objects, so the round trip is on the real path.
@@ -224,7 +266,7 @@ fn plain_bd(suite: &Suite) {
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = commit_reps(&mut prover, &witness);
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
@@ -241,11 +283,9 @@ fn plain_bd(suite: &Suite) {
         verifier.derive_folding_challenges(&mut transcript, &row_evaluation)
     });
 
-    let (fold_ms, folded_witness) = medians(
-        REPS,
-        || opening.clone(),
-        |opening| once(|| prover.fold(opening, &folding_challenges)),
-    );
+    let (fold_ms, folded_witness) = opening_reps(&mut prover, &witness, opening, |prover, opening| {
+        once(|| prover.fold(opening, &folding_challenges))
+    });
 
     let (pack_ms, (commitment_wire, row_wire)) = median_of(REPS, || {
         (
@@ -379,7 +419,7 @@ fn recursive(suite: &Suite) {
     let mut prover = Prover::new(&public_parameters);
     let verifier = Verifier::new(&public_parameters);
 
-    let (commit_ms, (commitment, opening)) = median_of(REPS, || prover.commit(&witness));
+    let (commit_ms, (commitment, opening)) = commit_reps(&mut prover, &witness);
 
     let mut transcript = Transcript::new(b"labinius/reference");
     let start = transcript.clone();
@@ -398,10 +438,8 @@ fn recursive(suite: &Suite) {
     });
 
     let before_proof = transcript.clone();
-    let ((prove_ms, prove), proof) = medians(
-        REPS,
-        || opening.clone(),
-        |opening| {
+    let ((prove_ms, prove), proof) =
+        opening_reps(&mut prover, &witness, opening, |prover, opening| {
             transcript = before_proof.clone();
             let (ms, proof) = once(|| {
                 prover
@@ -418,8 +456,7 @@ fn recursive(suite: &Suite) {
                     .expect("the honest fold is within its cap")
             });
             ((ms, *proof.timings()), proof)
-        },
-    );
+        });
     let ((verify_ms, verify), verified) = medians(
         REPS,
         || before_proof.clone(),
