@@ -18,10 +18,12 @@ pub enum Hash {
     Blake3,
 }
 
+/// Per hash and suite, the longest message whose circuit has at most `2^(witness_log_len + 1)`
+/// private words; one more byte tips it over. `examples/words.rs` measures a candidate.
 pub const MESSAGE_LEN: [[usize; 4]; 3] = [
-    [118727, 475319, 1901415, 0],
-    [72567, 290487, 1162039, 0],
-    [123840, 495488, 1982120, 0],
+    [118727, 475319, 1901415, 7605663],
+    [72567, 290487, 1162039, 4648183],
+    [123840, 495488, 1982120, 7928448],
 ];
 
 impl Hash {
