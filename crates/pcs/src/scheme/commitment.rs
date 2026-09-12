@@ -118,6 +118,7 @@ impl Commitment {
 /// What the prover keeps from a commitment and the fold consumes: the witness's transform modulo
 /// the base modulus, in the layout the kernel wrote it, and — with recursion on — the residues
 /// `T_Y` opens, which the verifier no longer receives.
+#[derive(Clone)]
 pub struct CommitmentOpening {
     pub(super) aux: AuxData,
     pub(super) residues: Option<recursion::limbs::Residues>,

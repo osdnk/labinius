@@ -78,6 +78,23 @@ export BENCH_CPU=$CPU
 cd "$(dirname "$0")/../.." || exit 1
 
 total_gb=$(free -g | awk '/^Mem:/{print $2}')
+cpu_model=$(lscpu | awk -F': *' '/^Model name/{print $2}')
+
+machine() {
+    echo "  cpu      $cpu_model"
+    echo "  cores    $(nproc) logical, benchmarks pinned to core $CPU"
+    echo "  memory   ${total_gb} GB"
+    echo "  kernel   $(uname -sr)"
+    echo "  rustc    $(rustc --version)"
+    echo "  commit   $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
+}
+
+echo "$RULE"
+echo "  MACHINE"
+echo "$RULE"
+machine | tee "$OUT/machine.txt"
+echo "$RULE"
+echo
 
 build ""
 
@@ -109,7 +126,7 @@ done
 
 echo
 echo "$RULE"
-echo "  SUMMARY"
+echo "  SUMMARY  $cpu_model"
 echo "$RULE"
 column -t -s $'\t' "$summary"
 echo "$RULE"

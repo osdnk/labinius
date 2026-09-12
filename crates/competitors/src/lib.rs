@@ -6,7 +6,7 @@ pub mod tensor;
 pub mod whir;
 use labinius_bench::Rng;
 use labinius::Suite;
-pub use labinius_bench::{median_of, ms as milliseconds, once, pin, pinned};
+pub use labinius_bench::{median_of, medians, ms as milliseconds, once, pin, pinned, REPS};
 
 pub fn log_len(suite: &Suite) -> usize {
     suite.witness_log_len as usize

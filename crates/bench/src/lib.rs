@@ -43,19 +43,83 @@ pub fn once<T>(f: impl FnOnce() -> T) -> (f64, T) {
     (ms(t0), value)
 }
 
-/// Median of `reps` wall milliseconds, and the last value produced. `reps` is odd, so the median
-/// is a measured sample rather than an average of two.
-pub fn median_of<T>(reps: usize, mut f: impl FnMut() -> T) -> (f64, T) {
+/// How many times every timed step runs; each reported number is the median of its samples.
+pub const REPS: usize = 10;
+
+/// A timing, or a struct of them, reduced sample-wise to its median.
+pub trait Medians: Sized {
+    fn medians(samples: Vec<Self>) -> Self;
+}
+
+impl Medians for f64 {
+    fn medians(mut samples: Vec<f64>) -> f64 {
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    }
+}
+
+impl Medians for Duration {
+    fn medians(mut samples: Vec<Duration>) -> Duration {
+        samples.sort();
+        samples[samples.len() / 2]
+    }
+}
+
+impl<const N: usize> Medians for [f64; N] {
+    fn medians(samples: Vec<[f64; N]>) -> [f64; N] {
+        std::array::from_fn(|i| f64::medians(samples.iter().map(|s| s[i]).collect()))
+    }
+}
+
+impl<A: Medians + Clone, B: Medians + Clone> Medians for (A, B) {
+    fn medians(samples: Vec<(A, B)>) -> (A, B) {
+        (
+            A::medians(samples.iter().map(|s| s.0.clone()).collect()),
+            B::medians(samples.iter().map(|s| s.1.clone()).collect()),
+        )
+    }
+}
+
+/// `impl Medians` for a struct, field by field; every field must be listed.
+#[macro_export]
+macro_rules! medians_by_field {
+    ($t:ty { $($f:ident),* $(,)? }) => {
+        impl $crate::Medians for $t {
+            fn medians(samples: Vec<Self>) -> Self {
+                Self { $($f: $crate::Medians::medians(samples.iter().map(|s| s.$f).collect())),* }
+            }
+        }
+    };
+}
+
+medians_by_field!(labinius::OpeningTimings {
+    fold, encoding, witness, t_r, masks, phi, statement, labrador
+});
+medians_by_field!(labinius::VerifyTimings {
+    rebuild, layout, bound, phi, statement, labrador
+});
+
+/// `reps` runs of `step`, each on a fresh `input`, which is not timed: the medians of what the
+/// steps measured, and the last value produced.
+pub fn medians<I, S: Medians, V>(
+    reps: usize,
+    mut input: impl FnMut() -> I,
+    mut step: impl FnMut(I) -> (S, V),
+) -> (S, V) {
     let mut samples = Vec::with_capacity(reps);
     let mut out = None;
     for _ in 0..reps {
-        let t0 = Instant::now();
-        let value = std::hint::black_box(f());
-        samples.push(ms(t0));
+        drop(out.take());
+        let (sample, value) = step(input());
+        samples.push(sample);
         out = Some(value);
     }
-    samples.sort_by(f64::total_cmp);
-    (samples[reps / 2], out.unwrap())
+    (S::medians(samples), out.unwrap())
+}
+
+/// Median of `reps` wall milliseconds of `f`, and the last value produced.
+pub fn median_of<T>(reps: usize, mut f: impl FnMut() -> T) -> (f64, T) {
+    medians(reps, || (), |()| once(&mut f))
 }
 
 pub fn row(name: &str, milliseconds: f64) {

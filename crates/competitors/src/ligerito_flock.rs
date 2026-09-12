@@ -1,4 +1,4 @@
-use super::{median_of, once, rate_label, Row};
+use super::{median_of, medians, once, rate_label, Row, REPS};
 use labinius::rng::Rng;
 use flock_core::challenger::FsChallenger;
 use flock_core::field::F128;
@@ -79,7 +79,7 @@ pub fn run(log_len: usize, profile: LigeritoProfile, u64s: &[u64]) -> Row {
     let poly = elements(u64s);
     assert_eq!(poly.len(), params.msg_len_f128());
 
-    let (commit_ms, (commitment, prover_data)) = median_of(3, || commit(&poly, &params));
+    let (commit_ms, (commitment, prover_data)) = median_of(REPS, || commit(&poly, &params));
 
     let mut rng = Rng::new(POINT_SEED);
     let point: Vec<F128> = (0..params.log_msg_len())
@@ -88,27 +88,34 @@ pub fn run(log_len: usize, profile: LigeritoProfile, u64s: &[u64]) -> Row {
     let eq = build_eq_table(&point);
     let value = claim(&poly, &eq);
 
-    let (open_ms, proof) = once(|| {
-        let mut challenger = FsChallenger::new(DOMAIN);
-        open_batch_mixed_ligerito_with_precomputed_s_hat_v_and_grinding(
-            poly.clone(),
-            &prover_data,
-            &commitment,
-            &[],
-            &[],
-            &[PackedDirectClaim {
-                point: point.clone(),
-                value,
-                eq_ind: DirectEqInd::Dense(eq),
-            }],
-            &PaddingSpec::dense(params.m),
-            &prover,
-            grinding,
-            &mut challenger,
-        )
-    });
+    // The opening takes the polynomial and the eq table by value; the copies are made off the clock.
+    let (open_ms, proof) = medians(
+        REPS,
+        || (poly.clone(), eq.clone()),
+        |(poly, eq)| {
+            once(|| {
+                let mut challenger = FsChallenger::new(DOMAIN);
+                open_batch_mixed_ligerito_with_precomputed_s_hat_v_and_grinding(
+                    poly,
+                    &prover_data,
+                    &commitment,
+                    &[],
+                    &[],
+                    &[PackedDirectClaim {
+                        point: point.clone(),
+                        value,
+                        eq_ind: DirectEqInd::Dense(eq),
+                    }],
+                    &PaddingSpec::dense(params.m),
+                    &prover,
+                    grinding,
+                    &mut challenger,
+                )
+            })
+        },
+    );
 
-    let (verify_ms, verified) = median_of(3, || {
+    let (verify_ms, verified) = median_of(REPS, || {
         let mut challenger = FsChallenger::new(DOMAIN);
         verify_opening_batch_ligerito_mixed_with_grinding(
             &commitment,

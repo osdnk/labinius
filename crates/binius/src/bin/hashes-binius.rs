@@ -3,7 +3,7 @@ use labinius_binius::stock::{Stock, LOG_INV_RATE};
 use labinius_binius::{Circuit, Hash, Session, Sizes};
 use labinius::scheme::suite_from_args;
 use labinius::Suite;
-use labinius_bench::{once, peak_rss, pin, pinned, table_row as row};
+use labinius_bench::{median_of, medians, once, peak_rss, pin, pinned, table_row as row, REPS};
 
 /// The seed the public matrix `A` is expanded from.
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -26,23 +26,36 @@ fn compare(hash: Hash, suite: &Suite) {
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect();
     let (circuit_ms, circuit) = once(|| Circuit::new(hash, len));
-    let (witness_ms, witness) = once(|| circuit.witness(&message));
+    let (witness_ms, witness) = median_of(REPS, || circuit.witness(&message));
     let constraint_system = circuit.constraint_system();
 
     // Stock binius64, the same circuit and witness through its own prover and verifier.
     let (stock_setup, stock) = once(|| Stock::new(constraint_system.clone()));
-    let (stock_prove, (stock_proof, stock_phases)) = once(|| stock.prove(&witness));
-    let (stock_verify, (stock_ok, stock_verify_phases)) =
-        once(|| stock.verify(witness.inout(), &stock_proof));
+    let ([stock_prove, stock_commit, stock_bitand, stock_shift, stock_pcs], stock_proof) =
+        medians(REPS, || (), |()| {
+            let (ms, (proof, phases)) = once(|| stock.prove(&witness));
+            (
+                [
+                    ms,
+                    phases.milliseconds("Commit witness"),
+                    phases.milliseconds("[phase] BitAnd check"),
+                    phases.milliseconds("[phase] Shift Reduction"),
+                    phases.milliseconds("[phase] PCS Opening"),
+                ],
+                proof,
+            )
+        });
+    let ([stock_verify, stock_verify_pcs], stock_ok) = medians(REPS, || (), |()| {
+        let (ms, (ok, phases)) = once(|| stock.verify(witness.inout(), &stock_proof));
+        ([ms, phases.milliseconds("[phase] Verify PCS Opening")], ok)
+    });
     stock_ok.expect("stock binius64 verifies its own proof");
-    let stock_commit = stock_phases.milliseconds("Commit witness");
-    let stock_bitand = stock_phases.milliseconds("[phase] BitAnd check");
-    let stock_shift = stock_phases.milliseconds("[phase] Shift Reduction");
-    let stock_pcs = stock_phases.milliseconds("[phase] PCS Opening");
-    let stock_verify_pcs = stock_verify_phases.milliseconds("[phase] Verify PCS Opening");
-    let [stock_iop, stock_native, stock_basefold] = stock
-        .verify_stages(witness.inout(), &stock_proof)
-        .expect("stock binius64 verifies its own proof");
+    let ([stock_iop, stock_native, stock_basefold], ()) = medians(REPS, || (), |()| {
+        let stages = stock
+            .verify_stages(witness.inout(), &stock_proof)
+            .expect("stock binius64 verifies its own proof");
+        (stages, ())
+    });
     let stock_verify_reduce = stock_iop - stock_verify_pcs;
 
     // The same instance with our commitment, without and with the recursion.
@@ -51,18 +64,27 @@ fn compare(hash: Hash, suite: &Suite) {
     let (on_setup, mut on) =
         once(|| Session::new(constraint_system.clone(), suite, true, MATRIX_SEED));
     let (bd_setup, mut bd) = once(|| Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
-    let (_, (off_proof, off_prover, off_sizes)) = once(|| off.prove(&witness, None));
-    let (_, (on_proof, on_prover, on_sizes)) = once(|| on.prove(&witness, None));
-    let (_, (bd_proof, bd_prover, bd_sizes)) = once(|| bd.prove(&witness, None));
-    let off_verifier = off
-        .verify(witness.inout(), &off_proof)
-        .expect("the honest proof verifies");
-    let on_verifier = on
-        .verify(witness.inout(), &on_proof)
-        .expect("the honest proof verifies");
-    let bd_verifier = bd
-        .verify(witness.inout(), &bd_proof)
-        .expect("the honest proof verifies");
+    let prove = |session: &mut Session| {
+        medians(REPS, || (), |()| {
+            let (proof, timing, sizes) = session.prove(&witness, None);
+            (timing, (proof, sizes))
+        })
+    };
+    let (off_prover, (off_proof, off_sizes)) = prove(&mut off);
+    let (on_prover, (on_proof, on_sizes)) = prove(&mut on);
+    let (bd_prover, (bd_proof, bd_sizes)) = prove(&mut bd);
+    let verify = |session: &Session, proof| {
+        medians(REPS, || (), |()| {
+            let timing = session
+                .verify(witness.inout(), proof)
+                .expect("the honest proof verifies");
+            (timing, ())
+        })
+        .0
+    };
+    let off_verifier = verify(&off, &off_proof);
+    let on_verifier = verify(&on, &on_proof);
+    let bd_verifier = verify(&bd, &bd_proof);
 
     println!(
         "labinius over binius64 {}, core {}, one thread, size {}",
