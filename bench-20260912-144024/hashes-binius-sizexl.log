@@ -1,0 +1,155 @@
+labinius over binius64 keccak-256, core 3, one thread, size sizexl
+keccak-256 of 7605663 bytes: 55924 permutations, 33554380 AND constraints, 33554381 non-public words
+stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
+recursion off: 2^24 F162 in 1024 columns, moduli 3889, 2917, 9721
+recursion on:  2^24 F162 in 2048 columns, moduli 3889, 2917, 9721
+bit-drop:      2^24 F162 in 1024 columns, moduli 3889, 2917, 4861, 7 bits dropped
+
+                                          stock    recursion    recursion             
+                                       binius64          off           on     bit-drop
+
+SETUP (once, not per proof)
+  circuit                             335999.40    335999.40    335999.40    335999.40 ms
+  commitment key and constraints       20835.93     19868.36     20028.03     19713.38 ms
+
+PROVER
+  witness                                386.86       386.86       386.86       386.86 ms
+  packing                                     —        91.73        92.96        92.31 ms
+  commit                                 473.10       665.37       705.46       698.56 ms
+  BitAnd check                          2339.73      3805.52      3737.28      3733.28 ms
+  shift reduction                       7866.28      8064.92      8038.13      8035.72 ms
+  ring-switch / cross-field switch       217.70      1012.91      1008.68      1007.54 ms
+  opening                                     —       166.52      1306.27       170.37 ms
+  rest                                   206.87        34.73        31.86        35.10 ms
+  total                                11103.68     13841.71     14920.65     13772.88 ms
+
+VERIFIER
+  read the commitment                         —         2.56         0.01         3.37 ms
+  reductions                             107.57       107.62       107.59       107.57 ms
+  ring-switch / cross-field switch         0.01         0.29         0.32         0.30 ms
+  decode the opening                          —         0.90            —         0.90 ms
+  BaseFold / our opening                   0.66         4.45       710.93         6.35 ms
+  wiring check (native)                 6131.36      6134.42      6132.09      6133.95 ms
+  total                                 6245.29      6255.69      6955.82      6257.73 ms
+
+SIZES
+  binius64 LIOP                               —         6.41         6.41         6.41 KB
+  cross-field switch                          —         3.50         3.50         3.50 KB
+  commitment (wire form)                      —      3078.00         4.50      2430.00 KB
+  opening                                     —      2986.86        82.84      2882.90 KB
+  total                                  470.95      6074.76        97.24      5322.81 KB
+  the tape carries T_Y as its polx image, 12.0 KB, rather than the wire form above
+
+peak resident set: 166115 MB
+
+labinius over binius64 sha-256, core 3, one thread, size sizexl
+sha-256 of 4648183 bytes: 72628 compressions, 26436593 AND constraints, 33554143 non-public words
+stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
+recursion off: 2^24 F162 in 1024 columns, moduli 3889, 2917, 9721
+recursion on:  2^24 F162 in 2048 columns, moduli 3889, 2917, 9721
+bit-drop:      2^24 F162 in 1024 columns, moduli 3889, 2917, 4861, 7 bits dropped
+
+                                          stock    recursion    recursion             
+                                       binius64          off           on     bit-drop
+
+SETUP (once, not per proof)
+  circuit                              65867.05     65867.05     65867.05     65867.05 ms
+  commitment key and constraints        6724.88      6291.90      7609.06      9027.13 ms
+
+PROVER
+  witness                                197.19       197.19       197.19       197.19 ms
+  packing                                     —        94.71        96.06        96.66 ms
+  commit                                 468.28       692.21       706.65       700.35 ms
+  BitAnd check                          1253.85      1555.36      1556.43      1577.91 ms
+  shift reduction                       2858.82      3218.06      3212.01      3223.89 ms
+  ring-switch / cross-field switch       217.01      1063.79      1059.27      1057.87 ms
+  opening                                     —       172.18      1348.56       173.97 ms
+  rest                                   212.73        54.37        45.34        51.11 ms
+  total                                 5010.69      6850.68      8024.33      6881.77 ms
+
+VERIFIER
+  read the commitment                         —         2.55         0.01         3.45 ms
+  reductions                              71.98        71.92        71.89        71.89 ms
+  ring-switch / cross-field switch         0.01         0.30         0.31         0.32 ms
+  decode the opening                          —         0.91            —         0.90 ms
+  BaseFold / our opening                   0.66         4.44       725.19         6.50 ms
+  wiring check (native)                 2260.07      2435.13      2435.29      2436.97 ms
+  total                                 2339.11      2521.63      3237.74      2526.26 ms
+
+SIZES
+  binius64 LIOP                               —         6.44         6.44         6.44 KB
+  cross-field switch                          —         3.50         3.50         3.50 KB
+  commitment (wire form)                      —      3078.00         4.50      2430.00 KB
+  opening                                     —      2998.24        82.86      2877.90 KB
+  total                                  470.98      6086.18        97.29      5317.84 KB
+  the tape carries T_Y as its polx image, 12.0 KB, rather than the wire form above
+
+peak resident set: 166115 MB
+
+labinius over binius64 blake3, core 3, one thread, size sizexl
+blake3 of 7928448 bytes: 131624 compressions, 22097456 AND constraints, 33554248 non-public words
+stock binius64 at the example's defaults: --log-inv-rate 1, --hash-suite sha256, rayon off
+recursion off: 2^24 F162 in 1024 columns, moduli 3889, 2917, 9721
+recursion on:  2^24 F162 in 2048 columns, moduli 3889, 2917, 9721
+bit-drop:      2^24 F162 in 1024 columns, moduli 3889, 2917, 4861, 7 bits dropped
+
+                                          stock    recursion    recursion             
+                                       binius64          off           on     bit-drop
+
+SETUP (once, not per proof)
+  circuit                              58762.36     58762.36     58762.36     58762.36 ms
+  commitment key and constraints        9353.91      9080.78     11856.18     12219.24 ms
+
+PROVER
+  witness                                139.87       139.87       139.87       139.87 ms
+  packing                                     —        92.50        93.06        93.77 ms
+  commit                                 470.31       672.00       705.53       691.95 ms
+  BitAnd check                          1537.90      1814.95      1805.16      1822.04 ms
+  shift reduction                       4402.04      4697.95      4693.66      4676.53 ms
+  ring-switch / cross-field switch       218.04      1009.60      1005.62      1004.10 ms
+  opening                                     —       176.22      1318.52       167.54 ms
+  rest                                   232.69        66.72        66.73        70.98 ms
+  total                                 6860.98      8529.94      9688.28      8526.92 ms
+
+VERIFIER
+  read the commitment                         —         2.59         0.01         3.42 ms
+  reductions                             121.09       121.14       121.10       121.13 ms
+  ring-switch / cross-field switch         0.01         0.31         0.32         0.31 ms
+  decode the opening                          —         0.91            —         0.92 ms
+  BaseFold / our opening                   0.66         4.04       707.63         5.94 ms
+  wiring check (native)                 3152.74      3329.69      3328.73      3327.61 ms
+  total                                 3284.97      3469.46      4169.51      3470.03 ms
+
+SIZES
+  binius64 LIOP                               —         6.44         6.44         6.44 KB
+  cross-field switch                          —         3.50         3.50         3.50 KB
+  commitment (wire form)                      —      3078.00         4.50      2430.00 KB
+  opening                                     —      2880.97        82.85      2839.48 KB
+  total                                  470.98      5968.91        97.28      5279.42 KB
+  the tape carries T_Y as its polx image, 12.0 KB, rather than the wire form above
+
+peak resident set: 166115 MB
+
+	Command being timed: "./target/release/hashes-binius --suite xl"
+	User time (seconds): 2243.26
+	System time (seconds): 173.49
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 40:16.90
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 170101332
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 316526111
+	Voluntary context switches: 14408
+	Involuntary context switches: 57876
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
