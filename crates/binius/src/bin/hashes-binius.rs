@@ -25,12 +25,12 @@ fn compare(hash: Hash, suite: &Suite) {
     let message: Vec<u8> = (0..len)
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect();
-    let (circuit_ms, circuit) = median_of(REPS, || Circuit::new(hash, len));
+    let (circuit_ms, circuit) = once(|| Circuit::new(hash, len));
     let (witness_ms, witness) = median_of(REPS, || circuit.witness(&message));
     let constraint_system = circuit.constraint_system();
 
     // Stock binius64, the same circuit and witness through its own prover and verifier.
-    let (stock_setup, stock) = median_of(REPS, || Stock::new(constraint_system.clone()));
+    let (stock_setup, stock) = once(|| Stock::new(constraint_system.clone()));
     let ([stock_prove, stock_commit, stock_bitand, stock_shift, stock_pcs], stock_proof) =
         medians(REPS, || (), |()| {
             let (ms, (proof, phases)) = once(|| stock.prove(&witness));
@@ -59,14 +59,11 @@ fn compare(hash: Hash, suite: &Suite) {
     let stock_verify_reduce = stock_iop - stock_verify_pcs;
 
     // The same instance with our commitment, without and with the recursion.
-    let (off_setup, mut off) = median_of(REPS, || {
-        Session::new(constraint_system.clone(), suite, false, MATRIX_SEED)
-    });
-    let (on_setup, mut on) = median_of(REPS, || {
-        Session::new(constraint_system.clone(), suite, true, MATRIX_SEED)
-    });
-    let (bd_setup, mut bd) =
-        median_of(REPS, || Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
+    let (off_setup, mut off) =
+        once(|| Session::new(constraint_system.clone(), suite, false, MATRIX_SEED));
+    let (on_setup, mut on) =
+        once(|| Session::new(constraint_system.clone(), suite, true, MATRIX_SEED));
+    let (bd_setup, mut bd) = once(|| Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
     let prove = |session: &mut Session| {
         medians(REPS, || (), |()| {
             let (proof, timing, sizes) = session.prove(&witness, None);
