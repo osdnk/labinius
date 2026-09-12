@@ -9,7 +9,7 @@
 //! between the claim and the sumcheck. The compilers are built at the keccak example's hash suite,
 //! so the commitment and the opening are the ones `src/hashes/stock.rs` measures inside a whole
 //! proof, read at the rate the caller asks for rather than at that example's single one.
-use super::{median_of, milliseconds, once, rate_label, Row};
+use super::{median_of, medians, milliseconds, once, rate_label, Row, REPS};
 use binius_compute::BufferPool;
 use binius_core::word::Word;
 use binius_hash::StdHashSuite;
@@ -194,11 +194,14 @@ pub fn run(log_len: usize, log_inv_rate: usize, security_bits: usize, u64s: &[u6
 
     let (commit_ms, commitment) = {
         let message = pack(&pool, log_len, &words);
-        median_of(3, || commit(&pcs, &pool, &message))
+        median_of(REPS, || commit(&pcs, &pool, &message))
     };
 
-    let (_, (proof, claim, timing)) = once(|| prove(&pcs, &pool, log_len, &words, None));
-    let (verify_ms, verified) = median_of(3, || verify(&pcs, log_len, &proof, claim));
+    let (open_ms, (proof, claim)) = medians(REPS, || (), |()| {
+        let (proof, claim, timing) = prove(&pcs, &pool, log_len, &words, None);
+        (timing.opening, (proof, claim))
+    });
+    let (verify_ms, verified) = median_of(REPS, || verify(&pcs, log_len, &proof, claim));
     verified.expect("the honest opening verifies");
 
     let (tampered, tampered_claim, _) = prove(&pcs, &pool, log_len, &words, Some(0));
@@ -214,7 +217,7 @@ pub fn run(log_len: usize, log_inv_rate: usize, security_bits: usize, u64s: &[u6
         security: format!("unique decoding, {} queries, no grinding", pcs.n_test_queries()),
         claim: "element-MLE",
         commit_ms,
-        open_ms: timing.opening,
+        open_ms,
         verify_ms,
         commitment: commitment.len(),
         proof: proof.len() - commitment.len(),

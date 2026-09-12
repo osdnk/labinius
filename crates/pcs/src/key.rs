@@ -271,6 +271,7 @@ fn uninit_batches(n: usize) -> Vec<Batch32> {
 /// Produced by [`CommitmentKey::commit_into_aux`] as a by-product of the commitment itself. For
 /// 2^16 ring elements it holds 2048 `Batch32` = 85 MB, whatever the limb list is: only the base
 /// limb's transform is kept.
+#[derive(Clone)]
 pub struct AuxData {
     /// The transform modulo the base limb, `batches[b].v[u][p]` = row `u` of ring element
     /// `32 b + p`, lazily reduced (`|v| <= 7.5 q`, the binary kernel's declared output bound).
