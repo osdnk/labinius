@@ -9,9 +9,9 @@ use labinius_bench::{median_of, medians, once, peak_rss, pin, pinned, table_row 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 /// The core the process pins itself to.
 const CPU: usize = 3;
-/// Setup and prover steps run this many times rather than [`REPS`]: at `sizel` and `sizexl` each
-/// is minutes, and the medians move little past three.
-const PROVER_REPS: usize = 3;
+/// The commitment keys are built this many times rather than [`REPS`]: setup, and at `sizel` and
+/// `sizexl` half a minute each. The circuit, minutes and tens of GB at `sizexl`, is built once.
+const SETUP_REPS: usize = 3;
 
 
 fn main() {
@@ -28,14 +28,14 @@ fn compare(hash: Hash, suite: &Suite) {
     let message: Vec<u8> = (0..len)
         .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
         .collect();
-    let (circuit_ms, circuit) = median_of(PROVER_REPS, || Circuit::new(hash, len));
-    let (witness_ms, witness) = median_of(PROVER_REPS, || circuit.witness(&message));
+    let (circuit_ms, circuit) = once(|| Circuit::new(hash, len));
+    let (witness_ms, witness) = median_of(REPS, || circuit.witness(&message));
     let constraint_system = circuit.constraint_system();
 
     // Stock binius64, the same circuit and witness through its own prover and verifier.
-    let (stock_setup, stock) = median_of(PROVER_REPS, || Stock::new(constraint_system.clone()));
+    let (stock_setup, stock) = median_of(SETUP_REPS, || Stock::new(constraint_system.clone()));
     let ([stock_prove, stock_commit, stock_bitand, stock_shift, stock_pcs], stock_proof) =
-        medians(PROVER_REPS, || (), |()| {
+        medians(REPS, || (), |()| {
             let (ms, (proof, phases)) = once(|| stock.prove(&witness));
             (
                 [
@@ -62,16 +62,16 @@ fn compare(hash: Hash, suite: &Suite) {
     let stock_verify_reduce = stock_iop - stock_verify_pcs;
 
     // The same instance with our commitment, without and with the recursion.
-    let (off_setup, mut off) = median_of(PROVER_REPS, || {
+    let (off_setup, mut off) = median_of(SETUP_REPS, || {
         Session::new(constraint_system.clone(), suite, false, MATRIX_SEED)
     });
-    let (on_setup, mut on) = median_of(PROVER_REPS, || {
+    let (on_setup, mut on) = median_of(SETUP_REPS, || {
         Session::new(constraint_system.clone(), suite, true, MATRIX_SEED)
     });
     let (bd_setup, mut bd) =
-        median_of(PROVER_REPS, || Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
+        median_of(SETUP_REPS, || Session::bd(constraint_system.clone(), suite, MATRIX_SEED));
     let prove = |session: &mut Session| {
-        medians(PROVER_REPS, || (), |()| {
+        medians(REPS, || (), |()| {
             let (proof, timing, sizes) = session.prove(&witness, None);
             (timing, (proof, sizes))
         })
