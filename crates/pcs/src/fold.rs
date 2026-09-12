@@ -746,6 +746,7 @@ fn a_times_v_fwd<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
     unsafe {
         for b in 0..a.len() {
             w.v.copy_from_slice(&v[b].v);
+            w.representation = Representation::Coefficients;
             forward_split::<Q>(&mut w);
             let ar = a[b].v.as_ptr() as *const i16;
             cm::mac_batch::<false>(w.v.as_ptr() as *const i16, ar, ar as *const i8, ap);
@@ -768,6 +769,7 @@ fn a_times_v_fwd_quad<const Q: u16>(a: &[Batch32], v: &[Batch32]) -> [u32; N] {
     unsafe {
         for b in 0..a.len() {
             w.v.copy_from_slice(&v[b].v);
+            w.representation = Representation::Coefficients;
             ntt_quad_gen_batch32::<Q>(&mut w);
             center_batch::<Q>(&mut w);
             let ar = a[b].v.as_ptr() as *const i16;
