@@ -6,7 +6,7 @@ set -u
 CPU=${CPU:-3}
 OUT=${OUT:-bench-$(date +%Y%m%d-%H%M%S)}
 SIZES=${SIZES:-"sizes sizem sizel sizexl"}
-BINIUS_XL_GB=${BINIUS_XL_GB:-80}
+BINIUS_XL_GB=${BINIUS_XL_GB:-170}
 mkdir -p "$OUT"
 
 RULE=$(printf '=%.0s' {1..78})
