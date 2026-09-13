@@ -19,10 +19,51 @@ against BaseFold, WHIR, Ligerito and Brakedown. Everything runs on one AVX-512 t
 
 ```
 cargo build --release --workspace --bins
-./target/release/labinius --suite m            # pins itself to core 3, or to $BENCH_CPU
-./bench.sh                                  # every binary at every suite
 cargo test --release --workspace
 ```
+
+Every binary takes `--suite s|m|l|xl` (witness of `2^18`, `2^20`, `2^22`, `2^24` bits; default `s`),
+pins itself to core 3 or to `$BENCH_CPU`, and reports each timed step as the median of 10 runs.
+
+| what you want to see | run |
+| --- | --- |
+| our scheme, opening in the clear and bit-dropped | `target/release/labinius --suite m` |
+| our scheme, opening replaced by a LaBRADOR proof | `cargo run --release -p labinius-bench --features labrador -- --suite m` |
+| Keccak-256, SHA-256, BLAKE3 under Binius64: stock vs. ours | `target/release/hashes-binius --suite m` |
+| BLAKE3, SHA-256 under Flock: stock vs. ours | `target/release/hashes-flock --suite m` |
+| BaseFold, WHIR, Ligerito, Brakedown on their own | `target/release/pcs-competitors --suite m` |
+| the parameter calibrations behind the paper | `target/release/calibrate <bdstats\|boundcheck\|foldstats\|gadget\|moduli\|recursion\|wire_bench>` |
+
+`--features labrador` swaps the `labinius` binary's body: without it the round is clear and
+bit-dropped, with it the round is the recursive one. The C library under `crates/pcs/labrador`
+is built either way.
+
+### The whole benchmark
+
+`./bench.sh` needs nothing run before it. It builds every binary itself (`cargo build --release
+--offline`, so the only prerequisite is that the dependencies are in the cargo cache: `cargo
+fetch` once), then runs `labinius`, `pcs-competitors`, `hashes-flock` and `hashes-binius` at
+every suite, rebuilds with `--features labrador` and runs `labinius` again. It may take long time, so
+run it detached:
+
+```
+setsid nohup ./bench.sh > bench.out 2>&1 < /dev/null & disown
+```
+
+It writes `bench-<timestamp>/`: `machine.txt`, `build.log`, one `<binary>-<suite>.log` per run
+(the labrador runs as `labinius-<suite>-labrador.log`) and `summary.tsv` with status, seconds
+and peak RSS per run; `bench.out` has the same summary at the end. Knobs, all optional:
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `SIZES` | `sizes sizem sizel sizexl` | which suites |
+| `CPU` | `3` | the core every run is pinned to |
+| `OUT` | `bench-<timestamp>` | the output directory |
+| `SKIP_BUILD` | `0` | `1` reuses `target/release` as it is |
+| `BINIUS_XL_GB` | `80` | `hashes-binius` at `xl` is skipped below this much RAM |
+
+`crates/bench/tables.py <bench-dir> <bench-dir> <paper.tex>` patches the numbers from those logs
+into the paper's tables.
 
 ## One round
 
