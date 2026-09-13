@@ -43,7 +43,7 @@ is built either way.
 `./bench.sh` needs nothing run before it. It builds every binary itself (`cargo build --release
 --offline`, so the only prerequisite is that the dependencies are in the cargo cache: `cargo
 fetch` once), then runs `labinius`, `pcs-competitors`, `hashes-flock` and `hashes-binius` at
-every suite, rebuilds with `--features labrador` and runs `labinius` again. It takes hours, so
+every suite, rebuilds with `--features labrador` and runs `labinius` again. It may take long time, so
 run it detached:
 
 ```
