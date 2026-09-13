@@ -31,15 +31,24 @@ build() {
     echo "  build ${feat:+--features $feat}"
     cargo build --release --offline --workspace --bins ${feat:+--features "$feat"} \
         >> "$OUT/build.log" 2>&1
-    echo "  done ($?)"
+    local rc=$?
+    echo "  done ($rc)"
     echo "$BAR"
     echo
+    if [ $rc -ne 0 ]; then
+        BUILD_FAILED="build failed (rc=$rc, see build.log)"
+        grep -m1 -E '^error|error:' "$OUT/build.log" | sed 's/^/  /'
+        echo
+    else
+        BUILD_FAILED=""
+    fi
 }
 
 run() {
     local bin=$1 size=$2 tag=${3:-}
     local name="$bin-$size${tag:+-$tag}"
     local log="$OUT/$name.log"
+    if [ -n "$BUILD_FAILED" ]; then note "$bin" "$BUILD_FAILED" "$size${tag:+/$tag}"; return; fi
     if [ ! -x "target/release/$bin" ]; then note "$bin" "missing binary" "$size${tag:+/$tag}"; return; fi
 
     echo "$BAR"
@@ -73,6 +82,7 @@ run() {
         "$([ $rc -eq 0 ] && echo ok || echo "rc$rc")" "$secs" "${peak:-}" >> "$summary"
 }
 
+BUILD_FAILED=""
 export RAYON_NUM_THREADS=1
 export BENCH_CPU=$CPU
 cd "$(dirname "$0")/../.." || exit 1
