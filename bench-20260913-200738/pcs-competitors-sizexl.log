@@ -1,0 +1,60 @@
+=== size sizexl ===
+four hash-based PCSs on 2^24 B128, opened at one point of 24 coordinates, core 3, one thread
+
+  scheme                            rate  target   commit ms     open ms   verify ms     C bytes  |pi| bytes
+  binius64 BaseFold                  1/2      96      524.78      186.51        0.64          32      473616
+  binius64 BaseFold                  1/4      96     1027.39      263.90        0.43          32      341264
+  binius64 BaseFold                  1/2     100      527.18      187.38        0.67          32      490032
+  binius64 BaseFold                  1/4     100     1027.99      264.00        0.45          32      353552
+  binius64 WHIR                      1/2      96      720.36      981.26        2.18          32      349024
+  binius64 WHIR                      1/4      96     1181.52      637.52        1.15          32      297392
+  binius64 WHIR                      1/2     100      719.59      987.40        2.27          32      361120
+  binius64 WHIR                      1/4     100     1190.24      643.41        1.19          32      308144
+  flock-core Ligerito Fast           1/2    ~128      540.44     1057.08        1.07        4096      486616
+  flock-core Ligerito Slim           1/4    ~128     1078.36     1226.44        0.76        2048      304760
+  flock-core Ligerito Fast100        1/2     100      539.21      969.84        1.09        4096      480760
+  flock-core Ligerito Slim100        1/4     100     1080.54     1062.45        0.67        2048      255160
+  Brakedown tensor                 0.704      96      647.90      106.49       42.47          32    20814464
+  Brakedown tensor                 0.581      96     1024.00       95.98       29.27          32    10700416
+  Brakedown tensor                 0.704     100      652.36      106.67       42.97          32    21305824
+  Brakedown tensor                 0.581     100     1030.33       96.02       29.92          32    10962496
+
+  binius64 BaseFold at 1/2, 96 bits: unique decoding, 232 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/4, 96 bits: unique decoding, 142 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/2, 100 bits: unique decoding, 241 queries, no grinding, opening claim element-MLE
+  binius64 BaseFold at 1/4, 100 bits: unique decoding, 148 queries, no grinding, opening claim element-MLE
+  binius64 WHIR at 1/2, 96 bits: unique decoding, 96.3 achieved, no grinding, ladder 1/2x232 1/16x106 1/32x101 1/64x99, opening claim element-MLE
+  binius64 WHIR at 1/4, 96 bits: unique decoding, 96.3 achieved, no grinding, ladder 1/4x142 1/16x106 1/32x101 1/64x99, opening claim element-MLE
+  binius64 WHIR at 1/2, 100 bits: unique decoding, 100.0 achieved, no grinding, ladder 1/2x241 1/16x110 1/32x105 1/64x103, opening claim element-MLE
+  binius64 WHIR at 1/4, 100 bits: unique decoding, 100.3 achieved, no grinding, ladder 1/4x148 1/16x110 1/32x105 1/64x103, opening claim element-MLE
+  flock-core Ligerito Fast at 1/2, ~128 bits: queries [244, 79, 48, 35, 29, 25], rates [1, 3, 5, 7, 9, 11], grinding [16, 16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  flock-core Ligerito Slim at 1/4, ~128 bits: queries [119, 60, 41, 32, 27, 24], rates [2, 4, 6, 8, 10, 12], grinding [16, 16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  flock-core Ligerito Fast100 at 1/2, 100 bits: queries [218, 106, 71, 53, 43, 36], rates [1, 2, 3, 4, 5, 6], grinding [0, 0, 0, 0, 0, 0], opening claim element-MLE, chosen point
+  flock-core Ligerito Slim100 at 1/4, 100 bits: queries [90, 60, 45, 36, 31, 27], rates [2, 3, 4, 5, 6, 7], grinding [16, 16, 16, 16, 16, 16], opening claim element-MLE, chosen point
+  Brakedown tensor at 0.704, 96 bits: unique decoding to d/3 at delta 0.020, 10052 queries, no grinding, opening claim element-MLE
+  Brakedown tensor at 0.581, 96 bits: unique decoding to d/3 at delta 0.070, 2846 queries, no grinding, opening claim element-MLE
+  Brakedown tensor at 0.704, 100 bits: unique decoding to d/3 at delta 0.020, 10467 queries, no grinding, opening claim element-MLE
+  Brakedown tensor at 0.581, 100 bits: unique decoding to d/3 at delta 0.070, 2963 queries, no grinding, opening claim element-MLE
+	Command being timed: "./target/release/pcs-competitors --suite xl"
+	User time (seconds): 319.27
+	System time (seconds): 35.08
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:54.37
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4063328
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 56403088
+	Voluntary context switches: 30991
+	Involuntary context switches: 49700
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

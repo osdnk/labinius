@@ -1,0 +1,115 @@
+labinius over flock BLAKE3, core 3, one thread, size sizes
+2048 compressions of BLAKE3: m = 25, k_log = 14, 11707 useful bits per block, 262144 committed
+stock union: log_inv_rate 1, profile Fast, Ligerito over the compacted stack, dense m = 25 in 188416 F128
+stock core:  log_inv_rate 1, profile Fast, Ligerito over the padded buffer, m = 25 in 262144 F128
+recursion off: 2^18 F162 in 128 columns, moduli 9721, 12637
+recursion on:  2^18 F162 in 256 columns, moduli 9721, 12637
+bit-drop:      2^18 F162 in 128 columns, moduli 3889, 2917, 4861, 10 bits dropped
+
+                                          stock        stock    recursion    recursion             
+                                          union         core          off           on     bit-drop
+
+SETUP (once, not per proof)
+  R1CS and PCS parameters               1483.08      1483.08      1483.08      1483.08      1483.08 ms
+  commitment key                              —            —        28.63        50.59        33.96 ms
+
+PROVER
+  witness                                  2.32         2.32         2.32         2.32         2.32 ms
+  lift to F162                                —            —         0.44         0.42         0.37 ms
+  commit, bind, zerocheck, lincheck            —        39.71            —            —            — ms
+  commit                                      —            —         8.50        11.90        14.31 ms
+  bind the commitment                         —            —         0.41         0.08         0.54 ms
+  zerocheck                                   —            —         8.14         8.19         8.14 ms
+  lincheck                                    —            —        26.60        26.65        26.70 ms
+  ring-switch / cross-field switch            —            —        26.99        25.77        23.50 ms
+  opening                                     —        31.77         4.12       135.79         4.13 ms
+  rest                                        —            —         0.12        -0.00        -0.07 ms
+  proof after the witness                     —        71.48        75.32       208.78        77.62 ms
+  total, witness included                 76.51        73.80        77.64       211.11        79.95 ms
+
+VERIFIER
+  zerocheck and lincheck                      —        25.80        26.02        26.18        26.27 ms
+  ring-switch / cross-field switch            —            —         0.61         0.65         0.62 ms
+  decode the opening                          —            —         0.13            —         0.13 ms
+  Ligerito / our opening                      —         1.50         0.73        95.83         1.01 ms
+  total                                   27.34        27.31        27.79       122.68        28.62 ms
+
+SIZES
+  zerocheck                                   —         2.84         2.84         2.84         2.84 KB
+  lincheck                                    —         1.37         1.37         1.37         1.37 KB
+  cross-field switch                          —         4.05         4.71         4.71         4.71 KB
+  commitment (wire form)                      —         4.00       283.50         4.12       283.50 KB
+  opening                                     —       373.13       284.47        75.47       271.38 KB
+  total                                  323.87       385.39       576.89        88.51       563.79 KB
+
+peak resident set: 1143 MB
+
+labinius over flock SHA-256, core 3, one thread, size sizes
+1024 compressions of SHA-256: m = 25, k_log = 15, 25470 useful bits per block, 262144 committed
+stock union: log_inv_rate 1, profile Fast, Ligerito over the compacted stack, dense m = 25 in 204800 F128
+stock core:  log_inv_rate 1, profile Fast, Ligerito over the padded buffer, m = 25 in 262144 F128
+recursion off: 2^18 F162 in 128 columns, moduli 9721, 12637
+recursion on:  2^18 F162 in 256 columns, moduli 9721, 12637
+bit-drop:      2^18 F162 in 128 columns, moduli 3889, 2917, 4861, 10 bits dropped
+
+                                          stock        stock    recursion    recursion             
+                                          union         core          off           on     bit-drop
+
+SETUP (once, not per proof)
+  R1CS and PCS parameters               1849.84      1849.84      1849.84      1849.84      1849.84 ms
+  commitment key                              —            —        28.52        50.01        34.17 ms
+
+PROVER
+  witness                                  1.67         1.67         1.67         1.67         1.67 ms
+  lift to F162                                —            —         0.41         0.43         0.36 ms
+  commit, bind, zerocheck, lincheck            —        41.45            —            —            — ms
+  commit                                      —            —         8.64        12.37        14.14 ms
+  bind the commitment                         —            —         0.30         0.02         0.51 ms
+  zerocheck                                   —            —         8.96         9.18         8.99 ms
+  lincheck                                    —            —        27.35        27.25        27.32 ms
+  ring-switch / cross-field switch            —            —        23.36        26.92        23.36 ms
+  opening                                     —        21.95         4.04       133.94         4.02 ms
+  rest                                        —            —         0.03        -0.47         0.09 ms
+  proof after the witness                     —        63.40        73.09       209.63        78.79 ms
+  total, witness included                 85.98        65.07        74.76       211.31        80.46 ms
+
+VERIFIER
+  zerocheck and lincheck                      —        26.36        26.44        26.59        26.47 ms
+  ring-switch / cross-field switch            —            —         0.62         0.65         0.61 ms
+  decode the opening                          —            —         0.13            —         0.13 ms
+  Ligerito / our opening                      —         1.53         0.57        93.66         0.90 ms
+  total                                   27.80        27.89        27.98       121.05        28.65 ms
+
+SIZES
+  zerocheck                                   —         2.84         2.84         2.84         2.84 KB
+  lincheck                                    —         1.41         1.41         1.41         1.41 KB
+  cross-field switch                          —         4.05         4.71         4.71         4.71 KB
+  commitment (wire form)                      —         4.00       283.50         4.12       283.50 KB
+  opening                                     —       373.13       250.26        75.16       247.89 KB
+  total                                  339.16       385.43       542.71        88.24       540.35 KB
+
+peak resident set: 1452 MB
+
+	Command being timed: "./target/release/hashes-flock --suite s"
+	User time (seconds): 48.42
+	System time (seconds): 2.75
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:51.18
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1487300
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3888191
+	Voluntary context switches: 8221
+	Involuntary context switches: 14115
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

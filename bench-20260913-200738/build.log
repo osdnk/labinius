@@ -1,0 +1,36 @@
+   Compiling labinius v0.1.0 (/home/ubuntu/labinius/crates/pcs)
+   Compiling labinius-bench v0.1.0 (/home/ubuntu/labinius/crates/bench)
+   Compiling labinius-binius v0.1.0 (/home/ubuntu/labinius/crates/binius)
+   Compiling labinius-flock v0.1.0 (/home/ubuntu/labinius/crates/flock)
+   Compiling pcs-competitors v0.1.0 (/home/ubuntu/labinius/crates/competitors)
+warning: function `recursive` is never used
+   --> crates/bench/src/bin/labinius.rs:410:4
+    |
+410 | fn recursive(suite: &Suite) {
+    |    ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `labinius-bench` (bin "labinius") generated 1 warning
+error: failed to build archive at `/home/ubuntu/labinius/target/release/deps/liblabinius_binius-4913dcfc371e6a9d.rlib`: No space left on device (os error 28)
+
+error: could not compile `labinius-binius` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: linking with `gcc` failed: exit status: 1
+  |
+  = note:  "gcc" "-m64" "<1 object files omitted>" "-Wl,--as-needed" "-Wl,-Bstatic" "/home/ubuntu/labinius/target/release/deps/rustc4EbLGf/{libsha2_asm-66002dfdb2040801,liblabinius-7851c48197de93ca,libblake3-d202ff3352b379fc}.rlib" "<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-*.rlib" "-Wl,-Bdynamic" "-lm" "-lgcc_s" "-lutil" "-lrt" "-lpthread" "-lm" "-ldl" "-lc" "-L" "/home/ubuntu/labinius/target/release/deps/rustc4EbLGf/raw-dylibs" "-Wl,--eh-frame-hdr" "-Wl,-z,noexecstack" "-L" "/home/ubuntu/labinius/target/release/build/blake3-ea03019e05699083/out" "-L" "/home/ubuntu/labinius/target/release/build/sha2-asm-de55c607ccfd5c49/out" "-L" "/home/ubuntu/labinius/target/release/build/labinius-5d595776eedc743b/out" "-L" "/home/ubuntu/labinius/crates/pcs/labrador" "-L" "<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/lib" "-o" "/home/ubuntu/labinius/target/release/deps/pcs_competitors-fdff8698a88a1982" "-Wl,--gc-sections" "-pie" "-Wl,-z,relro,-z,now" "-Wl,-O1" "-nodefaultlibs"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: /usr/bin/x86_64-linux-gnu-ld.bfd: final link failed: No space left on device
+          collect2: error: ld returned 1 exit status
+          
+
+error: could not compile `pcs-competitors` (bin "pcs-competitors") due to 1 previous error
+rustc-LLVM ERROR: IO failure on output stream: No space left on device
+error: could not compile `labinius-flock` (bin "hashes-flock")
+
+Caused by:
+  process didn't exit successfully: `/home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc --crate-name hashes_flock --edition=2021 crates/flock/src/bin/hashes-flock.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type bin --emit=dep-info,link -C opt-level=3 -C panic=abort -C lto=fat -C codegen-units=1 -C debuginfo=1 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=9a2ebbaa91f2de35 -C extra-filename=-6571dade41f96936 --out-dir /home/ubuntu/labinius/target/release/deps -C linker=gcc -L dependency=/home/ubuntu/labinius/target/release/deps --extern bincode=/home/ubuntu/labinius/target/release/deps/libbincode-043dd816da54c2a4.rlib --extern blake3=/home/ubuntu/labinius/target/release/deps/libblake3-d202ff3352b379fc.rlib --extern flock_core=/home/ubuntu/labinius/target/release/deps/libflock_core-2826b9ec58f24a55.rlib --extern flock_field=/home/ubuntu/labinius/target/release/deps/libflock_field-8ed67bed2a968bec.rlib --extern flock_prover=/home/ubuntu/labinius/target/release/deps/libflock_prover-e04a9d8b0e504066.rlib --extern flock_transcript=/home/ubuntu/labinius/target/release/deps/libflock_transcript-c2e6ff1e2eb0c115.rlib --extern labinius=/home/ubuntu/labinius/target/release/deps/liblabinius-7851c48197de93ca.rlib --extern labinius_bench=/home/ubuntu/labinius/target/release/deps/liblabinius_bench-aa81d316abeb790c.rlib --extern labinius_flock=/home/ubuntu/labinius/target/release/deps/liblabinius_flock-de22dc1076dacdc0.rlib --extern serde=/home/ubuntu/labinius/target/release/deps/libserde-1be8df9aa7dbd424.rlib -C target-cpu=native -L native=/home/ubuntu/labinius/target/release/build/blake3-ea03019e05699083/out -L native=/home/ubuntu/labinius/target/release/build/blake3-ea03019e05699083/out -L native=/home/ubuntu/labinius/target/release/build/sha2-asm-de55c607ccfd5c49/out -L native=/home/ubuntu/labinius/target/release/build/sha2-asm-de55c607ccfd5c49/out -L native=/home/ubuntu/labinius/target/release/build/labinius-5d595776eedc743b/out -L native=/home/ubuntu/labinius/crates/pcs/labrador` (exit status: 101)
+error: failed to create directory `/home/ubuntu/labinius/target/release/.fingerprint/labinius-flock-5faaf4c1cda88793`
+
+Caused by:
+  No space left on device (os error 28)

@@ -1,0 +1,94 @@
+=== size sizel ===
+=== short challenge: weight 28, canonical bound 12, 1000 samples ===
+  acceptance rate: 0.6562 (1 in 1.52)
+
+labinius, core 3, one thread, moduli 3889, 2917, 4861
+
+=== recursion off ===
+witness: 2^22 F162 = 1048576 ring elements of R_648, 512 columns of 8192 F162
+folded witness: 2048 ring elements of R_648, 512 F162 of row evaluation
+  public parameters                6.36 ms
+
+PROVER
+  commit                         178.67 ms
+  row_evaluate                     7.04 ms
+  fold                            37.84 ms
+  pack commitment, row             1.90 ms
+  encode folded witness            2.99 ms
+  total                          228.43 ms
+  total except encode            225.45 ms
+
+STATEMENT
+  derive_evaluation_point          2.72 ms
+  mle_evaluate                     7.02 ms
+  total                            9.74 ms
+
+VERIFIER
+  derive_folding_challenges        0.67 ms
+  decode                           0.51 ms
+  fold_commitment                  0.19 ms
+  fold_row_evaluation              0.01 ms
+  verify_evaluation                0.01 ms
+  verify_folded_opening            1.06 ms
+  total                            2.45 ms
+  total except decode              1.94 ms
+
+wire: commitment 1498.5 KB, row evaluation 10.1 KB, folded witness 1486.5 KB, TOTAL 2995.2 KB
+verification: accepted
+
+=== plain-bd ===
+witness: 2^22 F162 = 1048576 ring elements of R_648, 512 columns of 8192 F162
+dropped bits 8, residual cap 202934108160 over the expectation 5.073e10
+  public parameters                5.46 ms
+
+PROVER
+  commit (with the digits)       187.10 ms
+  row_evaluate                     7.09 ms
+  fold                            37.33 ms
+  pack commitment, row             1.31 ms
+  encode folded witness            2.65 ms
+  total                          235.48 ms
+  total except encode            232.83 ms
+
+STATEMENT
+  derive_evaluation_point          1.42 ms
+  mle_evaluate                     7.08 ms
+  total                            8.49 ms
+
+VERIFIER
+  derive_folding_challenges        0.62 ms
+  decode                           1.54 ms
+  fold_row_evaluation              0.01 ms
+  verify_evaluation                0.01 ms
+  verify_folded_opening            2.51 ms
+  total                            4.70 ms
+  total except decode              3.16 ms
+
+wire: commitment 1174.5 KB, row evaluation 10.1 KB, folded witness 1384.8 KB, TOTAL 2569.4 KB
+verification: accepted
+tampered fold: rejected (the opening was rejected)
+
+peak resident set: 1515 MB
+	Command being timed: "./target/release/labinius --suite l"
+	User time (seconds): 8.87
+	System time (seconds): 0.68
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:09.56
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1551164
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 869102
+	Voluntary context switches: 1
+	Involuntary context switches: 48
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
