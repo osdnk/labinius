@@ -1,0 +1,69 @@
+=== size sizexl ===
+=== short challenge: weight 28, canonical bound 12, 1000 samples ===
+  acceptance rate: 0.6562 (1 in 1.52)
+
+
+=== recursion on ===
+witness: 2^24 F162 = 4194304 ring elements of R_648, 2048 columns of 8192 F162
+  public parameters              235.92 ms
+  key-time buffers                  244 MB
+  witness: 24 vectors, 105792 polynomials of Z_Q[X]/(X^64+1)
+  commitment ranks: kappa_Y 12, kappa_u 4, kappa_R 9
+
+PROVER
+  commit (with T_Y)              634.26 ms
+  row_evaluate                    20.54 ms
+  commit_left_expansion            1.29 ms
+  prove_opening                 1296.45 ms
+    fold                         136.58 ms
+    encoding                      64.70 ms
+    T_R                            8.59 ms
+    masks                         31.06 ms
+    constraint phi                18.65 ms
+    statement build               86.61 ms
+    labrador::prove              936.70 ms
+  total                         1952.54 ms
+
+STATEMENT
+  derive_evaluation_point          0.01 ms
+  mle_evaluate                    20.52 ms
+  total                           20.53 ms
+
+VERIFIER
+  derive_folding_challenges        1.69 ms
+  statement rebuild              160.69 ms
+    layout                        13.41 ms
+    no-wrap bound                  9.33 ms
+    constraint phi                18.65 ms
+    statement build               86.57 ms
+  labrador::verify               531.42 ms
+  total                          705.46 ms
+
+wire: T_Y 4.5 KB, T_u 1.5 KB, T_R 3.4 KB, norms 0.2 KB, labrador 77.9 KB
+proof: 87.4 KB total, per-proof phi 11 MB
+verification: accepted
+
+peak resident set: 7505 MB
+	Command being timed: "./target/release/labinius --suite xl"
+	User time (seconds): 32.34
+	System time (seconds): 4.69
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:37.04
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 7685148
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 9029180
+	Voluntary context switches: 11
+	Involuntary context switches: 221
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
