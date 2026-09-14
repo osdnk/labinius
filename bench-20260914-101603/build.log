@@ -1,0 +1,36 @@
+   Compiling labinius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/pcs)
+   Compiling labinius-bench v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/bench)
+   Compiling labinius-binius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/binius)
+   Compiling pcs-competitors v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/competitors)
+   Compiling labinius-flock v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/flock)
+warning: function `recursive` is never used
+   --> crates/bench/src/bin/labinius.rs:410:4
+    |
+410 | fn recursive(suite: &Suite) {
+    |    ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `labinius-bench` (bin "labinius") generated 1 warning
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 00s
+   Compiling labinius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/pcs)
+   Compiling labinius-bench v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/bench)
+   Compiling labinius-flock v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/flock)
+   Compiling labinius-binius v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/binius)
+   Compiling pcs-competitors v0.1.0 (/home/standalone-osadnik/projects/labin/bin-ntt/crates/competitors)
+warning: function `plain` is never used
+   --> crates/bench/src/bin/labinius.rs:104:4
+    |
+104 | fn plain(suite: &Suite) {
+    |    ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `plain_bd` is never used
+   --> crates/bench/src/bin/labinius.rs:256:4
+    |
+256 | fn plain_bd(suite: &Suite) {
+    |    ^^^^^^^^
+
+warning: `labinius-bench` (bin "labinius") generated 2 warnings
+    Finished `release` profile [optimized + debuginfo] target(s) in 1m 01s

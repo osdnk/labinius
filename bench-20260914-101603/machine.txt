@@ -1,0 +1,6 @@
+  cpu      11th Gen Intel(R) Core(TM) i7-11850H @ 2.50GHz
+  cores    16 logical, benchmarks pinned to core 3
+  memory   62 GB
+  kernel   Linux 6.17.0-23-generic
+  rustc    rustc 1.95.0 (59807616e 2026-04-14)
+  commit   1320f8f (dirty)

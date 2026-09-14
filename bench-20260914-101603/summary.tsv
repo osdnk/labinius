@@ -1,0 +1,21 @@
+binary	size	status	seconds	peak_MB
+labinius	sizes	ok	1	106
+pcs-competitors	sizes	ok	6	94
+hashes-flock	sizes	ok	51	1454
+hashes-binius	sizes	ok	45	2789
+labinius	sizem	ok	4	406
+pcs-competitors	sizem	ok	25	286
+hashes-flock	sizem	ok	90	2726
+hashes-binius	sizem	ok	179	10676
+labinius	sizel	ok	15	1518
+pcs-competitors	sizel	ok	110	1080
+hashes-flock	sizel	ok	236	6929
+hashes-binius	sizel	ok	688	41903
+labinius	sizexl	ok	60	6009
+pcs-competitors	sizexl	ok	488	3999
+hashes-flock	sizexl	ok	768	22944
+hashes-binius	sizexl	skipped: 62 GB < 170 GB	-	-
+labinius	sizes/labrador	ok	3	286
+labinius	sizem/labrador	ok	11	847
+labinius	sizel/labrador	ok	24	2358
+labinius	sizexl/labrador	ok	65	7504
