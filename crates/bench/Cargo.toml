@@ -1,0 +1,12 @@
+[package]
+name = "labinius-bench"
+version.workspace = true
+edition.workspace = true
+description = "The reference round, the calibration runs and the shared timing helpers."
+default-run = "labinius"
+
+[dependencies]
+labinius.workspace = true
+
+[features]
+labrador = ["labinius/labrador"]
