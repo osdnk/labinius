@@ -1,23 +1,24 @@
-use super::basefold::evaluate_elements;
+//! Pinned to binius64 before "Remove all WHIR code" (0fcb7f21) through the `-whir` crates.
 use super::{median_of, medians, milliseconds, rate_label, Row, REPS};
-use binius_compute::BufferPool;
-use binius_core::word::Word;
-use binius_hash::StdHashSuite;
-use binius_iop::channel::{IOPVerifierChannel, OracleSpec};
-use binius_iop::soundness::{Grinding, SoundnessRegime};
-use binius_iop::whir::compiler::WHIRVerifierCompiler;
-use binius_iop_prover::channel::IOPProverChannel;
-use binius_iop_prover::whir::compiler::WHIRProverCompiler;
-use binius_ip::channel::IPVerifierChannel;
-use binius_ip_prover::channel::IPProverChannel;
-use binius_math::ntt::domain_context::GaoMateerPreExpanded;
-use binius_math::ntt::NeighborsLastMultiThread;
-use binius_math::multilinear::eq::{eq_ind, eq_ind_partial_eval_in};
-use binius_math::FieldVec;
-use binius_prover::{pack_witness, OptimalPackedB128};
-use binius_transcript::{ProverTranscript, VerifierTranscript};
-use binius_verifier::config::{StdChallenger, B128};
-use binius_verifier::merkle_tree::BinaryMerkleTreeScheme;
+use binius_compute_whir::BufferPool;
+use binius_core_whir::word::Word;
+use binius_hash_whir::StdHashSuite;
+use binius_iop_whir::channel::{IOPVerifierChannel, OracleSpec};
+use binius_iop_whir::soundness::{Grinding, SoundnessRegime};
+use binius_iop_whir::whir::compiler::WHIRVerifierCompiler;
+use binius_iop_prover_whir::channel::IOPProverChannel;
+use binius_iop_prover_whir::whir::compiler::WHIRProverCompiler;
+use binius_ip_whir::channel::IPVerifierChannel;
+use binius_ip_prover_whir::channel::IPProverChannel;
+use binius_math_whir::ntt::domain_context::GaoMateerPreExpanded;
+use binius_math_whir::ntt::NeighborsLastMultiThread;
+use binius_math_whir::multilinear::eq::{eq_ind, eq_ind_partial_eval_in};
+use binius_math_whir::multilinear::evaluate::evaluate;
+use binius_math_whir::FieldVec;
+use binius_prover_whir::{pack_witness, OptimalPackedB128};
+use binius_transcript_whir::{ProverTranscript, VerifierTranscript};
+use binius_verifier_whir::config::{StdChallenger, B128};
+use binius_verifier_whir::merkle_tree::BinaryMerkleTreeScheme;
 use std::time::Instant;
 
 type Packed = OptimalPackedB128;
@@ -101,7 +102,7 @@ pub fn prove(
     };
 
     let eval_point = channel.sample_many(log_len);
-    let claim = evaluate_elements(&message, &eval_point);
+    let claim = evaluate(&message, &eval_point);
 
     let start = Instant::now();
     let eq = eq_ind_partial_eval_in::<_, Packed>(&pool, &eval_point);
@@ -118,7 +119,7 @@ pub fn verify(
     log_len: usize,
     proof: &[u8],
     claim: B128,
-) -> Result<(), binius_iop::channel::Error> {
+) -> Result<(), binius_iop_whir::channel::Error> {
     let mut transcript = VerifierTranscript::new(StdChallenger::default(), proof.to_vec());
     let mut channel = pcs
         .verifier
