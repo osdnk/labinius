@@ -1,8 +1,8 @@
 use super::{median_of, medians, once, rate_label, Row, REPS};
-use labinius::rng::Rng;
 use flock_core::challenger::FsChallenger;
 use flock_core::field::F128;
 use flock_core::lincheck::build_eq_table;
+use flock_core::merkle::HashKind;
 use flock_core::pcs::ligerito::{embedded_initial_k_or_default, LigeritoProfile};
 use flock_core::pcs::{
     commit, open_batch_mixed_ligerito_with_precomputed_s_hat_v_and_grinding,
@@ -10,6 +10,7 @@ use flock_core::pcs::{
     PackedDirectClaimRef, PcsParams,
 };
 use flock_core::zerocheck::PaddingSpec;
+use labinius::rng::Rng;
 
 const HASH_BYTES: usize = 32;
 
@@ -57,7 +58,7 @@ pub fn params(log_len: usize, profile: LigeritoProfile) -> PcsParams {
         log_batch_size: embedded_initial_k_or_default(m, profile),
         profile,
         num_lanes: None,
-        merkle_hash: Default::default(),
+        merkle_hash: HashKind::Sha256,
     }
 }
 

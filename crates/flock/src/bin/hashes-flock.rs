@@ -1,13 +1,12 @@
-use labinius_flock::circuit::LOG_INV_RATE;
-use labinius_flock::{Hash, Instance, ProverTiming, Session, Sizes};
+use flock_transcript::challenger::FsChallenger;
 use labinius::scheme::suite_from_args;
 use labinius::Suite;
 use labinius_bench::{median_of, medians, once, peak_rss, pin, pinned, table_row as row, REPS};
-use flock_transcript::challenger::FsChallenger;
+use labinius_flock::circuit::LOG_INV_RATE;
+use labinius_flock::{Hash, Instance, ProverTiming, Session, Sizes};
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
 const CPU: usize = 3;
-
 
 fn encoded<T: serde::Serialize>(x: &T) -> usize {
     bincode::serialized_size(x).expect("the proof serializes") as usize
@@ -45,21 +44,24 @@ fn compare(hash: Hash, suite: &Suite) {
         || witness.clone(),
         |core_witness| {
             let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
-            let (reduce, core) =
-                once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
+            let (reduce, core) = once(|| instance.core_reduce(&core_params, core_witness, &mut ch));
             let (open, proof) = once(|| instance.core_open(&core_params, core, &mut ch));
             ([reduce, open], proof)
         },
     );
-    let ([core_verify_reduce, core_verify_open], core_ok) = medians(REPS, || (), |()| {
-        let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
-        let (reduce, claims) =
-            once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
-        let claims = claims.expect("stock flock replays its own reductions");
-        let (open, ok) =
-            once(|| instance.core_verify_open(&core_params, &core_proof, &claims, &mut ch));
-        ([reduce, open], ok)
-    });
+    let ([core_verify_reduce, core_verify_open], core_ok) = medians(
+        REPS,
+        || (),
+        |()| {
+            let mut ch = FsChallenger::new(labinius_flock::DOMAIN);
+            let (reduce, claims) =
+                once(|| instance.core_verify_reduce(&core_params, &core_proof, &mut ch));
+            let claims = claims.expect("stock flock replays its own reductions");
+            let (open, ok) =
+                once(|| instance.core_verify_open(&core_params, &core_proof, &claims, &mut ch));
+            ([reduce, open], ok)
+        },
+    );
     core_ok.expect("stock flock verifies its own opening");
     let core_sizes = Sizes {
         commitment: core_proof.commitment.cap.len() * 32,
@@ -74,21 +76,29 @@ fn compare(hash: Hash, suite: &Suite) {
     let (on_setup, mut on) = median_of(REPS, || Session::new(suite, true, MATRIX_SEED));
     let (bd_setup, mut bd) = median_of(REPS, || Session::bd(suite, MATRIX_SEED));
     let prove = |session: &mut Session| {
-        medians(REPS, || (), |()| {
-            let (proof, timing, sizes) = session.prove(&instance, &witness);
-            (timing, (proof, sizes))
-        })
+        medians(
+            REPS,
+            || (),
+            |()| {
+                let (proof, timing, sizes) = session.prove(&instance, &witness);
+                (timing, (proof, sizes))
+            },
+        )
     };
     let (off_prover, (off_proof, off_sizes)) = prove(&mut off);
     let (on_prover, (on_proof, on_sizes)) = prove(&mut on);
     let (bd_prover, (bd_proof, bd_sizes)) = prove(&mut bd);
     let verify = |session: &Session, proof| {
-        medians(REPS, || (), |()| {
-            let timing = session
-                .verify(&instance, proof)
-                .expect("the honest proof verifies");
-            (timing, ())
-        })
+        medians(
+            REPS,
+            || (),
+            |()| {
+                let timing = session
+                    .verify(&instance, proof)
+                    .expect("the honest proof verifies");
+                (timing, ())
+            },
+        )
         .0
     };
     let off_verifier = verify(&off, &off_proof);
@@ -113,16 +123,18 @@ fn compare(hash: Hash, suite: &Suite) {
     );
     let params = instance.pcs_params();
     println!(
-        "stock union: log_inv_rate {LOG_INV_RATE}, profile {:?}, Ligerito over the compacted \
-         stack, dense m = {} in {} F128",
+        "stock union: log_inv_rate {LOG_INV_RATE}, profile {:?}, merkle {:?}, Ligerito over the \
+         compacted stack, dense m = {} in {} F128",
         params.profile,
+        params.merkle_hash,
         params.m,
         params.msg_len_f128()
     );
     println!(
-        "stock core:  log_inv_rate {LOG_INV_RATE}, profile {:?}, Ligerito over the padded \
-         buffer, m = {} in {} F128",
+        "stock core:  log_inv_rate {LOG_INV_RATE}, profile {:?}, merkle {:?}, Ligerito over the \
+         padded buffer, m = {} in {} F128",
         core_params.profile,
+        core_params.merkle_hash,
         core_params.m,
         core_params.msg_len_f128()
     );

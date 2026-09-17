@@ -1,6 +1,7 @@
 use crate::switch::LOG_PACKING;
 use flock_core::lincheck::{LincheckCircuit, LincheckProof};
-use flock_core::pcs::ligerito::embedded_initial_k_or_default;
+use flock_core::merkle::HashKind;
+use flock_core::pcs::ligerito::{embedded_initial_k_or_default, LigeritoProfile};
 use flock_core::pcs::{
     open_batch_mixed_ligerito_with_precomputed_s_hat_v_and_grinding, BatchOpeningProofLigerito,
     Commitment, PcsError, PcsParams,
@@ -24,6 +25,9 @@ use flock_transcript::challenger::Challenger;
 use labinius::Suite;
 
 pub const LOG_INV_RATE: usize = 1;
+/// Stock flock at this crate's target: 100 bits at rate 1/2, SHA-256 Merkle trees.
+pub const PROFILE: LigeritoProfile = LigeritoProfile::Fast100;
+pub const MERKLE_HASH: HashKind = HashKind::Sha256;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Hash {
@@ -73,15 +77,18 @@ impl Instance {
     pub fn new(hash: Hash, suite: &Suite) -> Instance {
         let n = hash.compressions(suite);
         let instance = match hash {
-            Hash::Blake3 => Instance::Blake3(
-                Blake3Setup::with_log_inv_rate(n, LOG_INV_RATE),
-                (0..n).map(blake3_input).collect(),
-            ),
-            Hash::Sha256 => Instance::Sha256(
-                Sha256HybridSetup::with_log_inv_rate(n, LOG_INV_RATE),
-                (0..n).map(sha2_input).collect(),
-            ),
+            Hash::Blake3 => {
+                let mut setup = Blake3Setup::with_profile(n, PROFILE);
+                setup.pcs_params.merkle_hash = MERKLE_HASH;
+                Instance::Blake3(setup, (0..n).map(blake3_input).collect())
+            }
+            Hash::Sha256 => {
+                let mut setup = Sha256HybridSetup::with_profile(n, PROFILE);
+                setup.pcs_params.merkle_hash = MERKLE_HASH;
+                Instance::Sha256(setup, (0..n).map(sha2_input).collect())
+            }
         };
+        assert_eq!(instance.pcs_params().log_inv_rate, LOG_INV_RATE);
         instance.r1cs().statement_digest();
         instance.registry().digest();
         instance
@@ -173,7 +180,7 @@ impl Instance {
             log_batch_size: embedded_initial_k_or_default(m, profile),
             profile,
             num_lanes: None,
-            merkle_hash: Default::default(),
+            merkle_hash: self.pcs_params().merkle_hash,
         }
     }
 
