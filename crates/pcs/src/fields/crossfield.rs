@@ -1,4 +1,5 @@
 use super::scalar::{B128, F162};
+use std::arch::x86_64::*;
 
 pub const LOG_PACK: usize = 7;
 pub const PACK: usize = 1 << LOG_PACK;
@@ -121,28 +122,166 @@ pub fn psi(tab: &[Vec<F162>], x: B128) -> F162 {
     acc
 }
 
+/// Byte `4g + i` of the mask spread over 128-bit lane `i`, for group `g` of four bits.
+fn spread_idx() -> [__m512i; 16] {
+    core::array::from_fn(|g| unsafe {
+        let base = _mm512_set_epi8(
+            3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+        );
+        _mm512_add_epi8(base, _mm512_set1_epi8((4 * g) as i8))
+    })
+}
+
+/// `v[k] = sum_j bit_k(pi0[j]) eq_hi[j]`: the 64 bits of one word half become 64 byte masks,
+/// each group of four is spread over the four lanes of one accumulator, and the lane takes
+/// `eq_hi[j]` under its mask.
 fn partial_evals(pi0: &[B128], eq_hi: &[B128]) -> Vec<B128> {
-    let mut acc = vec![[0u128; 16]; 32];
-    for (&p, &e) in pi0.iter().zip(eq_hi) {
-        let w = p.0;
-        let ev = e.0;
-        for (c, t) in acc.iter_mut().enumerate() {
-            t[((w >> (4 * c)) & 0xf) as usize] ^= ev;
-        }
-    }
+    assert_eq!(pi0.len(), eq_hi.len());
+    let idx = spread_idx();
     let mut v = vec![B128::ZERO; PACK];
-    for (c, t) in acc.iter().enumerate() {
-        for b in 0..4 {
-            let mut s = 0u128;
-            for (m, &x) in t.iter().enumerate() {
-                if (m >> b) & 1 == 1 {
-                    s ^= x;
+    for half in 0..2 {
+        unsafe {
+            let mut acc = [_mm512_setzero_si512(); 16];
+            for (&p, &e) in pi0.iter().zip(eq_hi) {
+                let bits = (p.0 >> (64 * half)) as u64;
+                let m = _mm512_movm_epi8(bits);
+                let eq =
+                    _mm512_broadcast_i32x4(_mm_loadu_si128(&e.0 as *const u128 as *const __m128i));
+                for g in 0..16 {
+                    let mask = _mm512_permutexvar_epi8(idx[g], m);
+                    acc[g] = _mm512_ternarylogic_epi64::<0x78>(acc[g], mask, eq);
                 }
             }
-            v[4 * c + b] = B128(s);
+            for g in 0..16 {
+                _mm512_storeu_si512(
+                    v.as_mut_ptr().add(64 * half + 4 * g) as *mut __m512i,
+                    acc[g],
+                );
+            }
         }
     }
     v
+}
+
+/// The eight `B128` at `x` as their low words and their high words.
+#[inline(always)]
+unsafe fn split_words(x: *const B128) -> (__m512i, __m512i) {
+    let a = _mm512_loadu_si512(x as *const __m512i);
+    let b = _mm512_loadu_si512(x.add(4) as *const __m512i);
+    let lo = _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14);
+    let hi = _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15);
+    (
+        _mm512_permutex2var_epi64(a, lo, b),
+        _mm512_permutex2var_epi64(a, hi, b),
+    )
+}
+
+/// `pi0` in the sumcheck's layout: the bits of a `B128` are the low coefficients of an `F162`.
+fn poly_from_b128(pi0: &[B128]) -> super::sumcheck::Poly {
+    let n = pi0.len();
+    let mut w = [vec![0u64; n], vec![0u64; n], vec![0u64; n]];
+    let blocks = n / 8;
+    unsafe {
+        for b in 0..blocks {
+            let (lo, hi) = split_words(pi0.as_ptr().add(8 * b));
+            _mm512_storeu_si512(w[0].as_mut_ptr().add(8 * b) as *mut __m512i, lo);
+            _mm512_storeu_si512(w[1].as_mut_ptr().add(8 * b) as *mut __m512i, hi);
+        }
+    }
+    for j in 8 * blocks..n {
+        w[0][j] = pi0[j].0 as u64;
+        w[1][j] = (pi0[j].0 >> 64) as u64;
+    }
+    super::sumcheck::Poly { w, n }
+}
+
+/// Nibble `c` of a word picks one of sixteen sums of `batch[4c..4c + 4]`, one table per limb.
+fn nibble_tables(batch: &[F162]) -> Vec<[[__m512i; 2]; 3]> {
+    (0..32)
+        .map(|c| {
+            let mut t = [F162::ZERO; 16];
+            for m in 1..16usize {
+                let b = m.trailing_zeros() as usize;
+                t[m] = t[m ^ (1 << b)] + batch[4 * c + b];
+            }
+            core::array::from_fn(|l| unsafe {
+                let limb = |m: usize| t[m].0[l] as i64;
+                [
+                    _mm512_setr_epi64(
+                        limb(0),
+                        limb(1),
+                        limb(2),
+                        limb(3),
+                        limb(4),
+                        limb(5),
+                        limb(6),
+                        limb(7),
+                    ),
+                    _mm512_setr_epi64(
+                        limb(8),
+                        limb(9),
+                        limb(10),
+                        limb(11),
+                        limb(12),
+                        limb(13),
+                        limb(14),
+                        limb(15),
+                    ),
+                ]
+            })
+        })
+        .collect()
+}
+
+/// `a[j] = sum_i sum_k bit_k(eq[i][j]) batch[i][k]`, straight into the sumcheck's layout: eight
+/// words at a time, nibble by nibble through [`nibble_tables`].
+fn poly_from_eq(eqs: &[&[B128]], batches: &[Vec<F162>]) -> super::sumcheck::Poly {
+    let n = eqs[0].len();
+    let mut w = [vec![0u64; n], vec![0u64; n], vec![0u64; n]];
+    let tables: Vec<_> = batches.iter().map(|b| nibble_tables(b)).collect();
+    let blocks = n / 8;
+    unsafe {
+        let nib = _mm512_set1_epi64(0xf);
+        for b in 0..blocks {
+            let mut acc = [_mm512_setzero_si512(); 3];
+            for (eq, tab) in eqs.iter().zip(&tables) {
+                let (mut lo, mut hi) = split_words(eq.as_ptr().add(8 * b));
+                for c in 0..16 {
+                    let i_lo = _mm512_and_si512(lo, nib);
+                    let i_hi = _mm512_and_si512(hi, nib);
+                    lo = _mm512_srli_epi64::<4>(lo);
+                    hi = _mm512_srli_epi64::<4>(hi);
+                    for l in 0..3 {
+                        let [t0, t1] = tab[c][l];
+                        let [u0, u1] = tab[16 + c][l];
+                        acc[l] = _mm512_ternarylogic_epi64::<0x96>(
+                            acc[l],
+                            _mm512_permutex2var_epi64(t0, i_lo, t1),
+                            _mm512_permutex2var_epi64(u0, i_hi, u1),
+                        );
+                    }
+                }
+            }
+            for l in 0..3 {
+                _mm512_storeu_si512(w[l].as_mut_ptr().add(8 * b) as *mut __m512i, acc[l]);
+            }
+        }
+    }
+    if blocks * 8 < n {
+        let tabs: Vec<_> = batches.iter().map(|b| psi_table(b)).collect();
+        for j in 8 * blocks..n {
+            let x = eqs
+                .iter()
+                .zip(&tabs)
+                .fold(F162::ZERO, |acc, (e, t)| acc + psi(t, e[j]));
+            for l in 0..3 {
+                w[l][j] = x.0[l];
+            }
+        }
+    }
+    super::sumcheck::Poly { w, n }
 }
 
 pub struct SwitchProof {
@@ -165,12 +304,8 @@ pub fn prove(pi0: &[B128], r_lo: &[B128], r_hi: &[B128], challenges: &Transcript
     let v = partial_evals(pi0, &eq_hi);
 
     let batch = eq_expand_f162(&challenges.r_prime);
-    let tab = psi_table(&batch);
-    let a: Vec<F162> = eq_hi.iter().map(|&e| psi(&tab, e)).collect();
-    let p: Vec<F162> = pi0.iter().map(|&x| F162::from_b128(x)).collect();
-
-    let mut ap = super::sumcheck::Poly::from_scalars(&a);
-    let mut pp = super::sumcheck::Poly::from_scalars(&p);
+    let mut ap = poly_from_eq(&[&eq_hi], &[batch]);
+    let mut pp = poly_from_b128(pi0);
     let mut rounds = Vec::with_capacity(l);
     let mut half = 1usize << l;
     for round in 0..l {
@@ -254,21 +389,14 @@ impl SwitchProver {
     }
 
     pub fn batched(pi0: &[B128], eq_his: &[&[B128]], gammas: &[F162], batch: &[F162]) -> Self {
-        let tab = psi_table(batch);
-        let a: Vec<F162> = (0..pi0.len())
-            .map(|j| {
-                eq_his
-                    .iter()
-                    .zip(gammas)
-                    .fold(F162::ZERO, |acc, (e, &g)| acc + g * psi(&tab, e[j]))
-            })
+        let batches: Vec<Vec<F162>> = gammas
+            .iter()
+            .map(|&g| batch.iter().map(|&x| g * x).collect())
             .collect();
-        let p: Vec<F162> = pi0.iter().map(|&x| F162::from_b128(x)).collect();
-        let half = pi0.len();
         Self {
-            a: super::sumcheck::Poly::from_scalars(&a),
-            p: super::sumcheck::Poly::from_scalars(&p),
-            half,
+            a: poly_from_eq(eq_his, &batches),
+            p: poly_from_b128(pi0),
+            half: pi0.len(),
         }
     }
 
@@ -354,4 +482,77 @@ pub fn eval_pi1(pi0: &[B128], r_pp: &[F162]) -> F162 {
     pi0.iter()
         .zip(&eq)
         .fold(F162::ZERO, |a, (&p, &e)| a + F162::from_b128(p) * e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reference(pi0: &[B128], eq_hi: &[B128]) -> Vec<B128> {
+        let mut v = vec![B128::ZERO; PACK];
+        for (&p, &e) in pi0.iter().zip(eq_hi) {
+            for (k, vk) in v.iter_mut().enumerate() {
+                if p.bit(k) {
+                    *vk = *vk + e;
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn poly_from_eq_matches_psi() {
+        let mut x = 0x2545F4914F6CDD1Du128;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let batches: Vec<Vec<F162>> = (0..2)
+            .map(|_| {
+                (0..PACK)
+                    .map(|_| F162([next() as u64, next() as u64, (next() as u64) & M34_TEST]))
+                    .collect()
+            })
+            .collect();
+        let tabs: Vec<_> = batches.iter().map(|b| psi_table(b)).collect();
+        for n in [1usize, 8, 13, 64] {
+            let eqs: Vec<Vec<B128>> = (0..2)
+                .map(|_| (0..n).map(|_| B128(next())).collect())
+                .collect();
+            let views: Vec<&[B128]> = eqs.iter().map(|e| e.as_slice()).collect();
+            let poly = poly_from_eq(&views, &batches);
+            for j in 0..n {
+                let want = views
+                    .iter()
+                    .zip(&tabs)
+                    .fold(F162::ZERO, |acc, (e, t)| acc + psi(t, e[j]));
+                assert_eq!(poly.get(j), want);
+            }
+            let p: Vec<B128> = (0..n).map(|_| B128(next())).collect();
+            let poly = poly_from_b128(&p);
+            for j in 0..n {
+                assert_eq!(poly.get(j), F162::from_b128(p[j]));
+            }
+        }
+    }
+
+    const M34_TEST: u64 = (1 << 34) - 1;
+
+    #[test]
+    fn partial_evals_match_the_bitwise_sum() {
+        let mut x = 0x9E3779B97F4A7C15u128;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            B128(x.wrapping_mul(0x2545F4914F6CDD1Du128) ^ (x >> 64))
+        };
+        for n in [1usize, 7, 8, 1000] {
+            let pi0: Vec<B128> = (0..n).map(|_| next()).collect();
+            let eq: Vec<B128> = (0..n).map(|_| next()).collect();
+            assert_eq!(partial_evals(&pi0, &eq), reference(&pi0, &eq));
+        }
+    }
 }
