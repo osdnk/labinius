@@ -9,7 +9,7 @@ use binius_ip::channel::WordIPVerifierChannel;
 use binius_prover::{OptimalPackedB128, Prover};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
 use binius_verifier::config::{StdChallenger, B128};
-use binius_verifier::{Error, PcsVerifierCompiler, Verifier};
+use binius_verifier::{Error, Verifier};
 use std::time::Instant;
 
 /// The example's default inverse rate (`--log-inv-rate 1`) and its default Merkle hash suite
@@ -52,11 +52,10 @@ impl Stock {
     /// `finish`. None of the three carries a phase span of its own that covers only itself.
     pub fn verify_stages(&self, inout: &[Word], proof: &[u8]) -> Result<[f64; 3], Error> {
         let mut transcript = VerifierTranscript::new(StdChallenger::default(), proof.to_vec());
-        let mut channel = match self.verifier.iop_compiler() {
-            PcsVerifierCompiler::BaseFold(compiler) => compiler
-                .create_channel_from_transcript::<StdHashSuite, StdChallenger, _>(&mut transcript),
-            PcsVerifierCompiler::WHIR(_) => panic!("the verifier is set up over BaseFold"),
-        };
+        let mut channel = self
+            .verifier
+            .iop_compiler()
+            .create_channel_from_transcript::<StdHashSuite, StdChallenger, _>(&mut transcript);
         let inout = WordIPVerifierChannel::<B128>::observe_words(&mut channel, inout);
 
         let start = Instant::now();

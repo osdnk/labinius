@@ -14,19 +14,17 @@ use binius_iop::channel::IOPVerifierChannel;
 use binius_ip::channel::WordIPVerifierChannel;
 use binius_ip::sumcheck::SumcheckOutput;
 use binius_ip_prover::channel::{IPProverChannel, WordIPProverChannel};
-use binius_math::univariate::EvaluationDomain;
 use binius_math::BinarySubspace;
+use binius_prover::protocols::rerand::OperandWitness;
 use binius_prover::protocols::shift::{
-    prove as prove_shift, KeyCollection, OperatorClaims, OperatorData, ShiftOutput,
+    prove as prove_shift, KeyCollection, OperatorClaims, ShiftOutput,
 };
 use binius_prover::{
     protocols::binmul, protocols::bitand as and_reduction, ring_switch,
 };
 use binius_verifier::config::B128;
-use binius_verifier::protocols::binmul::BinMulOutput;
 use binius_verifier::protocols::bitand::AndCheckOutput;
-use binius_verifier::protocols::zero;
-use binius_verifier::reduction::{reduce_constraints, Instances};
+use binius_verifier::reduction::reduce_constraints;
 use binius_verifier::{Error, IOPVerifier};
 
 /// Milliseconds per reduction, at the granularity binius64's own phase spans use.
@@ -96,77 +94,36 @@ impl Liop {
         let cs = self.constraint_system();
         let start = std::time::Instant::now();
 
-        let binmul_output = (cs.n_bmul_constraints() > 0).then(|| {
+        let binmul = (cs.n_bmul_constraints() > 0).then(|| {
             let c = columns::<_, 6, 6>(&cs.bmul_constraints, witness);
             let [a_lo, a_hi, b_lo, b_hi, c_lo, c_hi] = &c;
-            binmul::prove::<_, _, P, _>(
+            let output = binmul::prove::<_, _, P, _>(
                 [a_lo, a_hi, b_lo, b_hi, c_lo, c_hi].map(Vec::as_slice),
                 &mut *channel,
                 alloc,
-            )
+            );
+            (c, output)
         });
 
-        let bitand_claim = {
-            let AndCheckOutput {
-                a_eval,
-                b_eval,
-                c_eval,
-                z_challenge,
-                eval_point,
-            } = and_reduction::prove::<_, B128, P, _, _>(
-                columns::<_, 3, 2>(&cs.and_constraints, witness),
-                &mut *channel,
-                alloc,
-            );
-            OperatorData {
-                evals: [a_eval, b_eval, c_eval],
-                r_zhat_prime: z_challenge,
-                r_x_prime: eval_point,
-            }
-        };
+        // The BitAnd sumcheck carries the BinMul operand claims; there is no IntMul here.
+        let operands: Vec<OperandWitness<'_, B128>> = binmul
+            .iter()
+            .map(|(c, output)| OperandWitness {
+                words: c.iter().map(Vec::as_slice).collect(),
+                claims: output.operand_claims(),
+            })
+            .collect();
+        let AndCheckOutput { z_challenge, rerand } = and_reduction::prove::<_, B128, P, _, _>(
+            columns::<_, 3, 2>(&cs.and_constraints, witness),
+            &operands,
+            &mut *channel,
+            alloc,
+        );
 
         timing.bitand = milliseconds(start);
 
+        let claims = OperatorClaims::from_rerand(cs, 0, z_challenge, &rerand, || channel.sample());
         let subspace = BinarySubspace::<B8>::with_dim(Word::LOG_BITS).isomorphic();
-        let binmul_claim = match binmul_output {
-            Some(BinMulOutput {
-                eval_point,
-                a_lo_evals,
-                a_hi_evals,
-                b_lo_evals,
-                b_hi_evals,
-                c_lo_evals,
-                c_hi_evals,
-            }) => {
-                let r_zhat_prime = bitand_claim.r_zhat_prime;
-                let l_tilde = subspace.lagrange_evals_buffer(r_zhat_prime);
-                let collapse = |evals| {
-                    binius_math::inner_product::inner_product(evals, l_tilde.iter_scalars())
-                };
-                OperatorData {
-                    evals: [
-                        collapse(a_lo_evals),
-                        collapse(a_hi_evals),
-                        collapse(b_lo_evals),
-                        collapse(b_hi_evals),
-                        collapse(c_lo_evals),
-                        collapse(c_hi_evals),
-                    ],
-                    r_zhat_prime,
-                    r_x_prime: eval_point,
-                }
-            }
-            None => OperatorData::zero_claim(bitand_claim.r_zhat_prime),
-        };
-
-        let log_n_zero = cs.log_zero_constraints().unwrap_or(0);
-        let zero_claim = OperatorData {
-            evals: [B128::default()],
-            r_zhat_prime: bitand_claim.r_zhat_prime,
-            r_x_prime: zero::reduction_point(&bitand_claim.r_x_prime, log_n_zero, || {
-                channel.sample()
-            }),
-        };
 
         let start = std::time::Instant::now();
         let ShiftOutput {
@@ -180,12 +137,7 @@ impl Liop {
             &self.keys,
             witness.public(),
             witness.non_public(),
-            OperatorClaims {
-                zero: zero_claim,
-                bitand: bitand_claim,
-                intmul: OperatorData::zero_claim(B128::default()),
-                binmul: binmul_claim,
-            },
+            claims,
             &subspace,
             &mut *channel,
             alloc,
@@ -226,7 +178,7 @@ impl Liop {
             .collect();
         let reduction = reduce_constraints(
             cs,
-            Instances::Single,
+            0,
             InoutSegment::Public,
             &public,
             channel,
