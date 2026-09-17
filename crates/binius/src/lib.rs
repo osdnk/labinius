@@ -20,16 +20,6 @@ pub mod phases;
 pub mod stock;
 pub mod switch;
 
-use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
-use labinius::Suite;
-use labinius::fields::scalar::{B128 as SB, F162};
-use labinius::scheme::{
-    Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
-    OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
-    Witness,
-};
-use labinius::wire;
-use labinius::Transcript;
 use binius_compute::GlobalAllocator;
 use binius_core::constraint_system::{ConstraintSystem, ValueVec};
 use binius_core::word::Word;
@@ -39,6 +29,17 @@ use binius_prover::{pack_witness, OptimalPackedB128};
 use binius_transcript::{ProverTranscript, VerifierTranscript};
 use binius_verifier::config::{StdChallenger, B128};
 use channel::OracleFreeChannel;
+use labinius::fields::crossfield as cf;
+use labinius::fields::scalar::{B128 as SB, F162};
+use labinius::scheme::{
+    Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
+    OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
+    Witness,
+};
+use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
+use labinius::wire;
+use labinius::Suite;
+use labinius::Transcript;
 use liop::Liop;
 use std::time::Instant;
 
@@ -88,10 +89,22 @@ pub struct VerifierTiming {
 }
 
 labinius_bench::medians_by_field!(ProverTiming {
-    pack, commit, bitand, shift, switch, opening, total
+    pack,
+    commit,
+    bitand,
+    shift,
+    switch,
+    opening,
+    total
 });
 labinius_bench::medians_by_field!(VerifierTiming {
-    commitment, reduce, wiring, switch, decode, opening, total
+    commitment,
+    reduce,
+    wiring,
+    switch,
+    decode,
+    opening,
+    total
 });
 
 /// Bytes per part of the proof.
@@ -140,6 +153,8 @@ pub struct Session {
     params: Params,
     prover: Prover,
     verifier: Verifier,
+    lifted: Option<Witness>,
+    switch: Option<cf::Workspace>,
 }
 
 impl Session {
@@ -155,14 +170,26 @@ impl Session {
         } else {
             OpeningMode::Clear
         };
-        Session::with_params(constraint_system, Params::sized(suite, opening), matrix_seed)
+        Session::with_params(
+            constraint_system,
+            Params::sized(suite, opening),
+            matrix_seed,
+        )
     }
 
-    pub fn bd(constraint_system: ConstraintSystem, suite: &Suite, matrix_seed: [u8; 32]) -> Session {
+    pub fn bd(
+        constraint_system: ConstraintSystem,
+        suite: &Suite,
+        matrix_seed: [u8; 32],
+    ) -> Session {
         let opening = OpeningMode::BitDropped {
             bits: suite.dropped_bits,
         };
-        Session::with_params(constraint_system, Params::sized(suite, opening), matrix_seed)
+        Session::with_params(
+            constraint_system,
+            Params::sized(suite, opening),
+            matrix_seed,
+        )
     }
 
     pub fn with_params(
@@ -184,6 +211,8 @@ impl Session {
             params,
             prover: Prover::new(&public_parameters),
             verifier: Verifier::new(&public_parameters),
+            lifted: None,
+            switch: None,
         }
     }
 
@@ -248,7 +277,9 @@ impl Session {
         sizes.liop = tape_len(&transcript) - sizes.commitment;
 
         let start = Instant::now();
-        let switched = switch::prove(&trace, &eval_point, &mut transcript);
+        let (switched, ws) =
+            switch::prove(&trace, &eval_point, &mut transcript, self.switch.take());
+        self.switch = Some(ws);
         timing.switch = milliseconds(start);
         sizes.switch = tape_len(&transcript) - sizes.commitment - sizes.liop;
 
@@ -291,6 +322,7 @@ impl Session {
         };
         timing.opening = milliseconds(start);
         timing.total = milliseconds(whole);
+        self.lifted = Some(lifted);
 
         (
             Proof {
@@ -395,12 +427,14 @@ impl Session {
         Ok(timing)
     }
 
-    fn lift(&self, trace: &[SB]) -> Witness {
-        Witness::from_elements(
-            &self.params,
-            trace.iter().map(|&x| F162::from_b128(x)).collect(),
-        )
-        .expect("the trace is the witness length")
+    fn lift(&mut self, trace: &[SB]) -> Witness {
+        match self.lifted.take() {
+            Some(mut w) => {
+                w.relift(trace).expect("the trace is the witness length");
+                w
+            }
+            None => Witness::lifted(&self.params, trace).expect("the trace is the witness length"),
+        }
     }
 
     fn check_fold(

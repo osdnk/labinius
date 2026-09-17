@@ -4,11 +4,11 @@
 //!
 //! The prover sends the 128 partial evaluations `v_i`, both sides draw `r' ∈ F162^7` after them,
 //! and an `l`-round sumcheck over `F162` reduces to `pi1~(r'')`, which the PCS opens.
-use labinius::fields::crossfield as cf;
-use labinius::fields::scalar::{B128 as SB, F162};
 use binius_ip::channel::IPVerifierChannel;
 use binius_ip_prover::channel::IPProverChannel;
 use binius_verifier::config::B128;
+use labinius::fields::crossfield as cf;
+use labinius::fields::scalar::{B128 as SB, F162};
 
 /// `log2` of the number of `B1` coordinates one `B128` element packs.
 pub const LOG_PACKING: usize = cf::LOG_PACK;
@@ -67,7 +67,8 @@ pub fn prove<Channel: IPProverChannel<B128>>(
     trace: &[SB],
     eval_point: &[B128],
     channel: &mut Channel,
-) -> Output {
+    ws: Option<cf::Workspace>,
+) -> (Output, cf::Workspace) {
     let l = eval_point.len() - LOG_PACKING;
     assert_eq!(
         trace.len(),
@@ -80,11 +81,14 @@ pub fn prove<Channel: IPProverChannel<B128>>(
         .rev()
         .map(|&x| SB(u128::from(x)))
         .collect();
-    let (v, eq_hi) = cf::SwitchProver::partial_evals_and_eq(trace, &r_hi);
+    let mut ws = ws
+        .filter(|w| w.fits(l, 1))
+        .unwrap_or_else(|| cf::Workspace::new(l, 1));
+    let v = ws.partial_evals(0, trace, &r_hi);
     channel.send_many(&v.iter().map(|&x| B128::from(x.0)).collect::<Vec<_>>());
 
     let batch = cf::eq_expand_f162(&sample_prover(channel, LOG_PACKING));
-    let mut prover = cf::SwitchProver::new(trace, &eq_hi, &batch);
+    let mut prover = cf::SwitchProver::from_workspace(ws, trace, &[F162::ONE], &batch);
 
     let mut r_pp = Vec::with_capacity(l);
     for _ in 0..l {
@@ -93,10 +97,8 @@ pub fn prove<Channel: IPProverChannel<B128>>(
         prover.fold(r);
         r_pp.push(r);
     }
-    Output {
-        opened: prover.final_eval(),
-        r_pp,
-    }
+    let opened = prover.final_eval();
+    (Output { opened, r_pp }, prover.into_workspace())
 }
 
 /// The verifier's half: it stops one step short, returning the running sum `s` and the

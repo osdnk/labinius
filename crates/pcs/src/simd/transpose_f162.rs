@@ -134,7 +134,7 @@ struct Work {
 struct Cols([__m512i; 48]);
 
 #[inline(always)]
-unsafe fn transpose8x8_q(r: [__m512i; 8]) -> [__m512i; 8] {
+pub(crate) unsafe fn transpose8x8_q(r: [__m512i; 8]) -> [__m512i; 8] {
     let a0 = _mm512_unpacklo_epi64(r[0], r[1]);
     let a1 = _mm512_unpackhi_epi64(r[0], r[1]);
     let a2 = _mm512_unpacklo_epi64(r[2], r[3]);

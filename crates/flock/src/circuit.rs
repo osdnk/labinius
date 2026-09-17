@@ -1,5 +1,4 @@
 use crate::switch::LOG_PACKING;
-use labinius::Suite;
 use flock_core::lincheck::{LincheckCircuit, LincheckProof};
 use flock_core::pcs::ligerito::embedded_initial_k_or_default;
 use flock_core::pcs::{
@@ -22,6 +21,7 @@ use flock_prover::r1cs_hashes::sha2::{
     Sha256HybridSetup, K_LOG as SHA256_K, USEFUL_BITS as SHA256_USEFUL,
 };
 use flock_transcript::challenger::Challenger;
+use labinius::Suite;
 
 pub const LOG_INV_RATE: usize = 1;
 

@@ -1,9 +1,9 @@
-use labinius::fields::crossfield as cf;
-use labinius::fields::scalar::{B128 as SB, F162};
 use flock_core::pcs::ring_switch::build_claim_weights_from_skip;
 use flock_core::proof::ZClaim;
 use flock_field::F128;
 use flock_transcript::challenger::Challenger;
+use labinius::fields::crossfield as cf;
+use labinius::fields::scalar::{B128 as SB, F162};
 
 pub const LOG_PACKING: usize = cf::LOG_PACK;
 pub const K_SKIP: usize = LOG_PACKING - 1;
@@ -78,26 +78,36 @@ fn descending(x: &[F128]) -> Vec<SB> {
     x.iter().rev().map(|&y| lift(y)).collect()
 }
 
-pub fn prove<Ch: Challenger>(trace: &[SB], claims: &[ZClaim], ch: &mut Ch) -> (Proof, Output) {
+pub fn prove<Ch: Challenger>(
+    trace: &[SB],
+    claims: &[ZClaim],
+    ch: &mut Ch,
+    ws: Option<cf::Workspace>,
+) -> (Proof, Output, cf::Workspace) {
     let points: Vec<Vec<SB>> = claims.iter().map(|c| descending(&suffix(c))).collect();
     let l = points[0].len();
     assert_eq!(trace.len(), 1 << l, "the trace does not match the claims");
+    let mut ws = ws
+        .filter(|w| w.fits(l, claims.len()))
+        .unwrap_or_else(|| cf::Workspace::new(l, claims.len()));
 
-    let mut v = Vec::with_capacity(claims.len());
-    let mut eq = Vec::with_capacity(claims.len());
-    for point in &points {
-        let (vi, eqi) = cf::SwitchProver::partial_evals_and_eq(trace, point);
-        v.push(vi.iter().map(|&x| drop_(x)).collect::<Vec<_>>());
-        eq.push(eqi);
-    }
+    let v: Vec<Vec<F128>> = points
+        .iter()
+        .enumerate()
+        .map(|(i, point)| {
+            ws.partial_evals(i, trace, point)
+                .iter()
+                .map(|&x| drop_(x))
+                .collect()
+        })
+        .collect();
     for vi in &v {
         ch.observe_f128_slice(vi);
     }
 
     let batch = cf::eq_expand_f162(&sample(ch, LOG_PACKING));
     let gammas = combiners(ch, claims.len());
-    let views: Vec<&[SB]> = eq.iter().map(|e| e.as_slice()).collect();
-    let mut prover = cf::SwitchProver::batched(trace, &views, &gammas, &batch);
+    let mut prover = cf::SwitchProver::from_workspace(ws, trace, &gammas, &batch);
 
     let mut rounds = Vec::with_capacity(l);
     let mut r_pp = Vec::with_capacity(l);
@@ -109,12 +119,11 @@ pub fn prove<Ch: Challenger>(trace: &[SB], claims: &[ZClaim], ch: &mut Ch) -> (P
         rounds.push(msg);
         r_pp.push(r);
     }
+    let opened = prover.final_eval();
     (
         Proof { v, rounds },
-        Output {
-            opened: prover.final_eval(),
-            r_pp,
-        },
+        Output { opened, r_pp },
+        prover.into_workspace(),
     )
 }
 

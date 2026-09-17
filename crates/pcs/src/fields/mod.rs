@@ -8,6 +8,7 @@
 //! turns a `B128` evaluation claim on a packed trace into an `F162` one on the same trace lifted
 //! by the `beta` basis.
 
+pub mod bitmat;
 pub mod crossfield;
 pub mod f162;
 pub mod scalar;

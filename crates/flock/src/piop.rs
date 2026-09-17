@@ -67,7 +67,8 @@ pub fn prove<Ch: Challenger>(
     );
     timing.zerocheck = milliseconds(start);
 
-    let x_ab = r1cs.x_ab_from_multilinear_values(SkipPoint::Phi8(zc_claim.z), &zc_claim.mlv_challenges);
+    let x_ab =
+        r1cs.x_ab_from_multilinear_values(SkipPoint::Phi8(zc_claim.z), &zc_claim.mlv_challenges);
     let start = Instant::now();
     let (lc_proof, lc_claim) = prove_padded_with_grinding(
         z_packed_lincheck,

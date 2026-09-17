@@ -1,7 +1,7 @@
-use crate::eval;
-use crate::fields::scalar::F162;
-use std::fmt;
 use super::*;
+use crate::eval;
+use crate::fields::scalar::{B128, F162};
+use std::fmt;
 
 // =============================================================================================
 // the witness
@@ -31,6 +31,26 @@ pub struct Witness {
 }
 
 impl Witness {
+    /// The trace lifted into `F162` bit for bit, into `self`'s buffer.
+    pub fn relift(&mut self, trace: &[B128]) -> Result<(), WitnessError> {
+        if trace.len() != self.params.witness_len() {
+            return Err(WitnessError::WrongLength);
+        }
+        for (e, &x) in self.elements.iter_mut().zip(trace) {
+            *e = F162::from_b128(x);
+        }
+        Ok(())
+    }
+
+    pub fn lifted(params: &Params, trace: &[B128]) -> Result<Witness, WitnessError> {
+        let mut w = Witness {
+            params: params.clone(),
+            elements: vec![F162::ZERO; params.witness_len()],
+        };
+        w.relift(trace)?;
+        Ok(w)
+    }
+
     pub fn from_elements(params: &Params, elements: Vec<F162>) -> Result<Witness, WitnessError> {
         if elements.len() != params.witness_len() {
             return Err(WitnessError::WrongLength);

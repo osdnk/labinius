@@ -19,9 +19,7 @@ use binius_prover::protocols::rerand::OperandWitness;
 use binius_prover::protocols::shift::{
     prove as prove_shift, KeyCollection, OperatorClaims, ShiftOutput,
 };
-use binius_prover::{
-    protocols::binmul, protocols::bitand as and_reduction, ring_switch,
-};
+use binius_prover::{protocols::binmul, protocols::bitand as and_reduction, ring_switch};
 use binius_verifier::config::B128;
 use binius_verifier::protocols::bitand::AndCheckOutput;
 use binius_verifier::reduction::reduce_constraints;
@@ -113,7 +111,10 @@ impl Liop {
                 claims: output.operand_claims(),
             })
             .collect();
-        let AndCheckOutput { z_challenge, rerand } = and_reduction::prove::<_, B128, P, _, _>(
+        let AndCheckOutput {
+            z_challenge,
+            rerand,
+        } = and_reduction::prove::<_, B128, P, _, _>(
             columns::<_, 3, 2>(&cs.and_constraints, witness),
             &operands,
             &mut *channel,
@@ -176,13 +177,7 @@ impl Liop {
             .copied()
             .chain(inout.iter().copied())
             .collect();
-        let reduction = reduce_constraints(
-            cs,
-            0,
-            InoutSegment::Public,
-            &public,
-            channel,
-        )?;
+        let reduction = reduce_constraints(cs, 0, InoutSegment::Public, &public, channel)?;
         let eval_point = reduction.trace_point();
         let claim = *reduction.shift.witness_eval();
         let reduce = milliseconds(start);

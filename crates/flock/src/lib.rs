@@ -2,19 +2,19 @@ pub mod circuit;
 pub mod piop;
 pub mod switch;
 
-use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
-use labinius::Suite;
+use flock_core::verifier::{verify_core_with_grinding, FlockVerifyError};
+use flock_field::F128;
+use flock_transcript::challenger::{Challenger, FsChallenger};
 use labinius::fields::scalar::{B128 as SB, F162};
 use labinius::scheme::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, LeftExpansionCommitment,
     OpeningProof, Params, Prover, PublicParameters, RowEvaluation, VerificationError, Verifier,
     Witness,
 };
+use labinius::scheme::{Opening as OpeningMode, OpeningMessage};
 use labinius::wire;
+use labinius::Suite;
 use labinius::Transcript;
-use flock_core::verifier::{verify_core_with_grinding, FlockVerifyError};
-use flock_field::F128;
-use flock_transcript::challenger::{Challenger, FsChallenger};
 use std::time::Instant;
 
 pub use circuit::{Hash, Instance};
@@ -60,10 +60,21 @@ pub struct VerifierTiming {
 }
 
 labinius_bench::medians_by_field!(ProverTiming {
-    pack, commit, bind, zerocheck, lincheck, switch, opening, total
+    pack,
+    commit,
+    bind,
+    zerocheck,
+    lincheck,
+    switch,
+    opening,
+    total
 });
 labinius_bench::medians_by_field!(VerifierTiming {
-    reduce, switch, decode, opening, total
+    reduce,
+    switch,
+    decode,
+    opening,
+    total
 });
 
 #[derive(Clone, Copy, Default)]
@@ -104,6 +115,9 @@ pub struct Session {
     params: Params,
     prover: Prover,
     verifier: Verifier,
+    trace: Vec<SB>,
+    lifted: Option<Witness>,
+    switch: Option<labinius::fields::crossfield::Workspace>,
 }
 
 impl Session {
@@ -129,6 +143,9 @@ impl Session {
             params,
             prover: Prover::new(&public_parameters),
             verifier: Verifier::new(&public_parameters),
+            trace: Vec::new(),
+            lifted: None,
+            switch: None,
         }
     }
 
@@ -147,16 +164,19 @@ impl Session {
         let mut sizes = Sizes::default();
 
         let start = Instant::now();
-        let trace: Vec<SB> = z_packed
-            .iter()
-            .map(|&x| SB((x.lo as u128) | ((x.hi as u128) << 64)))
-            .collect();
         assert_eq!(
-            trace.len(),
+            z_packed.len(),
             self.params.witness_len(),
             "the packed trace is {} F128 but the commitment takes {}",
-            trace.len(),
+            z_packed.len(),
             self.params.witness_len()
+        );
+        let mut trace = std::mem::take(&mut self.trace);
+        trace.clear();
+        trace.extend(
+            z_packed
+                .iter()
+                .map(|&x| SB((x.lo as u128) | ((x.hi as u128) << 64))),
         );
         let lifted = self.lift(&trace);
         timing.pack = milliseconds(start);
@@ -191,7 +211,9 @@ impl Session {
         sizes.lincheck = encoded(&core.lc_proof);
 
         let start = Instant::now();
-        let (switch_proof, switched) = switch::prove(&trace, &core.claims, &mut ch);
+        let (switch_proof, switched, ws) =
+            switch::prove(&trace, &core.claims, &mut ch, self.switch.take());
+        self.switch = Some(ws);
         timing.switch = milliseconds(start);
         sizes.switch = 16 * switch_proof.v.iter().map(Vec::len).sum::<usize>()
             + wire::f162_bytes(2 * switch_proof.rounds.len());
@@ -233,6 +255,8 @@ impl Session {
         };
         timing.opening = milliseconds(start);
         timing.total = milliseconds(whole);
+        self.trace = trace;
+        self.lifted = Some(lifted);
 
         (
             Proof {
@@ -328,12 +352,14 @@ impl Session {
         Ok(timing)
     }
 
-    fn lift(&self, trace: &[SB]) -> Witness {
-        Witness::from_elements(
-            &self.params,
-            trace.iter().map(|&x| F162::from_b128(x)).collect(),
-        )
-        .expect("the trace is the witness length")
+    fn lift(&mut self, trace: &[SB]) -> Witness {
+        match self.lifted.take() {
+            Some(mut w) => {
+                w.relift(trace).expect("the trace is the witness length");
+                w
+            }
+            None => Witness::lifted(&self.params, trace).expect("the trace is the witness length"),
+        }
     }
 
     fn check_fold(

@@ -9,6 +9,13 @@ pub struct Poly {
 }
 
 impl Poly {
+    pub fn zero(n: usize) -> Self {
+        Self {
+            w: [vec![0u64; n], vec![0u64; n], vec![0u64; n]],
+            n,
+        }
+    }
+
     pub fn from_scalars(v: &[F162]) -> Self {
         let n = v.len();
         let mut w = [vec![0u64; n], vec![0u64; n], vec![0u64; n]];
