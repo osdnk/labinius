@@ -1,7 +1,7 @@
 //! The commitment at size `s` on the two kinds of witness it takes: `2^18` elements of `F162`
 //! opened at a point of `F162^18`, and `2^18` words of binius64's `B128` opened at a point of
-//! `B128^18`, which the switch turns into an `F162` opening. The points are fixed up front; a
-//! protocol draws them from its transcript after the commitment.
+//! `B128^18`, which the switch turns into an `F162` opening. The points are inputs, as they would
+//! come from the surrounding protocol.
 //!
 //! `cargo run --release -p labinius --example two_fields`
 use labinius::switch::{self, SwitchProof};
