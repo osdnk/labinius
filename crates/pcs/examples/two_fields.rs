@@ -155,3 +155,80 @@ fn ghash_verify(
     )?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------
+// The other two opening modes, as the native flow above changes for them. Either takes the
+// GHASH flow the same way: `switch::prove` still hands back the point to open at.
+// ---------------------------------------------------------------------------------------------
+//
+// Bit-dropped: the commitment on the wire keeps only the top bits of each coefficient, so the
+// verifier cannot fold it and checks the folded witness against the dropped commitment instead.
+//
+//     let params = Params::sized(suite, Opening::BitDropped { bits: suite.dropped_bits });
+//     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+//
+//     // prover: exactly as `native_prove`
+//     let (commitment, opening) = prover.commit(witness);
+//     let value = witness.mle_evaluate(point);
+//     let row = witness.row_evaluate(point);
+//     transcript.absorb_bytes(&commitment.to_bytes());
+//     let challenges = FoldingChallenges::derive(&params, &mut transcript, &row);
+//     let folded = prover.fold(opening, &challenges);
+//
+//     // verifier: no `fold_commitment`, and the message names the mode
+//     transcript.absorb_bytes(&commitment.to_bytes());
+//     let challenges = FoldingChallenges::derive(&params, &mut transcript, &row);
+//     verifier.verify_evaluation(point, &value, &row)?;
+//     verifier.verify_opening(
+//         &commitment,
+//         &challenges,
+//         point,
+//         OpeningMessage::BitDropped {
+//             folded_witness: &folded,
+//             folded_row_value: &verifier.fold_row_evaluation(&row, &challenges),
+//         },
+//     )?;
+//
+// Recursive (LaBRADOR): the fold is not sent. The prover commits to the row evaluation as the
+// left expansion `T_u`, the folding challenges come from that commitment rather than from the
+// row, and `prove_opening` runs the fold and proves the whole relation — the fold, its norm, and
+// the row evaluation — in one LaBRADOR proof, so the verifier never sees `row` or `folded` and
+// `verify_evaluation` is subsumed. `PublicParameters::from_seed` builds the LaBRADOR setup too,
+// which takes longer.
+//
+//     let params = Params::sized(suite, Opening::Recursive);
+//     let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+//
+//     // prover
+//     let (commitment, opening) = prover.commit(witness);
+//     let value = witness.mle_evaluate(point);
+//     let row = witness.row_evaluate(point);
+//     let left = prover.commit_left_expansion(&row);
+//     transcript.absorb_bytes(&commitment.to_bytes());
+//     let challenges = FoldingChallenges::derive(&params, &mut transcript, &left);
+//     let proof = prover.prove_opening(
+//         &mut transcript,
+//         opening,
+//         &challenges,
+//         point,
+//         &left,
+//         &row,
+//         &value,
+//         &commitment,
+//     )?;
+//     // on the wire: commitment, left, value, proof
+//
+//     // verifier
+//     transcript.absorb_bytes(&commitment.to_bytes());
+//     let challenges = FoldingChallenges::derive(&params, &mut transcript, &left);
+//     verifier.verify_opening(
+//         &commitment,
+//         &challenges,
+//         point,
+//         OpeningMessage::Recursive {
+//             transcript: &mut transcript,
+//             left: &left,
+//             claimed_value: &value,
+//             proof: &proof,
+//         },
+//     )?;
