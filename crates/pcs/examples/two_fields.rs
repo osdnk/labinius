@@ -28,27 +28,25 @@ fn main() {
         Opening::Recursive,
     ];
     for mode in modes {
-        let params = Params::sized(suite, mode);
-        let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
-        let witness = Witness::random(&params, [0xC7; 32]);
-        let point = EvaluationPoint::msb_first(&params, &coordinates);
-        let (value, proof) = native_prove(&params, &pp, &witness, &point);
+        let pp = PublicParameters::from_seed(Params::sized(suite, mode), MATRIX_SEED);
+        let witness = Witness::random(pp.params(), [0xC7; 32]);
+        let point = EvaluationPoint::msb_first(pp.params(), &coordinates);
+        let (value, proof) = native_prove(&pp, &witness, &point);
         println!(
             "native F162, {mode:?}: {:?}",
-            native_verify(&params, &pp, &point, value, &proof)
+            native_verify(&pp, &point, value, &proof)
         );
     }
 
     // GHASH: a trace of B128 words, evaluated at a point of B128^18.
-    let params = Params::sized(suite, Opening::Clear);
-    let pp = PublicParameters::from_seed(params.clone(), MATRIX_SEED);
+    let pp = PublicParameters::from_seed(Params::sized(suite, Opening::Clear), MATRIX_SEED);
     let trace = rng.sample_b128(b"trace", 1 << l);
     let r = rng.sample_b128(b"r", l);
     let claim = switch::mle(&trace, &r);
-    let proof = ghash_prove(&params, &pp, &trace, &r, claim);
+    let proof = ghash_prove(&pp, &trace, &r, claim);
     println!(
         "GHASH B128, Clear: {:?}",
-        ghash_verify(&params, &pp, &r, claim, &proof)
+        ghash_verify(&pp, &r, claim, &proof)
     );
 }
 
@@ -72,11 +70,11 @@ enum NativeOpening {
 
 /// The value of the witness at `point`, and the proof of it.
 fn native_prove(
-    params: &Params,
     pp: &PublicParameters,
     witness: &Witness,
     point: &EvaluationPoint,
 ) -> (F162, NativeProof) {
+    let params = pp.params();
     let mut prover = Prover::new(pp);
     let mut transcript = Transcript::new(b"example/native");
 
@@ -119,12 +117,12 @@ fn native_prove(
 }
 
 fn native_verify(
-    params: &Params,
     pp: &PublicParameters,
     point: &EvaluationPoint,
     value: F162,
     proof: &NativeProof,
 ) -> Result<(), VerificationError> {
+    let params = pp.params();
     let verifier = Verifier::new(pp);
     let mut transcript = Transcript::new(b"example/native");
     transcript.absorb_bytes(&proof.commitment.to_bytes());
@@ -175,13 +173,8 @@ struct GhashProof {
     folded: FoldedWitness,
 }
 
-fn ghash_prove(
-    params: &Params,
-    pp: &PublicParameters,
-    trace: &[B128],
-    r: &[B128],
-    claim: B128,
-) -> GhashProof {
+fn ghash_prove(pp: &PublicParameters, trace: &[B128], r: &[B128], claim: B128) -> GhashProof {
+    let params = pp.params();
     let mut prover = Prover::new(pp);
     let mut transcript = Transcript::new(b"example/ghash");
 
@@ -201,12 +194,12 @@ fn ghash_prove(
 }
 
 fn ghash_verify(
-    params: &Params,
     pp: &PublicParameters,
     r: &[B128],
     claim: B128,
     proof: &GhashProof,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let params = pp.params();
     let verifier = Verifier::new(pp);
     let mut transcript = Transcript::new(b"example/ghash");
 

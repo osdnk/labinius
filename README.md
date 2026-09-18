@@ -32,6 +32,7 @@ pins itself to core 3 or to `$BENCH_CPU`, and reports each timed step as the med
 | Keccak-256, SHA-256, BLAKE3 under Binius64: stock vs. ours | `target/release/hashes-binius --suite m` |
 | BLAKE3, SHA-256 under Flock: stock vs. ours | `target/release/hashes-flock --suite m` |
 | BaseFold, WHIR, Ligerito, Brakedown on their own | `target/release/pcs-competitors --suite m` |
+| the API, both fields, every opening mode | `cargo run --release -p labinius --example two_fields` |
 | the parameter calibrations behind the paper | `target/release/calibrate <bdstats\|boundcheck\|foldstats\|gadget\|moduli\|recursion\|wire_bench>` |
 
 `--features labrador` swaps the `labinius` binary's body: without it the round is clear and
@@ -65,7 +66,11 @@ and peak RSS per run; `bench.out` has the same summary at the end. Knobs, all op
 `crates/bench/tables.py <bench-dir> <bench-dir> <paper.tex>` patches the numbers from those logs
 into the paper's tables.
 
-## One round
+## Using it
+
+`crates/pcs/examples/two_fields.rs` is the reference: a native `F162` witness opened in each of
+the three modes, and a `B128` trace opened through the switch. One clear round, with the point
+chosen by the verifier:
 
 ```rust
 let pp = PublicParameters::from_seed(Params::basic(), MATRIX_SEED);   // Opening::Clear
@@ -75,7 +80,7 @@ let (commitment, opening) = prover.commit(&witness);
 let mut t = Transcript::new(b"labinius/reference");
 let point = verifier.derive_evaluation_point(&mut t, &commitment);
 let (claimed, row) = (witness.mle_evaluate(&point), witness.row_evaluate(&point));
-let challenges = verifier.derive_folding_challenges(&mut t, &row);
+let challenges = FoldingChallenges::derive(pp.params(), &mut t, &row);
 let folded = prover.fold(opening, &challenges);
 verifier.verify_evaluation(&point, &claimed, &row).unwrap();
 verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear {
@@ -84,3 +89,22 @@ verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear 
     folded_row_value: &verifier.fold_row_evaluation(&row, &challenges),
 }).unwrap();
 ```
+
+Where to look for the rest:
+
+- **A point of your own.** `EvaluationPoint::msb_first(params, &coordinates)` takes the `l`
+  coordinates of a point of `F162^l` as a sumcheck hands them out, most significant variable
+  first.
+- **The opening modes.** `Params::sized(suite, Opening::Clear | BitDropped { bits } | Recursive)`.
+  Clear and bit-dropped send the row evaluation and the folded witness and differ in the
+  `OpeningMessage` variant (bit-dropped has no `fold_commitment`); recursive sends the left
+  expansion and one LaBRADOR proof instead (`commit_left_expansion`, `prove_opening`,
+  `OpeningMessage::Recursive`), and the verifier never sees the fold.
+- **A `B128` witness.** `Witness::lifted(params, &trace)` commits binius64's field bit for bit;
+  `switch::prove(params, &trace, &r, claim, &mut t)` proves `Σ_j trace[j]·eq(r, j) = claim` for
+  `r ∈ B128^l` and returns the `F162` point to open at, `switch::verify` returns that point and
+  the value the opening must hit. `switch::{prove_bits, verify_bits}` take binius64's own claim,
+  on the bits at a point of `B128^(7 + l)`.
+- **On the wire.** `Commitment::to_bytes` / `from_bytes`, `wire::pack_row_evaluation`,
+  `wire::encode` for the folded witness; `crates/bench/src/bin/labinius.rs` does the full round
+  trip and times every step.
