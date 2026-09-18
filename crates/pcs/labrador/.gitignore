@@ -1,0 +1,15 @@
+libdogs.so
+test_aesctr
+test_ntt
+test_poly
+test_polz
+test_jlproj
+test_chihuahua
+test_dachshund
+test_greyhound
+test_off
+test_binary
+test_mixed
+*.o
+*.a
+libobj/

@@ -1,0 +1,61 @@
+//! A commitment, a fold and their verifier over `R_648 = Z_q[X]/(X^648 - X^324 + 1)`, the
+//! 1944-th cyclotomic ring (1944 = 2^3 * 3^5), for binary witnesses held as elements of
+//! `F162 = GF(2)[x]/(x^162 + x^81 + 1)`.
+//!
+//! The witness is committed modulo a base modulus (3889 by default) and any further moduli from
+//! `2917, 3889, 4861, 9721, 12637, 17497, 19441`,
+//! folded against short signed challenges of the subring `R_162 = Z_q[Z]/Phi_243(Z)`, and the
+//! folded opening is checked against the multilinear extension of the same witness over `F162`.
+//! Everything is one AVX-512 thread; see [`scheme`] for the round.
+//!
+//! Module map
+//! - `scheme`  : the public surface, re-exported here.
+//! - `params`  : all ring constants (roots, twiddles, Montgomery forms), computed at compile time.
+//! - `ring`    : the two rings — `R_648` (`RingElement648` in the surface, `Batch32`) and its
+//!   height-4 view over `R_162` (`RingElement162`) — and the decomposition between them.
+//! - `key`     : the commitment key and the auxiliary data a commitment leaves behind.
+//! - `limb`    : the limb list and the class dispatch every kernel call goes through.
+//! - `scalar`  : exact reference implementation (schoolbook product mod Phi_1944, NTT).
+//! - `rng`     : tiny deterministic RNG (no external crates).
+//! - `simd`    : the AVX-512 kernels; `simd::ntt` the seven forward and inverse transforms.
+//! - `challenge`: short (fixed-weight binary) challenges over `R_162` and the blake3 transcript.
+//! - `fields`  : the binary fields `B128` and `F162`, their AVX-512 kernels and the
+//!   cross-field switch, inlined from `bin-fields`.
+//! - `fold`    : the folding step `v = sum_j c_j W_j` in the NTT domain, on top of a commitment.
+//! - `eval`    : the binary shadow of the fold over `F162`.
+//! - `wire`    : the serialisation of the clear-text round: bit-packing for the uniform objects,
+//!   a static rANS for the folded witness.
+#![allow(clippy::needless_range_loop)]
+
+pub mod bd;
+pub mod challenge;
+pub mod eval;
+pub mod f162;
+pub mod fields;
+pub mod fold;
+pub mod key;
+pub mod labrador;
+pub mod limb;
+pub mod params;
+pub mod recursion;
+pub mod ring;
+pub mod rng;
+pub mod scalar;
+pub mod scheme;
+pub mod simd;
+pub mod switch;
+pub mod wire;
+
+pub use bd::Dropped;
+pub use challenge::Transcript;
+pub use fields::scalar::{B128, F162};
+pub use scheme::{
+    Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
+    FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, Opening,
+    OpeningError, OpeningMessage, OpeningProof, OpeningTimings, ParamError, Params, Prover,
+    PublicParameters, RowEvaluation, Suite, VerificationError, Verifier, VerifyTimings,
+    Witness, WitnessError, SUITES,
+};
+pub use ring::Modulus;
+pub use ring::PowerOfThreeRingElement as RingElement162;
+pub use ring::RingElement as RingElement648;

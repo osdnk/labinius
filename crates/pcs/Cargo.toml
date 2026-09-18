@@ -1,0 +1,11 @@
+[package]
+name = "labinius"
+version.workspace = true
+edition.workspace = true
+description = "AVX-512 Ajtai commitment, fold and verifier over Z_q[X]/(X^648 - X^324 + 1) (conductor 1944 = 2^3 * 3^5) for binary inputs, over the limbs q in {2917, 3889, 4861, 9721, 12637, 17497, 19441}"
+
+[dependencies]
+blake3.workspace = true
+
+[features]
+labrador = []
