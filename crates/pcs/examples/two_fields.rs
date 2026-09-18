@@ -1,10 +1,10 @@
 //! The commitment at size `s` on the two kinds of witness it takes: `2^18` elements of `F162`
-//! opened at a point of `F162^18`, and `2^18` words of binius64's `B128` with a claim on their
-//! bits at a point of `B128^(7 + 18)`, which the switch turns into an `F162` opening. The points
-//! are fixed up front; a protocol draws them from its transcript after the commitment.
+//! opened at a point of `F162^18`, and `2^18` words of binius64's `B128` opened at a point of
+//! `B128^18`, which the switch turns into an `F162` opening. The points are fixed up front; a
+//! protocol draws them from its transcript after the commitment.
 //!
 //! `cargo run --release -p labinius --example two_fields`
-use labinius::switch::{self, SwitchProof, LOG_WORD};
+use labinius::switch::{self, SwitchProof};
 use labinius::{
     Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, Opening, OpeningMessage, Params,
     Prover, PublicParameters, RowEvaluation, Transcript, VerificationError, Verifier, Witness,
@@ -29,15 +29,14 @@ fn main() {
         native_verify(&params, &pp, &point, value, &proof)
     );
 
-    // GHASH: a trace of B128 words, with a claim on its bits at a point of B128^(7 + 18).
+    // GHASH: a trace of B128 words, evaluated at a point of B128^18.
     let trace = rng.sample_b128(b"trace", 1 << l);
-    let r_lo = rng.sample_b128(b"r_lo", LOG_WORD);
-    let r_hi = rng.sample_b128(b"r_hi", l);
-    let claim = switch::bit_mle(&trace, &r_lo, &r_hi);
-    let proof = ghash_prove(&params, &pp, &trace, &r_lo, &r_hi, claim);
+    let r = rng.sample_b128(b"r", l);
+    let claim = switch::mle(&trace, &r);
+    let proof = ghash_prove(&params, &pp, &trace, &r, claim);
     println!(
         "GHASH B128:  {:?}",
-        ghash_verify(&params, &pp, &r_lo, &r_hi, claim, &proof)
+        ghash_verify(&params, &pp, &r, claim, &proof)
     );
 }
 
@@ -109,8 +108,7 @@ fn ghash_prove(
     params: &Params,
     pp: &PublicParameters,
     trace: &[B128],
-    r_lo: &[B128],
-    r_hi: &[B128],
+    r: &[B128],
     claim: B128,
 ) -> GhashProof {
     let mut prover = Prover::new(pp);
@@ -119,7 +117,7 @@ fn ghash_prove(
     let witness = Witness::lifted(params, trace).expect("the trace is the witness length");
     let (commitment, opening) = prover.commit(&witness);
     transcript.absorb_bytes(&commitment.to_bytes());
-    let (switch, point) = switch::prove(params, trace, r_lo, r_hi, claim, &mut transcript);
+    let (switch, point) = switch::prove(params, trace, r, claim, &mut transcript);
     let row = witness.row_evaluate(&point);
     let challenges = FoldingChallenges::derive(params, &mut transcript, &row);
     let folded = prover.fold(opening, &challenges);
@@ -134,8 +132,7 @@ fn ghash_prove(
 fn ghash_verify(
     params: &Params,
     pp: &PublicParameters,
-    r_lo: &[B128],
-    r_hi: &[B128],
+    r: &[B128],
     claim: B128,
     proof: &GhashProof,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -143,7 +140,7 @@ fn ghash_verify(
     let mut transcript = Transcript::new(b"example/ghash");
 
     transcript.absorb_bytes(&proof.commitment.to_bytes());
-    let (point, value) = switch::verify(params, r_lo, r_hi, claim, &proof.switch, &mut transcript)?;
+    let (point, value) = switch::verify(params, r, claim, &proof.switch, &mut transcript)?;
     let challenges = FoldingChallenges::derive(params, &mut transcript, &proof.row);
     verifier.verify_evaluation(&point, &value, &proof.row)?;
     verifier.verify_opening(
