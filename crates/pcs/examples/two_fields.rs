@@ -6,9 +6,9 @@
 //! `cargo run --release -p labinius --example two_fields`
 use labinius::switch::{self, SwitchProof, LOG_WORD};
 use labinius::{
-    Commitment, EvaluationPoint, FoldedWitness, Opening, OpeningMessage, Params, Prover,
-    PublicParameters, RowEvaluation, Transcript, VerificationError, Verifier, Witness, B128, F162,
-    SUITES,
+    Commitment, EvaluationPoint, FoldedWitness, FoldingChallenges, Opening, OpeningMessage, Params,
+    Prover, PublicParameters, RowEvaluation, Transcript, VerificationError, Verifier, Witness,
+    B128, F162, SUITES,
 };
 
 const MATRIX_SEED: [u8; 32] = [0x5A; 32];
@@ -23,10 +23,10 @@ fn main() {
     // Native: a witness over F162, opened at a point of F162^18.
     let witness = Witness::random(&params, [0xC7; 32]);
     let point = EvaluationPoint::msb_first(&params, &rng.sample_f162(b"point", l));
-    let (value, proof) = native_prove(&pp, &witness, &point);
+    let (value, proof) = native_prove(&params, &pp, &witness, &point);
     println!(
         "native F162: {:?}",
-        native_verify(&pp, &point, value, &proof)
+        native_verify(&params, &pp, &point, value, &proof)
     );
 
     // GHASH: a trace of B128 words, with a claim on its bits at a point of B128^(7 + 18).
@@ -48,19 +48,19 @@ struct NativeProof {
 }
 
 fn native_prove(
+    params: &Params,
     pp: &PublicParameters,
     witness: &Witness,
     point: &EvaluationPoint,
 ) -> (F162, NativeProof) {
     let mut prover = Prover::new(pp);
-    let verifier = Verifier::new(pp);
     let mut transcript = Transcript::new(b"example/native");
 
     let (commitment, opening) = prover.commit(witness);
     let value = witness.mle_evaluate(point);
     let row = witness.row_evaluate(point);
     transcript.absorb_bytes(&commitment.to_bytes());
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
+    let challenges = FoldingChallenges::derive(params, &mut transcript, &row);
     let folded = prover.fold(opening, &challenges);
     (
         value,
@@ -73,6 +73,7 @@ fn native_prove(
 }
 
 fn native_verify(
+    params: &Params,
     pp: &PublicParameters,
     point: &EvaluationPoint,
     value: F162,
@@ -82,7 +83,7 @@ fn native_verify(
     let mut transcript = Transcript::new(b"example/native");
 
     transcript.absorb_bytes(&proof.commitment.to_bytes());
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &proof.row);
+    let challenges = FoldingChallenges::derive(params, &mut transcript, &proof.row);
     verifier.verify_evaluation(point, &value, &proof.row)?;
     verifier.verify_opening(
         &proof.commitment,
@@ -113,7 +114,6 @@ fn ghash_prove(
     claim: B128,
 ) -> GhashProof {
     let mut prover = Prover::new(pp);
-    let verifier = Verifier::new(pp);
     let mut transcript = Transcript::new(b"example/ghash");
 
     let witness = Witness::lifted(params, trace).expect("the trace is the witness length");
@@ -121,7 +121,7 @@ fn ghash_prove(
     transcript.absorb_bytes(&commitment.to_bytes());
     let (switch, point) = switch::prove(params, trace, r_lo, r_hi, claim, &mut transcript);
     let row = witness.row_evaluate(&point);
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &row);
+    let challenges = FoldingChallenges::derive(params, &mut transcript, &row);
     let folded = prover.fold(opening, &challenges);
     GhashProof {
         commitment,
@@ -144,7 +144,7 @@ fn ghash_verify(
 
     transcript.absorb_bytes(&proof.commitment.to_bytes());
     let (point, value) = switch::verify(params, r_lo, r_hi, claim, &proof.switch, &mut transcript)?;
-    let challenges = verifier.derive_folding_challenges(&mut transcript, &proof.row);
+    let challenges = FoldingChallenges::derive(params, &mut transcript, &proof.row);
     verifier.verify_evaluation(&point, &value, &proof.row)?;
     verifier.verify_opening(
         &proof.commitment,

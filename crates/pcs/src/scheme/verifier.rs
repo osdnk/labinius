@@ -1,6 +1,5 @@
-use crate::challenge::{
-    sample_short_challenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
-};
+use super::*;
+use crate::challenge::Transcript;
 use crate::eval;
 use crate::fields::scalar::F162;
 use crate::fold::{a_times_v_forward, fold_columns_slots};
@@ -14,7 +13,6 @@ use crate::ring::{
 use crate::simd::transpose32 as tr;
 use std::sync::Arc;
 use std::time::Instant;
-use super::*;
 
 // =============================================================================================
 // the verifier
@@ -101,19 +99,13 @@ impl Verifier {
         }
     }
 
-    /// Absorb `u`, then derive the `columns()` challenges — weight 28, canonical bound 12, one
-    /// transcript derivation per challenge index.
+    /// [`FoldingChallenges::derive`] with this verifier's parameters.
     pub fn derive_folding_challenges(
         &self,
         transcript: &mut Transcript,
         source: &impl FoldingSource,
     ) -> FoldingChallenges {
-        source.absorb(transcript);
-        FoldingChallenges {
-            challenges: (0..self.params.columns())
-                .map(|_| sample_short_challenge(transcript, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
-                .collect(),
-        }
+        FoldingChallenges::derive(&self.params, transcript, source)
     }
 
     /// `sum_j c_j C_j` per modulus. Multiplication by a challenge — an element of the subring

@@ -1,5 +1,8 @@
+use super::*;
 use crate::bd::Dropped;
-use crate::challenge::{ShortChallenge, Transcript};
+use crate::challenge::{
+    sample_short_challenge, ShortChallenge, Transcript, DEFAULT_BOUND, DEFAULT_WEIGHT,
+};
 use crate::fields::scalar::F162;
 use crate::key::AuxData;
 use crate::labrador::{self, PolxBuf};
@@ -9,7 +12,6 @@ use crate::{RingElement162, RingElement648};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
-use super::*;
 
 // =============================================================================================
 // the values that pass between the two parties
@@ -209,6 +211,22 @@ pub struct FoldingChallenges {
 }
 
 impl FoldingChallenges {
+    /// Absorb the source (`u`, or the left expansion), then derive the `columns()` challenges —
+    /// weight 28, canonical bound 12, one transcript derivation per challenge index. Both sides
+    /// derive them the same way.
+    pub fn derive(
+        params: &Params,
+        transcript: &mut Transcript,
+        source: &impl FoldingSource,
+    ) -> FoldingChallenges {
+        source.absorb(transcript);
+        FoldingChallenges {
+            challenges: (0..params.columns())
+                .map(|_| sample_short_challenge(transcript, DEFAULT_WEIGHT, DEFAULT_BOUND).0)
+                .collect(),
+        }
+    }
+
     /// Challenges from a list, for the key-time layout of [`recursion::setup`].
     pub fn of(challenges: Vec<ShortChallenge>) -> FoldingChallenges {
         FoldingChallenges { challenges }
