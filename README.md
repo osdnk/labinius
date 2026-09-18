@@ -53,7 +53,7 @@ setsid nohup ./bench.sh > bench.out 2>&1 < /dev/null & disown
 
 It writes `bench-<timestamp>/`: `machine.txt`, `build.log`, one `<binary>-<suite>.log` per run
 (the labrador runs as `labinius-<suite>-labrador.log`) and `summary.tsv` with status, seconds
-and peak RSS per run; `bench.out` has the same summary at the end. Knobs, all optional:
+and peak RSS per run; `bench.out` has the same summary at the end. 
 
 | variable | default | meaning |
 | --- | --- | --- |
@@ -69,8 +69,7 @@ into the paper's tables.
 ## Using it
 
 `crates/pcs/examples/two_fields.rs` is the reference: a native `F162` witness opened in each of
-the three modes, and a `B128` trace opened through the switch. One clear round, with the point
-chosen by the verifier:
+the three modes, and a `B128` trace opened through the field-switch.
 
 ```rust
 let pp = PublicParameters::from_seed(Params::basic(), MATRIX_SEED);   // Opening::Clear
@@ -89,22 +88,3 @@ verifier.verify_opening(&commitment, &challenges, &point, OpeningMessage::Clear 
     folded_row_value: &verifier.fold_row_evaluation(&row, &challenges),
 }).unwrap();
 ```
-
-Where to look for the rest:
-
-- **A point of your own.** `EvaluationPoint::msb_first(params, &coordinates)` takes the `l`
-  coordinates of a point of `F162^l` as a sumcheck hands them out, most significant variable
-  first.
-- **The opening modes.** `Params::sized(suite, Opening::Clear | BitDropped { bits } | Recursive)`.
-  Clear and bit-dropped send the row evaluation and the folded witness and differ in the
-  `OpeningMessage` variant (bit-dropped has no `fold_commitment`); recursive sends the left
-  expansion and one LaBRADOR proof instead (`commit_left_expansion`, `prove_opening`,
-  `OpeningMessage::Recursive`), and the verifier never sees the fold.
-- **A `B128` witness.** `Witness::lifted(params, &trace)` commits binius64's field bit for bit;
-  `switch::prove(params, &trace, &r, claim, &mut t)` proves `Σ_j trace[j]·eq(r, j) = claim` for
-  `r ∈ B128^l` and returns the `F162` point to open at, `switch::verify` returns that point and
-  the value the opening must hit. `switch::{prove_bits, verify_bits}` take binius64's own claim,
-  on the bits at a point of `B128^(7 + l)`.
-- **On the wire.** `Commitment::to_bytes` / `from_bytes`, `wire::pack_row_evaluation`,
-  `wire::encode` for the folded witness; `crates/bench/src/bin/labinius.rs` does the full round
-  trip and times every step.
