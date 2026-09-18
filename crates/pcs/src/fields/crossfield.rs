@@ -532,6 +532,9 @@ impl SwitchVerifier {
         opened: F162,
     ) -> Result<(), &'static str> {
         let d = transparent_coeff(r_hi, r_pp, batch);
+        if d == F162::ZERO {
+            return Err("the switch left the opened value unbound");
+        }
         if self.s != d * opened {
             return Err("sumcheck final check failed");
         }

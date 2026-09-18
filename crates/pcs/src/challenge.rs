@@ -33,8 +33,8 @@
 //! t.absorb_elements(&commitment);
 //! let (c, attempts) = sample_short_challenge(&mut t, DEFAULT_WEIGHT, DEFAULT_BOUND);
 //! ```
+use crate::fields::scalar::{B128, F162};
 use crate::ring::{PowerOfThreeRingElementWithLimbs, N162};
-use crate::fields::scalar::F162;
 use blake3::Hasher;
 use core::arch::x86_64::*;
 use std::f64::consts::PI;
@@ -108,6 +108,44 @@ impl Transcript {
     /// counter, so the next derivation is independent.
     pub fn fill(&mut self, label: &[u8], out: &mut [u8]) {
         self.reader(label).fill(out);
+    }
+
+    pub fn absorb_f162(&mut self, xs: &[F162]) {
+        self.state.update(&(xs.len() as u64).to_le_bytes());
+        for x in xs {
+            for limb in x.0 {
+                self.state.update(&limb.to_le_bytes());
+            }
+        }
+    }
+
+    pub fn absorb_b128(&mut self, xs: &[B128]) {
+        self.state.update(&(xs.len() as u64).to_le_bytes());
+        for x in xs {
+            self.state.update(&x.0.to_le_bytes());
+        }
+    }
+
+    /// `n` uniform `F162`: three little-endian `u64` each, the top one cut to 34 bits.
+    pub fn sample_f162(&mut self, label: &[u8], n: usize) -> Vec<F162> {
+        let mut bytes = vec![0u8; 24 * n];
+        self.fill(label, &mut bytes);
+        bytes
+            .chunks_exact(24)
+            .map(|c| {
+                let limb = |i: usize| u64::from_le_bytes(c[8 * i..8 * i + 8].try_into().unwrap());
+                F162([limb(0), limb(1), limb(2) & ((1 << 34) - 1)])
+            })
+            .collect()
+    }
+
+    pub fn sample_b128(&mut self, label: &[u8], n: usize) -> Vec<B128> {
+        let mut bytes = vec![0u8; 16 * n];
+        self.fill(label, &mut bytes);
+        bytes
+            .chunks_exact(16)
+            .map(|c| B128(u128::from_le_bytes(c.try_into().unwrap())))
+            .collect()
     }
 
     /// The same derivation as [`fill`](Self::fill), as a stream — for samplers that consume a
@@ -330,9 +368,7 @@ unsafe fn accumulate<const V: usize>(
     let (mut vr, mut vi) = ([_mm512_setzero_pd(); V], [_mm512_setzero_pd(); V]);
     for i in 0..c.weight {
         let b = c.positions[i] as usize * LANES + off;
-        let s = _mm512_castsi512_pd(_mm512_set1_epi64(
-            ((c.signs >> i) & 1) as i64 * i64::MIN,
-        ));
+        let s = _mm512_castsi512_pd(_mm512_set1_epi64(((c.signs >> i) & 1) as i64 * i64::MIN));
         for k in 0..V {
             let pr = _mm512_loadu_pd(re.as_ptr().add(b + 8 * k));
             let pi = _mm512_loadu_pd(im.as_ptr().add(b + 8 * k));

@@ -43,11 +43,12 @@ pub mod rng;
 pub mod scalar;
 pub mod scheme;
 pub mod simd;
+pub mod switch;
 pub mod wire;
 
 pub use bd::Dropped;
 pub use challenge::Transcript;
-pub use fields::scalar::F162;
+pub use fields::scalar::{B128, F162};
 pub use scheme::{
     Commitment, CommitmentOpening, CommitmentValue, EvaluationPoint, FoldedCommitment,
     FoldedWitness, FoldingChallenges, FoldingSource, LeftExpansionCommitment, Opening,
